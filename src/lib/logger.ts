@@ -42,6 +42,37 @@ export function pruneOldLogs(retainDays: number): void {
   }
 }
 
+/**
+ * 默认 redact 路径：把可能包含敏感凭证的字段替换成 `[REDACTED]`
+ *
+ * pino 内置支持：只要日志对象里某个 key 的路径匹配上这里的任意一项，
+ * 序列化时就会自动替换。配置一次即可，业务代码无须做任何改动。
+ *
+ * 设计原则：宁可错杀（多打一个 [REDACTED] 没坏处），不可漏过。
+ */
+const REDACT_PATHS = [
+  // App 凭证
+  '*.appSecret',
+  '*.app_secret',
+  'config.lark.appSecret',
+  'lark.appSecret',
+  // Tokens（access / tenant / app / refresh）
+  '*.accessToken',
+  '*.access_token',
+  '*.tenantAccessToken',
+  '*.tenant_access_token',
+  '*.appAccessToken',
+  '*.app_access_token',
+  '*.refreshToken',
+  '*.refresh_token',
+  // 通用 Auth header
+  '*.authorization',
+  '*.Authorization',
+  // 飞书卡片回调里的临时 token（30 分钟有效，泄露能伪造卡片更新）
+  'event.token',
+  '*.cardToken',
+];
+
 let cachedLogger: Logger | null = null;
 
 export function getLogger(): Logger {
@@ -56,6 +87,7 @@ export function getLogger(): Logger {
     // 开发：终端友好输出
     cachedLogger = pino({
       level,
+      redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
       transport: {
         target: 'pino-pretty',
         options: {
@@ -68,7 +100,11 @@ export function getLogger(): Logger {
   } else {
     // 生产：NDJSON 落盘
     cachedLogger = pino(
-      { level, base: { pid: process.pid } },
+      {
+        level,
+        base: { pid: process.pid },
+        redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
+      },
       pino.destination({ dest: todayLogFile(), append: true, sync: false }),
     );
   }
