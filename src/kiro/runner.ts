@@ -13,6 +13,7 @@
  */
 import { execa, type ResultPromise } from 'execa';
 import { getLogger } from '../lib/logger.js';
+import { createKiroOutputFilter } from './outputFilter.js';
 
 const log = () => getLogger().child({ module: 'kiro-runner' });
 
@@ -41,8 +42,20 @@ export interface RunOptions {
   agent?: string | undefined;
   /** 总超时毫秒 */
   timeoutMs?: number;
+  /**
+   * 空闲 watchdog 阈值（毫秒）。
+   * 若 stdout 连续这么久没新输出就认为假死，杀掉子进程。
+   * 0 或不传 = 关闭 watchdog（仅依赖 timeoutMs）。
+   */
+  idleTimeoutMs?: number;
   /** 流式文本回调；text 是已剥离 ANSI 的纯文本片段 */
   onChunk?: (text: string) => void;
+  /**
+   * 工具调用 trace 摘要回调（可选）。
+   * 没传则 trace 摘要会混入 onChunk 文本流；
+   * 传了的话 trace 单独走这里，onChunk 只剩"真正回复"。
+   */
+  onTrace?: (summary: string) => void;
   /** AbortSignal 用于外部打断 */
   signal?: AbortSignal;
 }
@@ -58,6 +71,8 @@ export interface RunResult {
   aborted: boolean;
   /** 是否因总超时被强杀 */
   timedOut: boolean;
+  /** 是否因 idle watchdog 被强杀（超过 idleTimeoutMs 没新输出） */
+  idleTimedOut: boolean;
 }
 
 /** stdout 输出里 kiro-cli 的提示符前缀，剥掉。 */
@@ -76,7 +91,9 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     model,
     agent,
     timeoutMs = 10 * 60 * 1000,
+    idleTimeoutMs = 0,
     onChunk,
+    onTrace,
     signal,
   } = opts;
 
@@ -95,9 +112,22 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
 
   let timedOut = false;
   let aborted = false;
+  let idleTimedOut = false;
   let textBuf = '';
+  let lastChunkAt = Date.now();
+
+  // 过滤 trace 噪音：把"读文件/调工具"压缩成简短摘要，保留真正回复
+  // 如果调用方传了 onTrace，trace 单独走那里；否则混入文本流（向后兼容）
+  const filterOpts: Parameters<typeof createKiroOutputFilter>[0] = {};
+  if (onTrace) filterOpts.onTrace = onTrace;
+  const filter = createKiroOutputFilter(filterOpts);
 
   // 用 execa 9 spawn；stdin 关闭，stdout/stderr 流式
+  // 关键：detached:true 让 kiro-cli 自成一个 process group，
+  // 这样 SIGTERM/SIGKILL 可以用 process.kill(-pgid, ...) 发给整个进程组，
+  // 把它的子孙（kiro-cli-chat → bun tui.js → acp 等）一起干掉。
+  // 否则 child.kill 只杀直接子进程，孙子继续占着 stdout pipe，
+  // 导致 await child 永远不返回，整个 chat pipeline 卡死。
   const child: ResultPromise = execa(binPath, args, {
     cwd,
     reject: false,
@@ -106,42 +136,78 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
+    detached: true,
     env: { ...process.env, FORCE_COLOR: '0' }, // 尽量减少 ANSI（虽然没完全消除）
   });
+
+  /**
+   * 干掉整个进程组。
+   * - 若 child.pid 还在：先给 -pid 进程组发 signal，失败回退 child.kill
+   * - SIGKILL 之后再 destroy stdout，确保 promise 尽快 settle
+   */
+  const killTree = (signal: NodeJS.Signals): void => {
+    const pid = child.pid;
+    if (pid === undefined) return;
+    try {
+      // 负号 = 进程组。要求 spawn 时 detached:true。
+      process.kill(-pid, signal);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // ESRCH 表示组里没人了（已退出），忽略；其他错误降级到 child.kill
+      if (code !== 'ESRCH') {
+        try {
+          child.kill(signal);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
 
   // 总超时
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
     log().warn({ pid: child.pid, timeoutMs }, 'kiro-cli timed out, sending SIGTERM');
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
+    killTree('SIGTERM');
     setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
+      killTree('SIGKILL');
+      // 强制释放 stdout pipe，避免 await child 还在等
+      child.stdout?.destroy();
     }, 2000);
   }, timeoutMs);
+
+  // 空闲 watchdog：每 30s 检查一次，若距离 lastChunkAt 超过 idleTimeoutMs 就杀掉
+  // 用来兜底"kiro-cli 假死"——进程在但不输出，正常 timeoutMs (默认 10 分钟) 太久。
+  let idleHandle: NodeJS.Timeout | null = null;
+  if (idleTimeoutMs > 0) {
+    const checkInterval = Math.min(30_000, Math.max(5_000, Math.floor(idleTimeoutMs / 4)));
+    idleHandle = setInterval(() => {
+      if (Date.now() - lastChunkAt < idleTimeoutMs) return;
+      idleTimedOut = true;
+      log().warn(
+        { pid: child.pid, idleTimeoutMs, sinceLastChunkMs: Date.now() - lastChunkAt },
+        'kiro-cli idle timeout, sending SIGTERM',
+      );
+      killTree('SIGTERM');
+      setTimeout(() => {
+        killTree('SIGKILL');
+        child.stdout?.destroy();
+      }, 2000);
+      if (idleHandle) {
+        clearInterval(idleHandle);
+        idleHandle = null;
+      }
+    }, checkInterval);
+  }
 
   // 外部 abort
   const onAbort = () => {
     aborted = true;
     log().info({ pid: child.pid }, 'kiro-cli abort requested');
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
+    killTree('SIGTERM');
     setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
+      killTree('SIGKILL');
+      child.stdout?.destroy();
     }, 2000);
   };
   if (signal) {
@@ -153,11 +219,15 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   if (child.stdout) {
     child.stdout.setEncoding('utf-8');
     child.stdout.on('data', (chunk: string) => {
-      const clean = stripAnsi(chunk).replace(PROMPT_PREFIX_REGEX, '');
-      if (clean) {
-        textBuf += clean;
+      lastChunkAt = Date.now();
+      const cleanRaw = stripAnsi(chunk).replace(PROMPT_PREFIX_REGEX, '');
+      if (!cleanRaw) return;
+      // 过滤掉 trace 噪音，只保留真正回复 + 简短工具摘要
+      const filtered = filter.feed(cleanRaw);
+      if (filtered) {
+        textBuf += filtered;
         try {
-          onChunk?.(clean);
+          onChunk?.(filtered);
         } catch (e) {
           log().error({ err: e }, 'onChunk callback threw');
         }
@@ -175,16 +245,28 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
 
   const result = await child;
   clearTimeout(timeoutHandle);
+  if (idleHandle) clearInterval(idleHandle);
   if (signal) signal.removeEventListener('abort', onAbort);
 
+  // flush 最后残留的不完整行
+  const tail = filter.flush();
+  if (tail) {
+    textBuf += tail;
+    try {
+      onChunk?.(tail);
+    } catch {
+      // ignore
+    }
+  }
+
   log().info(
-    { exitCode: result.exitCode, textLen: textBuf.length, aborted, timedOut },
+    { exitCode: result.exitCode, textLen: textBuf.length, aborted, timedOut, idleTimedOut },
     'kiro-cli finished',
   );
 
   // 跑完后取最新 session id（resume 用的话用同一个，否则取最新创建的）
   let newSessionId: string | undefined;
-  if (!aborted && !timedOut && result.exitCode === 0) {
+  if (!aborted && !timedOut && !idleTimedOut && result.exitCode === 0) {
     try {
       newSessionId = await getLatestSessionId(cwd, binPath);
     } catch (e) {
@@ -198,6 +280,7 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     newSessionId: newSessionId ?? resumeId,
     aborted,
     timedOut,
+    idleTimedOut,
   };
 }
 
@@ -210,15 +293,20 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
  *     19 seconds ago | xxx | 2 msgs | v1
  *
  * 列表是按时间倒序，第一条就是最新。
+ *
+ * 注意：kiro-cli 把 list-sessions 的输出写到 stderr 而非 stdout，
+ *       所以这里用 all:true 合并两边再 grep。
  */
 async function getLatestSessionId(cwd: string, binPath: string): Promise<string | undefined> {
   const result = await execa(binPath, ['chat', '--list-sessions'], {
     cwd,
     reject: false,
     timeout: 10_000,
+    all: true,
   });
   if (result.exitCode !== 0) return undefined;
-  const text = stripAnsi(result.stdout || '');
+  const combined = (result.all ?? result.stdout ?? '') as string;
+  const text = stripAnsi(combined);
   const m = text.match(/Chat SessionId:\s*([0-9a-f-]{36})/i);
   return m?.[1];
 }
