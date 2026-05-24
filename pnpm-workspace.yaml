@@ -1,3 +1,10 @@
+# Single-package project; declare packages: [] explicitly so pnpm 11+ doesn't
+# error with "packages field missing or empty" on CI.
+packages: []
+
+allowBuilds:
+  esbuild: set this to true or false
+
 onlyBuiltDependencies:
   - esbuild
   - protobufjs
