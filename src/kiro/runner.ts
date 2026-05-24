@@ -13,7 +13,6 @@
  */
 import { execa, type ResultPromise } from 'execa';
 import { getLogger } from '../lib/logger.js';
-import { createKiroOutputFilter } from './outputFilter.js';
 
 const log = () => getLogger().child({ module: 'kiro-runner' });
 
@@ -49,14 +48,12 @@ export interface RunOptions {
    * 0 或不传 = 关闭 watchdog（仅依赖 timeoutMs）。
    */
   idleTimeoutMs?: number;
-  /** 流式文本回调；text 是已剥离 ANSI 的纯文本片段 */
-  onChunk?: (text: string) => void;
   /**
-   * 工具调用 trace 摘要回调（可选）。
-   * 没传则 trace 摘要会混入 onChunk 文本流；
-   * 传了的话 trace 单独走这里，onChunk 只剩"真正回复"。
+   * 流式文本回调；text 是已剥离 ANSI 的纯文本片段。
+   * 调用方拿到原始流后自行解析（用 createRunStreamParser），
+   * 不再由 runner 内部做 trace/正文分离。
    */
-  onTrace?: (summary: string) => void;
+  onChunk?: (text: string) => void;
   /** AbortSignal 用于外部打断 */
   signal?: AbortSignal;
 }
@@ -94,7 +91,6 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     timeoutMs = 10 * 60 * 1000,
     idleTimeoutMs = 0,
     onChunk,
-    onTrace,
     signal,
   } = opts;
 
@@ -116,12 +112,6 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   let idleTimedOut = false;
   let textBuf = '';
   let lastChunkAt = Date.now();
-
-  // 过滤 trace 噪音：把"读文件/调工具"压缩成简短摘要，保留真正回复
-  // 如果调用方传了 onTrace，trace 单独走那里；否则混入文本流（向后兼容）
-  const filterOpts: Parameters<typeof createKiroOutputFilter>[0] = {};
-  if (onTrace) filterOpts.onTrace = onTrace;
-  const filter = createKiroOutputFilter(filterOpts);
 
   // 用 execa 9 spawn；stdin 关闭，stdout/stderr 流式
   // 关键：detached:true 让 kiro-cli 自成一个 process group，
@@ -216,22 +206,20 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     else signal.addEventListener('abort', onAbort, { once: true });
   }
 
-  // 流式收 stdout
+  // 流式收 stdout，stripAnsi 后原样上报给 onChunk
+  // 调用方负责进一步解析（旧版的 outputFilter 已下沉到 runStreamParser，
+  // 由 RunCardController 内部使用）
   if (child.stdout) {
     child.stdout.setEncoding('utf-8');
     child.stdout.on('data', (chunk: string) => {
       lastChunkAt = Date.now();
       const cleanRaw = stripAnsi(chunk).replace(PROMPT_PREFIX_REGEX, '');
       if (!cleanRaw) return;
-      // 过滤掉 trace 噪音，只保留真正回复 + 简短工具摘要
-      const filtered = filter.feed(cleanRaw);
-      if (filtered) {
-        textBuf += filtered;
-        try {
-          onChunk?.(filtered);
-        } catch (e) {
-          log().error({ err: e }, 'onChunk callback threw');
-        }
+      textBuf += cleanRaw;
+      try {
+        onChunk?.(cleanRaw);
+      } catch (e) {
+        log().error({ err: e }, 'onChunk callback threw');
       }
     });
   }
@@ -248,17 +236,6 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   clearTimeout(timeoutHandle);
   if (idleHandle) clearInterval(idleHandle);
   if (signal) signal.removeEventListener('abort', onAbort);
-
-  // flush 最后残留的不完整行
-  const tail = filter.flush();
-  if (tail) {
-    textBuf += tail;
-    try {
-      onChunk?.(tail);
-    } catch {
-      // ignore
-    }
-  }
 
   log().info(
     { exitCode: result.exitCode, textLen: textBuf.length, aborted, timedOut, idleTimedOut },
