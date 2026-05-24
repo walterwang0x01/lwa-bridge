@@ -27,7 +27,7 @@
     "version": "changeset version",
     "release": "pnpm build && changeset publish",
     "start": "node bin/lark-kiro-bridge.mjs run",
-    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "prepublishOnly": "npx tsc --noEmit && npx biome check src && npx vitest run && npx tsup",
     "prepare": "husky"
   },
   "lint-staged": {
