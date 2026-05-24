@@ -5,7 +5,7 @@
  *   init         首次配置：填入飞书 App ID / Secret，生成 ~/.lark-kiro-bridge/config.json
  *   run          前台启动 bridge，监听飞书消息
  *   config-show  打印当前配置（隐藏 secret）
- *   service ...  launchd 守护进程管理（start/stop/status/install/uninstall）
+ *   service ...  跨平台守护进程管理（launchd / systemd / Task Scheduler）
  */
 import { Command } from 'commander';
 import { createInterface } from 'node:readline/promises';
@@ -17,13 +17,7 @@ import { defaultConfig, loadConfig, saveConfig } from './lib/config.js';
 import { runQrWizard } from './lib/qrWizard.js';
 import { runBridge } from './core/bootstrap.js';
 import { getLogger } from './lib/logger.js';
-import {
-  serviceStart,
-  serviceStop,
-  serviceStatus,
-  serviceInstall,
-  serviceUninstall,
-} from './daemon/launchd.js';
+import { getDaemonAdapter, DaemonError } from './daemon/index.js';
 import { listProcesses, findProcess } from './daemon/registry.js';
 
 const program = new Command();
@@ -160,36 +154,55 @@ program
     }
   });
 
-const service = program.command('service').description('Manage background daemon (launchd)');
+/**
+ * 跨平台守护命令辅助：捕获 DaemonError（不支持的平台）友好提示
+ */
+async function withDaemon<T>(
+  fn: (d: ReturnType<typeof getDaemonAdapter>) => Promise<T>,
+): Promise<void> {
+  try {
+    const adapter = getDaemonAdapter();
+    await fn(adapter);
+  } catch (e) {
+    if (e instanceof DaemonError) {
+      console.error(`❌ ${e.message}`);
+      console.error('   Use `lark-kiro-bridge run` to start in foreground instead.');
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+const service = program.command('service').description('Manage background daemon');
 service
   .command('install')
-  .description('Install launchd plist')
+  .description('Install platform service definition')
   .action(async () => {
-    await serviceInstall();
+    await withDaemon((d) => d.install());
   });
 service
   .command('uninstall')
-  .description('Remove launchd plist')
+  .description('Remove platform service definition')
   .action(async () => {
-    await serviceUninstall();
+    await withDaemon((d) => d.uninstall());
   });
 service
   .command('start')
   .description('Start the daemon')
   .action(async () => {
-    await serviceStart();
+    await withDaemon((d) => d.start());
   });
 service
   .command('stop')
   .description('Stop the daemon')
   .action(async () => {
-    await serviceStop();
+    await withDaemon((d) => d.stop());
   });
 service
   .command('status')
   .description('Show daemon status')
   .action(async () => {
-    await serviceStatus();
+    await withDaemon((d) => d.status());
   });
 
 // 顶级别名（业界惯例：start/stop/restart/status 直接顶在 CLI 上）
@@ -197,42 +210,46 @@ program
   .command('start')
   .description('Install (if needed) and start the background daemon')
   .action(async () => {
-    await serviceInstall().catch((e) => {
-      // 已存在 plist 也无所谓
-      console.error(`(install) ${(e as Error).message}`);
+    await withDaemon(async (d) => {
+      await d.install().catch((e) => {
+        // 已存在的服务定义不算错；adapter 内部会幂等处理
+        console.error(`(install) ${(e as Error).message}`);
+      });
+      await d.start();
     });
-    await serviceStart();
   });
 
 program
   .command('stop')
   .description('Stop the background daemon')
   .action(async () => {
-    await serviceStop();
+    await withDaemon((d) => d.stop());
   });
 
 program
   .command('restart')
   .description('Restart the background daemon in place')
   .action(async () => {
-    await serviceStop().catch(() => undefined);
-    // 等 launchd 彻底 bootout，避免 bootstrap 时撞上"already loaded"
-    await new Promise((r) => setTimeout(r, 1500));
-    await serviceStart();
+    await withDaemon(async (d) => {
+      await d.stop().catch(() => undefined);
+      // 等服务管理器彻底清空（macOS launchd bootout 异步、Linux 也类似）
+      await new Promise((r) => setTimeout(r, 1500));
+      await d.start();
+    });
   });
 
 program
   .command('status')
   .description('Show daemon status (alias of `service status`)')
   .action(async () => {
-    await serviceStatus();
+    await withDaemon((d) => d.status());
   });
 
 program
   .command('unregister')
-  .description('Remove daemon plist and stop')
+  .description('Remove daemon service definition and stop')
   .action(async () => {
-    await serviceUninstall();
+    await withDaemon((d) => d.uninstall());
   });
 
 program

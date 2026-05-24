@@ -41,6 +41,8 @@ export type ParsedCommand =
   | { kind: 'reconnect' }
   | { kind: 'doctor'; description: string }
   | { kind: 'config'; mode: 'show' }
+  | { kind: 'ps' }
+  | { kind: 'exit'; target: string }
   | { kind: 'model'; mode: 'show' }
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
@@ -138,6 +140,13 @@ export function parseCommand(text: string): ParsedCommand | null {
     case 'cfg':
     case 'settings':
       return { kind: 'config', mode: 'show' };
+    case 'ps':
+      return { kind: 'ps' };
+    case 'exit':
+    case 'kill': {
+      if (!tail) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'exit', target: tail };
+    }
     case 'model': {
       if (!tail) return { kind: 'model', mode: 'show' };
       const lower = tail.toLowerCase();

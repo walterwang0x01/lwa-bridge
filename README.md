@@ -63,14 +63,15 @@
 - 🛡️ **进程组 kill** — `detached: true` + `process.kill(-pid)` 杀掉 kiro-cli 全部子孙
 - ⏱ **Idle Watchdog** — 卡住自动 killTree，可全局 / per-chat 配置
 - 🔐 **三层访问控制** — 用户 / 群 / 管理员白名单，**DM 永远豁免群白名单**，不会把自己锁外面
-- 🍎 **macOS 原生守护** — launchd 崩溃自动拉起，开机自启
+- 🐧 **跨平台守护** — macOS launchd / Linux systemd --user / Windows Task Scheduler，崩溃自动拉起，开机自启
+- 🖥️ **`/ps` `/exit` 进程管理** — 飞书内列出本机所有 bridge 进程，按按钮停止
 - 📊 **`/doctor` 自诊断** — 让 Kiro 看日志自己分析故障
 
 ## 🚀 快速上手
 
 ### 前置条件
 
-- macOS（Linux / Windows daemon 在路线图）
+- macOS / Linux / Windows
 - Node.js ≥ 20
 - `kiro-cli` 已安装并登录
 - 飞书账号（个人版即可，扫码自动创建应用）
@@ -110,10 +111,21 @@ lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
 ### 后台守护（推荐生产）
 
 ```bash
-lark-kiro-bridge start          # 装 launchd plist 并启动
+lark-kiro-bridge start          # 装平台原生服务并启动
 lark-kiro-bridge status         # 看状态
 lark-kiro-bridge restart        # 重启
 ```
+
+平台映射：
+
+| 平台 | 实现 | 服务定义路径 |
+|---|---|---|
+| **macOS** | launchd 用户代理 | `~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist` |
+| **Linux** | systemd 用户单元 | `~/.config/systemd/user/lark-kiro-bridge.service` |
+| **Windows** | Task Scheduler ONLOGON | 任务名 `LarkKiroBridge.Bot`，启动器 `~/.lark-kiro-bridge/daemon-launcher.cmd` |
+
+> Linux 想让 daemon 在用户登出后还跑（比如服务器场景），跑一次：
+> `loginctl enable-linger $USER`
 
 ## 📖 飞书内的命令
 
@@ -129,6 +141,7 @@ lark-kiro-bridge restart        # 重启
 | `/pwd` | `/cwd` | 当前工作目录 |
 | `/ws list` | — | 列出命名工作区，按钮一键切 |
 | `/timeout [N\|off]` | `/to` | idle watchdog 阈值（分钟） |
+| `/ps` | — | 列出本机所有 bridge 进程 |
 | `/doctor [描述]` | — | 让 Kiro 看日志自诊断 |
 
 ### 管理员命令
@@ -140,6 +153,7 @@ lark-kiro-bridge restart        # 重启
 | `/ws save <name>` | 把当前 cwd 存为命名工作区 |
 | `/ws use <name>` | 切到命名工作区 |
 | `/ws remove <name>` | 删除命名工作区 |
+| `/exit <id\|#>` | 停止指定 bridge 进程（自己 / 他人） |
 | `/reconnect` | 强制重连飞书 WebSocket |
 
 > 默认所有人都是管理员（`access.admins` 为空）。团队推广前请收紧。
@@ -281,8 +295,7 @@ node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 
 - **v0.2** ✅ 当前版（结构化卡片 + 按钮回调 + Slack-style 工具面板 + 扫码绑定 + 语音输入 ASR）
 - **v0.3** ✅ `/config` 飞书内表单 + 三层访问控制（DM 豁免群白名单）+ rapid-fire 消息合并
-- **v0.4** Linux systemd / Windows Task Scheduler 守护
-- **v0.4** `/ps` `/exit` 飞书内调用本机进程
+- **v0.4** ✅ Linux systemd / Windows Task Scheduler 守护 + `/ps` `/exit` 飞书内进程管理
 - **v0.5** 群名 → 工作区的启发式默认（进 agenzo 群默认在 agenzo 目录）
 - **v1.0** 服务器集中部署 / 多用户隔离 / Web 管理面板
 

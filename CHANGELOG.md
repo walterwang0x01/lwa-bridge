@@ -7,6 +7,27 @@
 
 待发版的改动会先写在这里。
 
+## [0.4.0] — 2026-05-24
+
+### 新增（Added）
+
+- **跨平台守护**：除 macOS launchd 外新增 Linux systemd `--user` 单元和 Windows Task Scheduler ONLOGON 任务实现，CLI 命令对外保持一致（`lark-kiro-bridge start/stop/restart/status`）
+  - macOS：`~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist`（不变）
+  - Linux：`~/.config/systemd/user/lark-kiro-bridge.service`，需 `loginctl enable-linger $USER` 才能在登出后保活
+  - Windows：任务名 `LarkKiroBridge.Bot`，启动器 `~/.lark-kiro-bridge/daemon-launcher.cmd`
+- **`/ps` 飞书命令**：列出本机所有 bridge 进程，每行带「停止」按钮，标记当前回复消息的进程
+- **`/exit <id|#>` 飞书命令**：停止指定 bridge 进程（admin only），按 shortId / pid / `#N` 寻址
+  - 自己 → 优雅停止（daemon 守护下会自动重启）
+  - 他人 → SIGTERM
+- **`process.stop` card action**：`/ps` 卡片上的「停止 / 退出」按钮回调，admin 校验
+- 新增内部抽象 `DaemonAdapter` 接口（`src/daemon/types.ts` + `index.ts` 路由），便于未来扩展更多平台
+
+### 变更（Changed）
+
+- `src/daemon/launchd.ts` 重构成 `launchdAdapter` 实现 `DaemonAdapter` 接口
+- 把 `resolveBinPath` 抽到 `src/daemon/resolveBin.ts` 让三端复用
+- 不支持的平台跑 daemon 命令时给友好提示，而不是直接崩溃
+
 ## [0.3.0] — 2026-05-24
 
 ### 新增（Added）
@@ -123,7 +144,8 @@
 - 飞书免费版租户不支持 ASR，语音输入在路线图
 - 群里 `@all` 永不响应（设计行为）
 
-[Unreleased]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.3.1...v0.4.0
 [0.3.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/walterwang0x01/lark-kiro-bridge/releases/tag/v0.1.0

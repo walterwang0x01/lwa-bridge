@@ -341,6 +341,28 @@ describe('parseCommand', () => {
     });
   });
 
+  describe('/ps 与 /exit', () => {
+    it('/ps', () => {
+      expect(parseCommand('/ps')).toEqual({ kind: 'ps' });
+    });
+
+    it('/exit <shortId>', () => {
+      expect(parseCommand('/exit abc123')).toEqual({ kind: 'exit', target: 'abc123' });
+    });
+
+    it('/exit #1', () => {
+      expect(parseCommand('/exit #1')).toEqual({ kind: 'exit', target: '#1' });
+    });
+
+    it('/exit 没参数 → unknown', () => {
+      expect(parseCommand('/exit')).toEqual({ kind: 'unknown', raw: '/exit' });
+    });
+
+    it('/kill 是 /exit 别名', () => {
+      expect(parseCommand('/kill 12345')).toEqual({ kind: 'exit', target: '12345' });
+    });
+  });
+
   describe('kiro-internal 拦截', () => {
     it('/agent 拦截', () => {
       expect(parseCommand('/agent')).toEqual({ kind: 'kiro-internal', name: 'agent' });

@@ -376,6 +376,8 @@ export function buildHelpCard(): object {
     collapsed('展开：运维', [
       ['/timeout [N|off]', 'idle watchdog 阈值'],
       ['/config', '查看 / 编辑访问控制 + 偏好（管理员）'],
+      ['/ps', '列出本机所有 bridge 进程'],
+      ['/exit <id>', '停止指定进程（管理员）'],
       ['/reconnect', '重连飞书 WebSocket'],
       ['/doctor [描述]', '看日志自诊断'],
     ]),
@@ -911,6 +913,112 @@ export function buildConfigFormCard(opts: {
         },
       ],
     },
+  };
+}
+
+// ----- /ps 卡片 -----
+
+/**
+ * /ps 卡片：列出本机所有正在跑的 bridge 进程。
+ *
+ * 视觉策略：
+ *   - 当前回复消息的进程标记 ★（这条消息从这个进程出来）
+ *   - 每行展示 #N + 短 id + pid + 启动时间 + cwd
+ *   - 每行带「停止」按钮（admin only）
+ */
+export function buildPsCard(opts: {
+  processes: Array<{
+    pid: number;
+    shortId: string;
+    appId: string;
+    startedAt: number;
+    cwd: string;
+  }>;
+  selfPid: number;
+}): object {
+  const { processes, selfPid } = opts;
+  const elements: object[] = [];
+
+  if (processes.length === 0) {
+    elements.push(md('_当前主机没有 bridge 进程在跑。_'));
+    return {
+      schema: '2.0',
+      header: buildHeader({ title: '🖥️ 主机进程', template: 'wathet' }),
+      body: { elements },
+    };
+  }
+
+  processes.forEach((p, i) => {
+    const isSelf = p.pid === selfPid;
+    const num = `#${i + 1}`;
+    const started = new Date(p.startedAt).toLocaleString('zh-CN', {
+      hour12: false,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const shortCwd = shortenPath(p.cwd, 35);
+    const tag = isSelf ? '<font color="green">★ 当前</font>' : '';
+
+    elements.push(
+      columnSet({
+        flexMode: 'none',
+        horizontalSpacing: 'small',
+        columns: [
+          column({
+            weight: 1,
+            elements: [md(`<font color='grey'>${num}</font>`)],
+          }),
+          column({
+            weight: 4,
+            elements: [md(`\`${p.shortId}\` · pid \`${p.pid}\` ${tag}`.trim())],
+          }),
+          column({
+            weight: 4,
+            elements: [
+              md(`<font color='grey'>${started}</font><br><font color='grey'>${shortCwd}</font>`),
+            ],
+          }),
+          column({
+            weight: 2,
+            vAlign: 'center',
+            elements: [
+              btn({
+                text: isSelf ? '退出' : '停止',
+                type: isSelf ? 'default' : 'danger',
+                size: 'tiny',
+                value: { action: 'process.stop', target: p.shortId },
+                hoverTip: isSelf
+                  ? '优雅停止当前进程（机器人会停止响应）'
+                  : `SIGTERM 进程 pid ${p.pid}`,
+                confirm: {
+                  title: isSelf ? '退出当前进程' : '停止进程',
+                  text: isSelf
+                    ? '将停止当前正在响应你的 bridge。如果有 daemon 守护，会自动重启。'
+                    : `向 pid ${p.pid} 发 SIGTERM。该进程会优雅退出。`,
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+  });
+
+  elements.push(hr());
+  elements.push(
+    md('<font color="grey">💡 多个进程跑同一个飞书 app 时，事件会被随机路由——只保留一个</font>'),
+  );
+
+  return {
+    schema: '2.0',
+    header: buildHeader({
+      title: '🖥️ 主机进程',
+      template: 'wathet',
+      subtitle: `${processes.length} 个`,
+    }),
+    body: { elements },
   };
 }
 

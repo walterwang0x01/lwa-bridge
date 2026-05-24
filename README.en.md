@@ -63,14 +63,15 @@
 - 🛡️ **Process group kill** — `detached: true` + `process.kill(-pid)` reaches kiro-cli's grandchildren
 - ⏱ **Idle watchdog** — Stuck process auto-killed; tunable globally and per-chat
 - 🔐 **Three-tier access control** — User / chat / admin allowlists. **DMs always bypass the chat allowlist** so you can never lock yourself out.
-- 🍎 **macOS native daemon** — launchd auto-restart on crash, login auto-start
+- 🐧 **Cross-platform daemon** — macOS launchd / Linux systemd --user / Windows Task Scheduler. Auto-restart on crash, login auto-start.
+- 🖥️ **`/ps` `/exit` process management** — List host bridge processes from Feishu, stop with one button
 - 📊 **`/doctor` self-diagnosis** — Feed logs back to Kiro to analyze its own failures
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- macOS (Linux / Windows daemon on roadmap)
+- macOS / Linux / Windows
 - Node.js ≥ 20
 - `kiro-cli` installed and logged in
 - A Feishu / Lark account (personal edition is fine — the QR wizard auto-creates the app)
@@ -110,10 +111,21 @@ lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
 ### Background daemon (recommended for production)
 
 ```bash
-lark-kiro-bridge start          # Install launchd plist and start
+lark-kiro-bridge start          # Install platform service and start
 lark-kiro-bridge status         # Check status
 lark-kiro-bridge restart        # Restart
 ```
+
+Platform mapping:
+
+| Platform | Implementation | Service path |
+|---|---|---|
+| **macOS** | launchd user agent | `~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist` |
+| **Linux** | systemd user unit | `~/.config/systemd/user/lark-kiro-bridge.service` |
+| **Windows** | Task Scheduler ONLOGON | Task `LarkKiroBridge.Bot`, launcher `~/.lark-kiro-bridge/daemon-launcher.cmd` |
+
+> Linux: to keep the daemon running after logout (servers), run once:
+> `loginctl enable-linger $USER`
 
 ## 📖 Slash Commands
 
@@ -129,6 +141,7 @@ lark-kiro-bridge restart        # Restart
 | `/pwd` | `/cwd` | Current working directory |
 | `/ws list` | — | List named workspaces with switch buttons |
 | `/timeout [N\|off]` | `/to` | Idle watchdog threshold (minutes) |
+| `/ps` | — | List all bridge processes on this host |
 | `/doctor [desc]` | — | Let Kiro inspect logs and diagnose |
 
 ### Admin commands
@@ -140,6 +153,7 @@ lark-kiro-bridge restart        # Restart
 | `/ws save <name>` | Save current cwd as a named workspace |
 | `/ws use <name>` | Switch to a named workspace |
 | `/ws remove <name>` | Delete a named workspace |
+| `/exit <id\|#>` | Stop a bridge process (self / others) |
 | `/reconnect` | Force reconnect Feishu WebSocket |
 
 > By default everyone is admin (`access.admins` empty). Tighten before sharing with a team.
@@ -283,8 +297,7 @@ Conventions: TypeScript strict / Biome lint / vitest tests / conventional commit
 
 - **v0.2** ✅ Current (structured cards + button callbacks + Slack-style tool panels + QR app binding + voice input via ASR)
 - **v0.3** ✅ In-Feishu `/config` form + three-tier access control (DM bypass) + rapid-fire message merging
-- **v0.4** Linux systemd / Windows Task Scheduler daemon
-- **v0.4** `/ps` `/exit` to manage host processes from Feishu
+- **v0.4** ✅ Linux systemd / Windows Task Scheduler daemon + `/ps` `/exit` in-Feishu process management
 - **v0.5** Group-name → workspace heuristic (joining "agenzo" group defaults cwd to agenzo dir)
 - **v1.0** Centralized server deployment / multi-user isolation / web admin panel
 

@@ -35,8 +35,10 @@ import {
   buildLoadingCard,
   buildConfigViewCard,
   buildConfigFormCard,
+  buildPsCard,
 } from '../card/builders.js';
 import { ChatPipeline } from './pipeline.js';
+import { listProcesses, findProcess } from '../daemon/registry.js';
 import {
   isUserAllowed,
   isAdmin,
@@ -284,6 +286,7 @@ export class Dispatcher {
         case 'ws-remove':
         case 'reconnect':
         case 'config':
+        case 'exit':
           return true;
         default:
           return false;
@@ -478,6 +481,14 @@ export class Dispatcher {
         }
         case 'config': {
           await this.handleConfigCmd(msg);
+          return;
+        }
+        case 'ps': {
+          await this.handlePsCmd(msg);
+          return;
+        }
+        case 'exit': {
+          await this.handleExitCmd(msg, cmd.target);
           return;
         }
         case 'kiro-internal': {
@@ -1002,6 +1013,40 @@ export class Dispatcher {
         await this.handleConfigSubmit(evt);
         return;
       }
+      case 'process.stop': {
+        const target = String(evt.value['target'] ?? '').trim();
+        if (!target) return;
+        const proc = await findProcess(target);
+        if (!proc) {
+          await this.sendCardToChat(
+            evt.chatId,
+            buildAckCard({ state: 'error', body: `没找到进程 \`${target}\`` }),
+          );
+          return;
+        }
+        try {
+          process.kill(proc.pid, 'SIGTERM');
+          await this.sendCardToChat(
+            evt.chatId,
+            buildAckCard({
+              state: 'done',
+              body:
+                proc.pid === process.pid
+                  ? `当前进程（pid \`${proc.pid}\`）即将退出。daemon 会自动重启；前台 run 模式需手动再起。`
+                  : `已向 pid \`${proc.pid}\` 发 SIGTERM`,
+            }),
+          );
+        } catch (e) {
+          await this.sendCardToChat(
+            evt.chatId,
+            buildAckCard({
+              state: 'error',
+              body: `无法停止 pid \`${proc.pid}\`：${(e as Error).message}`,
+            }),
+          );
+        }
+        return;
+      }
       default:
         this.log.debug({ action }, 'unknown card action, ignored');
     }
@@ -1015,7 +1060,8 @@ export class Dispatcher {
       action === 'ws.use' ||
       action === 'session.new' ||
       action === 'config.edit' ||
-      action === 'config.submit'
+      action === 'config.submit' ||
+      action === 'process.stop'
     );
   }
 
@@ -1127,6 +1173,60 @@ export class Dispatcher {
         isAdmin: isAdmin(evt.senderOpenId, this.config),
       }),
     );
+  }
+
+  /**
+   * /ps 命令：列出本机所有 bridge 进程，标记当前回复的进程。
+   */
+  private async handlePsCmd(msg: IncomingMessage): Promise<void> {
+    const list = await listProcesses();
+    await this.sendInteractiveCard(msg, buildPsCard({ processes: list, selfPid: process.pid }));
+  }
+
+  /**
+   * /exit <id|#> 命令：SIGTERM 指定进程。
+   *
+   * 安全策略：
+   *   - 自己 → 优雅停止（让 daemon 守护重启；如果是前台 run 则直接退）
+   *   - 他人 → SIGTERM
+   *   - 找不到目标 → 报错
+   */
+  private async handleExitCmd(msg: IncomingMessage, target: string): Promise<void> {
+    const proc = await findProcess(target);
+    if (!proc) {
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'error',
+          title: '❌ 没找到进程',
+          body: `没有匹配 \`${target}\` 的进程。\n用 \`/ps\` 查看当前列表。`,
+        }),
+      );
+      return;
+    }
+    const isSelf = proc.pid === process.pid;
+    try {
+      process.kill(proc.pid, 'SIGTERM');
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'done',
+          title: isSelf ? '⏹ 当前进程退出中' : '⏹ 已发出停止信号',
+          body: isSelf
+            ? `pid \`${proc.pid}\` 即将退出。${'daemon 守护下会自动重启；如果是前台 `run` 则需要你手动再起。'}`
+            : `已向 pid \`${proc.pid}\`（\`${proc.shortId}\`）发 SIGTERM。`,
+        }),
+      );
+    } catch (e) {
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'error',
+          title: '❌ 信号失败',
+          body: `无法向 pid \`${proc.pid}\` 发信号：${(e as Error).message}`,
+        }),
+      );
+    }
   }
 
   private async replyErrorCard(msg: IncomingMessage, body: string, cwd: string): Promise<void> {
