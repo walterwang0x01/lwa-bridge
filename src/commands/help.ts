@@ -23,6 +23,7 @@ export function helpMarkdown(): string {
     '**运维**',
     '`/timeout [N|off|default]` — idle watchdog 阈值（分钟）',
     '`/model [name|auto]` — 查看 / 切换 / 重置模型',
+    '`/config` — 查看 / 编辑访问控制 + 偏好（管理员）',
     '`/reconnect` — 重连飞书 WebSocket',
     '`/doctor [描述]` — 让 Kiro 看日志自诊断',
     '',

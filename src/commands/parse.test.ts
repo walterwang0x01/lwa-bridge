@@ -327,6 +327,20 @@ describe('parseCommand', () => {
     });
   });
 
+  describe('/config', () => {
+    it('/config', () => {
+      expect(parseCommand('/config')).toEqual({ kind: 'config', mode: 'show' });
+    });
+
+    it('/cfg 是 /config 别名', () => {
+      expect(parseCommand('/cfg')).toEqual({ kind: 'config', mode: 'show' });
+    });
+
+    it('/settings 是 /config 别名', () => {
+      expect(parseCommand('/settings')).toEqual({ kind: 'config', mode: 'show' });
+    });
+  });
+
   describe('kiro-internal 拦截', () => {
     it('/agent 拦截', () => {
       expect(parseCommand('/agent')).toEqual({ kind: 'kiro-internal', name: 'agent' });

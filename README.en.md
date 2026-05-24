@@ -56,11 +56,13 @@
 - 🎴 **Structured cards** — Each tool call gets its own collapsible panel; multi-call groups auto-condense; reasoning gets its own panel
 - ⚡ **Streaming typing cursor** — Native Feishu `streaming_mode` + footer status indicator
 - 🗂️ **Workspace plan B** — `/cd` doesn't drop context: per-`(chat, cwd)` Kiro session map auto-resumes
-- 🔘 **Clickable buttons** — `/model` `/help` `/status` `/ws list` are all interactive cards, zero command memorization
+- 🔘 **Clickable buttons** — `/model` `/help` `/status` `/ws list` `/config` are all interactive cards, zero command memorization
+- 📝 **`/config` in-Feishu form** — Edit access control & preferences inside Feishu, takes effect instantly, anti-lockout validation
+- 🚄 **Rapid-fire message merging** — Multiple short messages within 200ms merge into a single Kiro call, no more abort-and-retry
 - 🎤 **Voice input** — Send a voice message in Feishu → auto-transcribed (Feishu ASR) → fed to Kiro. Requires `ffmpeg` and ASR scope.
 - 🛡️ **Process group kill** — `detached: true` + `process.kill(-pid)` reaches kiro-cli's grandchildren
 - ⏱ **Idle watchdog** — Stuck process auto-killed; tunable globally and per-chat
-- 🔐 **Three-tier access control** — User / chat / admin allowlists
+- 🔐 **Three-tier access control** — User / chat / admin allowlists. **DMs always bypass the chat allowlist** so you can never lock yourself out.
 - 🍎 **macOS native daemon** — launchd auto-restart on crash, login auto-start
 - 📊 **`/doctor` self-diagnosis** — Feed logs back to Kiro to analyze its own failures
 
@@ -133,6 +135,7 @@ lark-kiro-bridge restart        # Restart
 
 | Command | Purpose |
 |---|---|
+| `/config` | View / edit access control & preferences (in-Feishu form, applies instantly) |
 | `/cd <path>` | Switch working directory (gated by `allowedRoots`) |
 | `/ws save <name>` | Save current cwd as a named workspace |
 | `/ws use <name>` | Switch to a named workspace |
@@ -276,19 +279,13 @@ node bin/lark-kiro-bridge.mjs run           # local run (stop daemon first)
 
 Conventions: TypeScript strict / Biome lint / vitest tests / conventional commits.
 
-## Acknowledgments
-
-Design inspired by:
-
-- **[](https://github.com//)** — Sibling project for Claude Code; multiple implementation references (card design, daemon, workspace plan)
-- **[Slack Thinking Steps](https://slack.dev/slack-thinking-steps-ai-agents/)** — Tool-call panel visual paradigm
-
 ## Roadmap
 
-- **v0.2** ✅ Current (structured cards + button callbacks + Slack-style tool panels + **QR app binding** + **voice input via ASR**)
-- **v0.3** Linux systemd / Windows Task Scheduler daemon
-- **v0.3** In-Feishu `/config` form for access policy
-- **v0.4** Group-name → workspace heuristic (joining "agenzo" group defaults cwd to agenzo dir)
+- **v0.2** ✅ Current (structured cards + button callbacks + Slack-style tool panels + QR app binding + voice input via ASR)
+- **v0.3** ✅ In-Feishu `/config` form + three-tier access control (DM bypass) + rapid-fire message merging
+- **v0.4** Linux systemd / Windows Task Scheduler daemon
+- **v0.4** `/ps` `/exit` to manage host processes from Feishu
+- **v0.5** Group-name → workspace heuristic (joining "agenzo" group defaults cwd to agenzo dir)
 - **v1.0** Centralized server deployment / multi-user isolation / web admin panel
 
 ## 📄 License

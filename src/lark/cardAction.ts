@@ -29,6 +29,10 @@ interface RawAction {
   value?: unknown;
   name?: string;
   option?: string;
+  /** 表单提交时携带 { input_name: input_value, ... } */
+  form_value?: Record<string, unknown>;
+  /** 部分 SDK 版本字段名是 input_value */
+  input_value?: Record<string, unknown>;
 }
 
 interface RawOperator {
@@ -97,6 +101,11 @@ export function parseCardAction(raw: unknown): CardActionEvent | null {
     value,
     receivedAt: Date.now(),
   };
+  // form 提交时把 form_value（或 input_value）带上
+  const formValue = action.form_value ?? action.input_value;
+  if (formValue && typeof formValue === 'object') {
+    result.formValue = formValue as Record<string, unknown>;
+  }
   const token = ev.token ?? r.token;
   if (token !== undefined) result.token = token;
   return result;

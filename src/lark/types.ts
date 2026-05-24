@@ -47,6 +47,11 @@ export interface CardActionEvent {
    * 我们约定每个按钮都带 { action: 'model.set' | 'ws.use' | ..., ... }。
    */
   value: Record<string, unknown>;
+  /**
+   * 表单提交字段（仅 button 在 form 里点提交时有值）。
+   * 飞书 v2 表单：每个 input 的 name 属性 → 用户输入的 value。
+   */
+  formValue?: Record<string, unknown>;
   /** 飞书发的 token（可用于在 30 分钟内更新原卡片，最多 2 次。当前未用，留给未来） */
   token?: string;
   /** 触发时间戳 */

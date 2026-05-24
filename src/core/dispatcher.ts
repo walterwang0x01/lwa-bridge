@@ -19,7 +19,6 @@ import { stripMentions } from '../lark/parse.js';
 import { downloadMessageMedia } from '../lark/media.js';
 import { transcribeAudio } from '../lark/asr.js';
 import { parseCommand, type ParsedCommand } from '../commands/parse.js';
-import { isUserAllowed, isAdmin, validateCwd, SecurityError } from '../lib/security.js';
 import { readRecentLogLines } from '../lib/logger.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
@@ -34,8 +33,17 @@ import {
   buildStatusCard,
   buildAckCard,
   buildLoadingCard,
+  buildConfigViewCard,
+  buildConfigFormCard,
 } from '../card/builders.js';
 import { ChatPipeline } from './pipeline.js';
+import {
+  isUserAllowed,
+  isAdmin,
+  validateCwd,
+  validateAccessChange,
+  SecurityError,
+} from '../lib/security.js';
 
 export interface DispatcherOptions {
   config: Config;
@@ -78,6 +86,31 @@ export class Dispatcher {
   private readonly seenEventIds = new Map<string, number>();
   private readonly EVENT_TTL_MS = 5 * 60 * 1000;
 
+  /**
+   * rapid-fire 消息合并：同 chat 短时间连发时把多条消息拼成一次 Kiro 调用。
+   *
+   * 价值：用户在飞书 IM 里习惯连发短消息（"等等"、"还有"、"刚才那个改一下"），
+   * 不合并的话每条都跑一次 Kiro，浪费 token 还会被前面的 abort 打断；合并后
+   * 一次性给 Kiro 完整意图。
+   *
+   * 实现：每条消息进来先放 buffer，200ms 内有新消息就追加；到时一次性 submit。
+   *   - 第一条触发计时器、注册 buffer
+   *   - 后续消息往 buffer 里追加文本（+ 媒体路径）
+   *   - 200ms 静默期到 → flush，用第一条的 msg/eventId 作为 reply 锚点
+   */
+  private readonly mergeBuffers = new Map<
+    string,
+    {
+      anchor: IncomingMessage;
+      texts: string[];
+      mediaPaths: string[];
+      cwd: string;
+      perChatIdleMin: number | undefined;
+      timer: NodeJS.Timeout;
+    }
+  >();
+  private readonly MERGE_WINDOW_MS = 200;
+
   private isDuplicate(eventId: string): boolean {
     if (!eventId) return false;
     const now = Date.now();
@@ -108,9 +141,9 @@ export class Dispatcher {
     }
 
     // 2) 访问控制
-    if (!isUserAllowed(msg.senderOpenId, msg.chatId, this.config)) {
+    if (!isUserAllowed(msg.senderOpenId, msg.chatId, msg.chatType, this.config)) {
       this.log.debug(
-        { user: msg.senderOpenId, chat: msg.chatId },
+        { user: msg.senderOpenId, chat: msg.chatId, chatType: msg.chatType },
         'message dropped by access control',
       );
       return;
@@ -250,6 +283,7 @@ export class Dispatcher {
         case 'ws-use':
         case 'ws-remove':
         case 'reconnect':
+        case 'config':
           return true;
         default:
           return false;
@@ -440,6 +474,10 @@ export class Dispatcher {
         }
         case 'model': {
           await this.handleModelCmd(msg, cmd, session.currentCwd);
+          return;
+        }
+        case 'config': {
+          await this.handleConfigCmd(msg);
           return;
         }
         case 'kiro-internal': {
@@ -770,7 +808,12 @@ export class Dispatcher {
    */
   async handleCardAction(evt: CardActionEvent): Promise<void> {
     // 访问控制：跟普通消息一样
-    if (!isUserAllowed(evt.senderOpenId, evt.chatId, this.config)) {
+    // card.action.trigger 没有 chatType 字段，但卡片是从 chat 里出来的；
+    // 用 chatId 前缀粗判：oc_ 开头是群，ou_/p2p 开头是 DM。
+    // 飞书的实际惯例：DM 的 chatId 也是 oc_，无法可靠区分；这里按"非 DM"处理，
+    // 即让 chat allowlist 生效；如需精确判断需查 chat info API（性价比低，先这样）。
+    const chatTypeGuess: 'group' = 'group';
+    if (!isUserAllowed(evt.senderOpenId, evt.chatId, chatTypeGuess, this.config)) {
       this.log.debug({ user: evt.senderOpenId }, 'card action dropped by access control');
       return;
     }
@@ -932,6 +975,33 @@ export class Dispatcher {
         }
         return;
       }
+      case 'config.show':
+      case 'config.edit': {
+        const isEditMode = action === 'config.edit';
+        const card = isEditMode
+          ? buildConfigFormCard({
+              allowedUsers: this.config.access.allowedUsers,
+              allowedChats: this.config.access.allowedChats,
+              admins: this.config.access.admins,
+              requireMentionInGroup: this.config.preferences.requireMentionInGroup,
+              idleTimeoutMinutes: this.config.kiro.idleTimeoutMinutes,
+            })
+          : buildConfigViewCard({
+              allowedUsers: this.config.access.allowedUsers,
+              allowedChats: this.config.access.allowedChats,
+              admins: this.config.access.admins,
+              requireMentionInGroup: this.config.preferences.requireMentionInGroup,
+              idleTimeoutMinutes: this.config.kiro.idleTimeoutMinutes,
+              cardUpdateIntervalMs: this.config.preferences.cardUpdateIntervalMs,
+              isAdmin: isAdmin(evt.senderOpenId, this.config),
+            });
+        await this.sendCardToChat(evt.chatId, card);
+        return;
+      }
+      case 'config.submit': {
+        await this.handleConfigSubmit(evt);
+        return;
+      }
       default:
         this.log.debug({ action }, 'unknown card action, ignored');
     }
@@ -943,7 +1013,119 @@ export class Dispatcher {
       action === 'model.set' ||
       action === 'model.reset' ||
       action === 'ws.use' ||
-      action === 'session.new'
+      action === 'session.new' ||
+      action === 'config.edit' ||
+      action === 'config.submit'
+    );
+  }
+
+  /**
+   * /config 命令：展示当前配置（只读卡片，admin 可见编辑按钮）
+   */
+  private async handleConfigCmd(msg: IncomingMessage): Promise<void> {
+    const card = buildConfigViewCard({
+      allowedUsers: this.config.access.allowedUsers,
+      allowedChats: this.config.access.allowedChats,
+      admins: this.config.access.admins,
+      requireMentionInGroup: this.config.preferences.requireMentionInGroup,
+      idleTimeoutMinutes: this.config.kiro.idleTimeoutMinutes,
+      cardUpdateIntervalMs: this.config.preferences.cardUpdateIntervalMs,
+      isAdmin: isAdmin(msg.senderOpenId, this.config),
+    });
+    await this.sendInteractiveCard(msg, card);
+  }
+
+  /**
+   * 处理 config 表单提交。
+   *
+   * 流程：
+   *   1. 解析 form_value（用户输入的逗号分隔列表 / 整数 / yes/no）
+   *   2. 用 validateAccessChange 校验，防止把自己锁出去
+   *   3. patchAndSaveConfig 落盘 + 立即生效
+   *   4. 回一张确认卡片（同时显示新的 config view）
+   */
+  private async handleConfigSubmit(evt: CardActionEvent): Promise<void> {
+    const fv = evt.formValue ?? {};
+    const parseCsv = (raw: unknown): string[] =>
+      String(raw ?? '')
+        .split(/[,，\s]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+    const allowedUsers = parseCsv(fv['allowedUsers']);
+    const allowedChats = parseCsv(fv['allowedChats']);
+    const admins = parseCsv(fv['admins']);
+    const requireMentionInGroup = String(fv['requireMentionInGroup'] ?? 'yes') === 'yes';
+    const idleRaw = String(fv['idleTimeoutMinutes'] ?? '5').trim();
+    const idleMin = Number(idleRaw);
+    if (!Number.isFinite(idleMin) || idleMin < 0 || idleMin > 600) {
+      await this.sendCardToChat(
+        evt.chatId,
+        buildAckCard({
+          state: 'error',
+          body: `❌ Idle watchdog 必须是 0~600 之间的整数，收到 \`${idleRaw}\``,
+        }),
+      );
+      return;
+    }
+
+    // 防自锁校验
+    const accessErrors = validateAccessChange({
+      submitterOpenId: evt.senderOpenId,
+      next: { allowedUsers, allowedChats, admins },
+    });
+    if (accessErrors.length > 0) {
+      await this.sendCardToChat(
+        evt.chatId,
+        buildAckCard({
+          state: 'error',
+          title: '⚠️ 配置不安全',
+          body: accessErrors.join('\n\n'),
+        }),
+      );
+      return;
+    }
+
+    // 落盘
+    this.config = patchAndSaveConfig(this.config, (draft) => {
+      draft.access.allowedUsers = allowedUsers;
+      draft.access.allowedChats = allowedChats;
+      draft.access.admins = admins;
+      draft.preferences.requireMentionInGroup = requireMentionInGroup;
+      draft.kiro.idleTimeoutMinutes = Math.floor(idleMin);
+    });
+    this.log.info(
+      {
+        allowedUsersN: allowedUsers.length,
+        allowedChatsN: allowedChats.length,
+        adminsN: admins.length,
+        requireMentionInGroup,
+        idleMin: Math.floor(idleMin),
+        by: evt.senderOpenId,
+      },
+      'config updated via card form',
+    );
+
+    // 回执 + 新的 view 卡片
+    await this.sendCardToChat(
+      evt.chatId,
+      buildAckCard({
+        state: 'done',
+        title: '✅ 配置已保存',
+        body: '改动立即生效，无需重启。',
+      }),
+    );
+    await this.sendCardToChat(
+      evt.chatId,
+      buildConfigViewCard({
+        allowedUsers: this.config.access.allowedUsers,
+        allowedChats: this.config.access.allowedChats,
+        admins: this.config.access.admins,
+        requireMentionInGroup: this.config.preferences.requireMentionInGroup,
+        idleTimeoutMinutes: this.config.kiro.idleTimeoutMinutes,
+        cardUpdateIntervalMs: this.config.preferences.cardUpdateIntervalMs,
+        isAdmin: isAdmin(evt.senderOpenId, this.config),
+      }),
     );
   }
 
@@ -962,12 +1144,91 @@ export class Dispatcher {
 
   /**
    * 把一条用户消息丢给 Kiro 处理。
+   *
+   * **包了一层 rapid-fire 合并**：先放 buffer，等 200ms 静默期再真正 submit；
+   * 期间若同 chat 又来新消息，就追加到同一个 buffer，不会触发 abort+rerun。
+   *
+   * 真正的 Kiro 调用在 executeKiroTask 里。
+   */
+  private async runKiroTask(
+    msg: IncomingMessage,
+    prompt: string,
+    cwd: string,
+    mediaPaths: string[] = [],
+    perChatIdleMin?: number,
+  ): Promise<void> {
+    // 命令型场景（doctor 等）prompt 极长且不该合并，跳过合并直接执行
+    // 这里用启发式：prompt > 500 字符或 包含 "**最近日志**" 视为命令型
+    const skipMerge = prompt.length > 500 || prompt.includes('**最近日志');
+    if (skipMerge) {
+      await this.executeKiroTask(msg, prompt, cwd, mediaPaths, perChatIdleMin);
+      return;
+    }
+
+    const existing = this.mergeBuffers.get(msg.chatId);
+    if (existing) {
+      // 追加到现有 buffer
+      if (prompt) existing.texts.push(prompt);
+      existing.mediaPaths.push(...mediaPaths);
+      // 重置计时器，给最新一条消息再续 200ms
+      clearTimeout(existing.timer);
+      existing.timer = setTimeout(() => {
+        this.flushMergeBuffer(msg.chatId);
+      }, this.MERGE_WINDOW_MS);
+      this.log.debug(
+        { chatId: msg.chatId, accumulated: existing.texts.length },
+        'merging rapid-fire message',
+      );
+      return;
+    }
+
+    // 第一条：开 buffer 等更多
+    const timer = setTimeout(() => {
+      this.flushMergeBuffer(msg.chatId);
+    }, this.MERGE_WINDOW_MS);
+    this.mergeBuffers.set(msg.chatId, {
+      anchor: msg,
+      texts: prompt ? [prompt] : [],
+      mediaPaths: [...mediaPaths],
+      cwd,
+      perChatIdleMin,
+      timer,
+    });
+  }
+
+  /**
+   * flush 当前 chat 的合并 buffer：把累计的文本拼一起，调 executeKiroTask。
+   */
+  private flushMergeBuffer(chatId: string): void {
+    const buf = this.mergeBuffers.get(chatId);
+    if (!buf) return;
+    this.mergeBuffers.delete(chatId);
+    clearTimeout(buf.timer);
+    const merged = buf.texts.filter((t) => t.length > 0).join('\n\n');
+    if (buf.texts.length > 1) {
+      this.log.info(
+        { chatId, mergedCount: buf.texts.length, totalLen: merged.length },
+        'flushing merged rapid-fire batch',
+      );
+    }
+    // 不 await：让定时器线程立即返回，submit 自己排队
+    void this.executeKiroTask(
+      buf.anchor,
+      merged,
+      buf.cwd,
+      buf.mediaPaths,
+      buf.perChatIdleMin,
+    ).catch((e) => this.log.error({ err: e, chatId }, 'flush merge buffer execute failed'));
+  }
+
+  /**
+   * 真正把任务丢到 ChatPipeline 跑 Kiro 的实现（不含 rapid-fire 合并）。
    * - 在 ChatPipeline 里跑（自动 preempt）
    * - 用 RunCardController 流式刷新卡片（每个工具独立 panel）
    * - mediaPaths 非空时，把绝对路径作为前缀加到 prompt 前面
    * - perChatIdleMin 控制本次 idle watchdog 阈值
    */
-  private async runKiroTask(
+  private async executeKiroTask(
     msg: IncomingMessage,
     prompt: string,
     cwd: string,

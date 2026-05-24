@@ -9,7 +9,9 @@
  */
 import { Command } from 'commander';
 import { createInterface } from 'node:readline/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { CONFIG_FILE, ensureDataDirs, LOGS_DIR } from './lib/paths.js';
 import { defaultConfig, loadConfig, saveConfig } from './lib/config.js';
 import { runQrWizard } from './lib/qrWizard.js';
@@ -26,10 +28,29 @@ import { listProcesses, findProcess } from './daemon/registry.js';
 
 const program = new Command();
 
+// 从 package.json 读真实版本，避免 cli.ts 里硬编码漂移
+function readPackageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // dist/cli.js → ../package.json
+    // src/cli.ts (vitest) → ../package.json
+    const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        const pkg = JSON.parse(readFileSync(p, 'utf-8')) as { version?: string };
+        if (pkg.version) return pkg.version;
+      }
+    }
+  } catch {
+    // ignore，回退到默认
+  }
+  return '0.0.0';
+}
+
 program
   .name('lark-kiro-bridge')
   .description('Bridge Feishu/Lark messenger with local Kiro CLI')
-  .version('0.1.0');
+  .version(readPackageVersion());
 
 program
   .command('init')

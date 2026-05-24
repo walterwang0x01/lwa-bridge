@@ -67,18 +67,67 @@ export function validateCwd(targetPath: string, config: Config, baseCwd: string)
   return abs;
 }
 
-/** 校验消息发送者是否被允许使用机器人。 */
-export function isUserAllowed(senderOpenId: string, chatId: string, config: Config): boolean {
+/**
+ * 校验消息发送者是否被允许使用机器人。
+ *
+ * 三层独立校验，全部通过才算允许：
+ *   1. allowedUsers：发送者必须在白名单（空列表=不限）
+ *   2. allowedChats：消息所在 chat 必须在白名单（空列表=不限）
+ *      —— **DM（p2p）永远豁免**，避免管理员把自己锁在外面，无法 DM 改配置
+ *   3. （admins 单独走 isAdmin 判断；不在这里）
+ *
+ * 使用模式：
+ *   - 个人使用：三个都为空，全开放
+ *   - 团队使用：填 allowedChats=team-group，DM 仍可改 config
+ *   - 锁死：三个都填，但 DM 永远能进
+ */
+export function isUserAllowed(
+  senderOpenId: string,
+  chatId: string,
+  chatType: 'p2p' | 'group' | 'topic_group' | 'unknown',
+  config: Config,
+): boolean {
   const { allowedUsers, allowedChats } = config.access;
-  // 白名单都为空 = 完全开放
   const userOk = allowedUsers.length === 0 || allowedUsers.includes(senderOpenId);
-  const chatOk = allowedChats.length === 0 || allowedChats.includes(chatId);
+  // DM 永远绕过 chat allowlist —— 防止把自己锁在外面
+  const chatOk = chatType === 'p2p' || allowedChats.length === 0 || allowedChats.includes(chatId);
   return userOk && chatOk;
 }
 
-/** 校验是否管理员（仅 admin 才能 /cd /ws save 之类）。 */
+/** 校验是否管理员（仅 admin 才能 /cd /ws save /config 之类）。 */
 export function isAdmin(senderOpenId: string, config: Config): boolean {
   const { admins } = config.access;
   // admins 为空 = 所有用户都是 admin（个人使用模式）
   return admins.length === 0 || admins.includes(senderOpenId);
+}
+
+/**
+ * 校验访问控制配置本身合法（防止把自己锁在外面）。
+ *
+ * 触发场景：用户通过 /config 表单改 access 时，先校验再保存。
+ *
+ * 规则：
+ *   - admins 非空时，submitter 必须在 admins 里（否则提交完自己再也改不了）
+ *   - allowedUsers 非空时，submitter 必须在 allowedUsers（否则下条消息就被拦）
+ *   - allowedChats 不需要校验 submitter 所在 chat（DM 永远豁免，能恢复）
+ *
+ * 返回错误信息字符串数组；空数组 = 通过。
+ */
+export function validateAccessChange(opts: {
+  submitterOpenId: string;
+  next: { allowedUsers: string[]; allowedChats: string[]; admins: string[] };
+}): string[] {
+  const errors: string[] = [];
+  const { submitterOpenId, next } = opts;
+  if (next.admins.length > 0 && !next.admins.includes(submitterOpenId)) {
+    errors.push(
+      `❌ 你的 open_id（\`${submitterOpenId}\`）不在 admins 列表里，提交后你将无法再改配置。请先把自己加进去。`,
+    );
+  }
+  if (next.allowedUsers.length > 0 && !next.allowedUsers.includes(submitterOpenId)) {
+    errors.push(
+      `❌ 你的 open_id（\`${submitterOpenId}\`）不在 allowedUsers 列表里，提交后你的下一条消息会被静默丢弃。请先把自己加进去。`,
+    );
+  }
+  return errors;
 }

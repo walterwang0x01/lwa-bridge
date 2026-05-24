@@ -7,6 +7,15 @@
 
 待发版的改动会先写在这里。
 
+### 新增（Added）
+
+- **`/config` 飞书内表单**：管理员发 `/config` 看当前配置，点「编辑」弹表单卡片，可改 `allowedUsers` / `allowedChats` / `admins` / `requireMentionInGroup` / `idleTimeoutMinutes`，保存即时生效，无需重启
+- **防自锁校验**：表单提交前会校验 submitter 是否在新的 admins / allowedUsers 列表里，避免一脚踢自己出去
+- **rapid-fire 消息合并**：同 chat 200ms 内连发的多条消息会自动拼接成一次 Kiro 调用，避免每条都被前一条 abort 重跑
+- 三层访问控制扩展：`isUserAllowed` 现在多接收 `chatType` 参数；**DM (p2p) 永远豁免 `allowedChats`**，确保管理员永远能 DM 改回配置
+- 命令解析：`/config` `/cfg` `/settings` 都路由到 config 命令
+- 飞书 cardAction 解析：现在能正确取 `form_value`（表单提交字段）
+
 ### 修复（Fixed）
 
 - **语音输入回复啰嗦**：Kiro 看到 `[语音]` 前缀时会进入"调试场景"模式，回复一大段 ASR 系统状态而不是回答用户问题。改成在转写后追加一段简短 system 提示，约束 LLM「按用户日常对话的口语意图回答，不要谈论语音或转写本身」
@@ -26,7 +35,7 @@
 
 ### 变更（Changed）
 
-- **结构化卡片重做（参考  + Slack）**：每次工具调用一个独立 `collapsible_panel`，多调用 ≥3 自动折叠成总结，思考过程独立 panel
+- **结构化卡片重做**：每次工具调用一个独立 `collapsible_panel`，多调用 ≥3 自动折叠成总结，思考过程独立 panel
 - 卡片配置 `streaming_mode: true` + `summary` 字段，支持飞书原生打字光标
 - 进行中卡片底部加 `⏹ 终止` 按钮 + 实时状态指示（🧠/🧰/✍️）
 - 单个工具 body 截断到 2.5KB，防止超过飞书 30KB 单 element 限制

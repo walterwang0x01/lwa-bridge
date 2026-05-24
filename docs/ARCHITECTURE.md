@@ -27,8 +27,6 @@
 
 ## 卡片渲染体系
 
-参考自 [](https://github.com//) + [Slack Thinking Steps](https://slack.dev/slack-thinking-steps-ai-agents/) 设计。
-
 ### 数据模型 RunState
 
 每次 Kiro 任务一个对象，模型见 `src/kiro/runState.ts`：
@@ -277,5 +275,3 @@ webhook 适合云上部署多实例集群——这不是 lark-kiro-bridge 的目
 
 - [飞书卡片 JSON 2.0](https://open.feishu.cn/document/feishu-cards/feishu-card-overview)
 - [飞书卡片回传交互](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks)
-- [Slack Thinking Steps（卡片设计参考）](https://slack.dev/slack-thinking-steps-ai-agents/)
-- [（同类项目，多处实现参考）](https://github.com//)
