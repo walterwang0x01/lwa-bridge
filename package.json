@@ -4,7 +4,7 @@
   "description": "Bridge Feishu/Lark messenger with local Kiro CLI — streaming cards, per-chat sessions, named workspaces",
   "type": "module",
   "bin": {
-    "lark-kiro-bridge": "./bin/lark-kiro-bridge.mjs"
+    "lark-kiro-bridge": "bin/lark-kiro-bridge.mjs"
   },
   "files": [
     "dist/**/*.js",
