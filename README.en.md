@@ -57,6 +57,7 @@
 - ⚡ **Streaming typing cursor** — Native Feishu `streaming_mode` + footer status indicator
 - 🗂️ **Workspace plan B** — `/cd` doesn't drop context: per-`(chat, cwd)` Kiro session map auto-resumes
 - 🔘 **Clickable buttons** — `/model` `/help` `/status` `/ws list` are all interactive cards, zero command memorization
+- 🎤 **Voice input** — Send a voice message in Feishu → auto-transcribed (Feishu ASR) → fed to Kiro. Requires `ffmpeg` and ASR scope.
 - 🛡️ **Process group kill** — `detached: true` + `process.kill(-pid)` reaches kiro-cli's grandchildren
 - ⏱ **Idle watchdog** — Stuck process auto-killed; tunable globally and per-chat
 - 🔐 **Three-tier access control** — User / chat / admin allowlists
@@ -71,6 +72,7 @@
 - Node.js ≥ 20
 - `kiro-cli` installed and logged in
 - A Feishu / Lark account (personal edition is fine — the QR wizard auto-creates the app)
+- **Optional**: `ffmpeg` for voice input (`brew install ffmpeg` / `apt install ffmpeg`) + Feishu `speech_to_text:speech` scope (free-tier tenants are not supported)
 
 ### 30-second setup ⚡
 
@@ -283,10 +285,9 @@ Design inspired by:
 
 ## Roadmap
 
-- **v0.2** ✅ Current (structured cards + button callbacks + Slack-style tool panels + **QR app binding**)
+- **v0.2** ✅ Current (structured cards + button callbacks + Slack-style tool panels + **QR app binding** + **voice input via ASR**)
 - **v0.3** Linux systemd / Windows Task Scheduler daemon
 - **v0.3** In-Feishu `/config` form for access policy
-- **v0.4** Voice input via Feishu ASR
 - **v0.4** Group-name → workspace heuristic (joining "agenzo" group defaults cwd to agenzo dir)
 - **v1.0** Centralized server deployment / multi-user isolation / web admin panel
 
