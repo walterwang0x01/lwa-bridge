@@ -7,6 +7,8 @@
 
 待发版的改动会先写在这里。
 
+## [0.3.0] — 2026-05-24
+
 ### 新增（Added）
 
 - **`/config` 飞书内表单**：管理员发 `/config` 看当前配置，点「编辑」弹表单卡片，可改 `allowedUsers` / `allowedChats` / `admins` / `requireMentionInGroup` / `idleTimeoutMinutes`，保存即时生效，无需重启
@@ -19,6 +21,7 @@
 ### 修复（Fixed）
 
 - **语音输入回复啰嗦**：Kiro 看到 `[语音]` 前缀时会进入"调试场景"模式，回复一大段 ASR 系统状态而不是回答用户问题。改成在转写后追加一段简短 system 提示，约束 LLM「按用户日常对话的口语意图回答，不要谈论语音或转写本身」
+- `lark-kiro-bridge --version` 之前硬编码 `0.1.0`，现在动态从 `package.json` 读真实版本
 - README 路线图：把 ASR 从 v0.4 挪到 v0.2 已完成（之前漏写）
 - README/英文版/前置条件：补充 `ffmpeg` + 飞书 ASR scope 说明
 
@@ -120,6 +123,7 @@
 - 飞书免费版租户不支持 ASR，语音输入在路线图
 - 群里 `@all` 永不响应（设计行为）
 
-[Unreleased]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/walterwang0x01/lark-kiro-bridge/releases/tag/v0.1.0
