@@ -27,6 +27,7 @@ import { runKiro } from '../kiro/runner.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
 import type { CardContext } from '../card/schema.js';
+import { RunCardController } from '../card/runCardController.js';
 import {
   buildModelPickerCard,
   buildHelpCard,
@@ -955,8 +956,8 @@ export class Dispatcher {
   /**
    * 把一条用户消息丢给 Kiro 处理。
    * - 在 ChatPipeline 里跑（自动 preempt）
-   * - 用 CardRenderer 流式刷新卡片
-   * - mediaPaths 非空时，把绝对路径作为前缀加到 prompt 前面，让 kiro-cli 能读到
+   * - 用 RunCardController 流式刷新卡片（每个工具独立 panel）
+   * - mediaPaths 非空时，把绝对路径作为前缀加到 prompt 前面
    * - perChatIdleMin 控制本次 idle watchdog 阈值
    */
   private async runKiroTask(
@@ -968,9 +969,6 @@ export class Dispatcher {
   ): Promise<void> {
     const pipeline = this.getPipeline(msg.chatId);
     const taskId = `${msg.eventId || msg.messageId}-${Date.now().toString(36)}`;
-    const wsName = await this.workspaceNameOf(cwd);
-    const cardCtx: CardContext = { cwd };
-    if (wsName !== undefined) cardCtx.workspaceName = wsName;
 
     // 拼接 prompt：媒体路径 + 文本
     const finalPrompt = mediaPaths.length
@@ -983,26 +981,23 @@ export class Dispatcher {
     await pipeline.submit({
       id: taskId,
       run: async (signal) => {
-        const renderer = new CardRenderer({
+        const ctrlOpts: ConstructorParameters<typeof RunCardController>[0] = {
           lark: this.lark,
           chatId: msg.chatId,
           replyToMessageId: msg.messageId,
           intervalMs: this.config.preferences.cardUpdateIntervalMs,
           logger: this.log,
-          ctx: cardCtx,
-        });
+        };
+        if (idleMin > 0) ctrlOpts.idleTimeoutMinutes = idleMin;
+        const ctrl = new RunCardController(ctrlOpts);
         try {
-          await renderer.open('pending', '');
+          await ctrl.open();
         } catch (e) {
           this.log.error({ err: e }, 'failed to open card; aborting task');
           return;
         }
 
         const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
-        // 在卡片上下文里标注是新会话还是续接
-        renderer.updateContext({
-          sessionStatus: resumeId ? `↪️ ${resumeId.slice(0, 8)}` : '🆕 新会话',
-        });
 
         const runOpts: Parameters<typeof runKiro>[0] = {
           prompt: finalPrompt,
@@ -1012,8 +1007,7 @@ export class Dispatcher {
           timeoutMs: this.config.kiro.timeoutMs,
           idleTimeoutMs,
           signal,
-          onChunk: (text) => renderer.appendText(text),
-          onTrace: (summary) => renderer.appendTrace(summary),
+          onChunk: (text) => ctrl.feed(text),
         };
         if (resumeId !== undefined) runOpts.resumeId = resumeId;
         if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
@@ -1023,51 +1017,35 @@ export class Dispatcher {
         try {
           result = await runKiro(runOpts);
         } catch (e) {
-          await renderer.finalize(
-            'error',
-            `Kiro 执行出错\n\`\`\`\n${(e as Error).message}\n\`\`\``,
-          );
+          await ctrl.finalize('error', (e as Error).message);
           return;
         }
 
         if (result.aborted) {
-          await renderer.finalize('aborted', result.text || "<font color='grey'>任务被打断</font>");
+          await ctrl.finalize('interrupted');
           return;
         }
         if (result.idleTimedOut) {
-          await renderer.finalize(
-            'timedout',
-            (result.text || '') + `\n\n<font color='grey'>${idleMin} 分钟无响应，已自动终止</font>`,
-          );
+          await ctrl.finalize('idle_timeout');
           return;
         }
         if (result.timedOut) {
-          await renderer.finalize(
-            'timedout',
-            (result.text || '') +
-              `\n\n<font color='grey'>超过 ${
-                this.config.kiro.timeoutMs / 1000
-              }s 未完成，已强制终止</font>`,
+          await ctrl.finalize(
+            'error',
+            `超过 ${this.config.kiro.timeoutMs / 1000}s 未完成，已强制终止`,
           );
           return;
         }
         if (result.exitCode !== 0) {
-          await renderer.finalize(
-            'error',
-            (result.text || '') +
-              `\n\n<font color='grey'>kiro-cli 退出码 ${result.exitCode}</font>`,
-          );
+          await ctrl.finalize('error', `kiro-cli 退出码 ${result.exitCode}`);
           return;
         }
 
         // 成功：保存新 sessionId 用于续接
         if (result.newSessionId && result.newSessionId !== resumeId) {
           await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
-          renderer.updateContext({
-            sessionStatus: `↪️ ${result.newSessionId.slice(0, 8)}`,
-          });
         }
-        await renderer.finalize('done', result.text || "<font color='grey'>（无回复）</font>");
+        await ctrl.finalize('done');
       },
     });
   }
