@@ -26,7 +26,6 @@ import { WorkspaceStore } from '../store/workspaces.js';
 import { runKiro } from '../kiro/runner.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
-import type { CardContext } from '../card/schema.js';
 import { RunCardController } from '../card/runCardController.js';
 import {
   buildModelPickerCard,
