@@ -57,6 +57,7 @@
 - ⚡ **流式打字光标** — 飞书原生 `streaming_mode`，配合 footer 实时状态指示
 - 🗂️ **工作区方案 B** — 切目录不丢上下文：每个 `(chat, cwd)` 独立 Kiro session，自动续聊
 - 🔘 **按钮可点** — `/model` `/help` `/status` `/ws list` 全部可点击操作，0 命令记忆
+- 🎤 **语音输入** — 飞书发语音消息 → 自动转写（飞书 ASR）→ 喂给 Kiro，需 `ffmpeg` 和 ASR 权限
 - 🛡️ **进程组 kill** — `detached: true` + `process.kill(-pid)` 杀掉 kiro-cli 全部子孙
 - ⏱ **Idle Watchdog** — 卡住自动 killTree，可全局 / per-chat 配置
 - 🔐 **三层访问控制** — 用户 / 群 / 管理员白名单
@@ -71,6 +72,7 @@
 - Node.js ≥ 20
 - `kiro-cli` 已安装并登录
 - 飞书账号（个人版即可，扫码自动创建应用）
+- **可选**：`ffmpeg`（用于语音输入转写，`brew install ffmpeg` / `apt install ffmpeg`）+ 飞书 ASR scope `speech_to_text:speech`（飞书免费版租户不支持）
 
 ### 30 秒上线 ⚡
 
@@ -283,10 +285,9 @@ node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 
 ## 路线图
 
-- **v0.2** ✅ 当前版（结构化卡片 + 按钮回调 + Slack-style 工具面板 + **扫码绑定飞书应用**）
+- **v0.2** ✅ 当前版（结构化卡片 + 按钮回调 + Slack-style 工具面板 + **扫码绑定** + **语音输入 ASR**）
 - **v0.3** Linux systemd / Windows Task Scheduler 守护
 - **v0.3** 飞书内 `/config` 表单管理 access policy
-- **v0.4** 语音输入（飞书 ASR）
 - **v0.4** 群名 → 工作区的启发式默认（进 agenzo 群默认在 agenzo 目录）
 - **v1.0** 服务器集中部署 / 多用户隔离 / Web 管理面板
 

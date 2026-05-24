@@ -222,11 +222,19 @@ export class Dispatcher {
       return;
     }
 
-    // 把 ASR 转写出的文本拼到用户文本前。明确标注来源，让 Kiro 知道这是语音。
+    // 把 ASR 转写出的文本拼到用户文本前。
+    //
+    // 设计取舍：
+    //   - 保留 [语音] 前缀，便于 /doctor 排查 ASR 链路
+    //   - 后面加一段简短 system 提示，告诉 LLM 这是日常对话，不要变成 "ASR 系统状态汇报员"
+    //     （之前 LLM 看到 [语音] 会把它当成调试场景，回复一大段 ASR 工作机制说明）
+    //   - 转写可能有错别字，LLM 应自然按口语意图回应
+    const ASR_SYSTEM_HINT =
+      '（以上由语音转写得到，可能有错别字。请按用户日常对话的口语意图回答，简短自然，不要谈论"语音"或转写本身。）';
     const effectiveText = asrText
       ? cleanText
-        ? `[语音] ${asrText}\n\n${cleanText}`
-        : `[语音] ${asrText}`
+        ? `[语音] ${asrText}\n\n${cleanText}\n\n${ASR_SYSTEM_HINT}`
+        : `[语音] ${asrText}\n\n${ASR_SYSTEM_HINT}`
       : cleanText;
 
     // 5) 解析命令
