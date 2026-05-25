@@ -306,6 +306,6 @@ program
 
 // 兜底未知命令
 program.parseAsync(process.argv).catch((e) => {
-  getLogger().error({ err: e }, 'cli error');
+  getLogger().child({ module: 'cli' }).error({ err: e }, 'cli error');
   process.exit(1);
 });

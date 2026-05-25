@@ -6,11 +6,15 @@
  *   2. 飞书 OpenAPI 调用：发消息、发卡片、更新卡片、查机器人 open_id
  *
  * 与业务层之间通过 onMessage / onCardAction 回调解耦。
+ *
+ * 日志：把 SDK 内部 logger 通过 createSdkLoggerAdapter 接管到 pino，
+ * 终端输出统一带 `module=lark-sdk` 字段，不再混格式。
  */
 import * as lark from '@larksuiteoapi/node-sdk';
 import type { Logger } from 'pino';
 import { parseIncomingMessage } from './parse.js';
 import { parseCardAction } from './cardAction.js';
+import { createSdkLoggerAdapter } from '../lib/logger.js';
 import type { IncomingMessage, CardActionEvent } from './types.js';
 
 export interface LarkClientOptions {
@@ -23,6 +27,7 @@ export class LarkClient {
   readonly appId: string;
   private readonly appSecret: string;
   private readonly log: Logger;
+  private readonly sdkLogger!: ReturnType<typeof createSdkLoggerAdapter>;
   readonly api: lark.Client;
   private wsClient: lark.WSClient | null = null;
   private botOpenIdCache: string | null = null;
@@ -31,11 +36,17 @@ export class LarkClient {
     this.appId = opts.appId;
     this.appSecret = opts.appSecret;
     this.log = opts.logger.child({ module: 'lark-client' });
+    // 把 pino logger 包成 SDK 期望的 Logger 接口（统一终端输出格式）
+    const sdkLogger = createSdkLoggerAdapter(opts.logger);
     this.api = new lark.Client({
       appId: this.appId,
       appSecret: this.appSecret,
       disableTokenCache: false,
+      // SDK trace 级别在 pino 那边默认不显示；噪声会被适配器自动降级
+      loggerLevel: lark.LoggerLevel.trace,
+      logger: sdkLogger,
     });
+    this.sdkLogger = sdkLogger;
   }
 
   /**
@@ -52,7 +63,9 @@ export class LarkClient {
     const wsClient = new lark.WSClient({
       appId: this.appId,
       appSecret: this.appSecret,
-      loggerLevel: lark.LoggerLevel.warn,
+      // 同样用 trace 级别，让 SDK 把所有日志都喂过来；pino 那边按 LARK_KIRO_LOG_LEVEL 过滤
+      loggerLevel: lark.LoggerLevel.trace,
+      logger: this.sdkLogger,
       onReady: () => {
         this.log.info('lark websocket connected');
         handlers.onReady?.();
@@ -69,8 +82,11 @@ export class LarkClient {
       },
     });
 
-    // EventDispatcher 的 register 接受任意 event 名 → handler 的 map
-    const dispatcher = new lark.EventDispatcher({}).register({
+    // EventDispatcher 也注入同一个适配器，统一 SDK 内部日志格式
+    const dispatcher = new lark.EventDispatcher({
+      loggerLevel: lark.LoggerLevel.trace,
+      logger: this.sdkLogger,
+    }).register({
       'im.message.receive_v1': async (data) => {
         // 关键：立刻返回 ack 给飞书；实际处理放后台。
         // 飞书事件订阅是 at-least-once，handler 不在几秒内返回会触发重推，

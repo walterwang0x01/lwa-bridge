@@ -106,6 +106,19 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   args.push(prompt);
 
   log().info({ cwd, resumeId, args: args.slice(0, 5) }, 'spawning kiro-cli');
+  log().debug(
+    {
+      bin: binPath,
+      argsLen: args.length,
+      promptLen: prompt.length,
+      promptHead: prompt.slice(0, 120),
+      model,
+      agent,
+      timeoutMs,
+      idleTimeoutMs,
+    },
+    'kiro-cli spawn detail',
+  );
 
   let timedOut = false;
   let aborted = false;
@@ -209,11 +222,22 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   // 流式收 stdout，stripAnsi 后原样上报给 onChunk
   // 调用方负责进一步解析（旧版的 outputFilter 已下沉到 runStreamParser，
   // 由 RunCardController 内部使用）
+  let chunkSeq = 0;
   if (child.stdout) {
     child.stdout.setEncoding('utf-8');
     child.stdout.on('data', (chunk: string) => {
       lastChunkAt = Date.now();
       const cleanRaw = stripAnsi(chunk).replace(PROMPT_PREFIX_REGEX, '');
+      chunkSeq++;
+      log().debug(
+        {
+          seq: chunkSeq,
+          rawLen: chunk.length,
+          cleanLen: cleanRaw.length,
+          head: cleanRaw.slice(0, 80),
+        },
+        'kiro stdout chunk',
+      );
       if (!cleanRaw) return;
       textBuf += cleanRaw;
       try {
@@ -224,11 +248,14 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     });
   }
 
-  // stderr 默认忽略，只在 verbose 时记录
+  // stderr：信息级别记录（之前是 debug，排查时容易漏掉 kiro-cli 抛到 stderr 的关键提示，
+  // 比如要登录、quota 用完等）
   if (child.stderr) {
     child.stderr.setEncoding('utf-8');
     child.stderr.on('data', (chunk: string) => {
-      log().debug({ stderr: chunk.slice(0, 200) }, 'kiro stderr');
+      const t = chunk.trim();
+      if (!t) return;
+      log().debug({ stderr: t.slice(0, 500) }, 'kiro stderr');
     });
   }
 
@@ -238,7 +265,14 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   if (signal) signal.removeEventListener('abort', onAbort);
 
   log().info(
-    { exitCode: result.exitCode, textLen: textBuf.length, aborted, timedOut, idleTimedOut },
+    {
+      exitCode: result.exitCode,
+      textLen: textBuf.length,
+      chunks: chunkSeq,
+      aborted,
+      timedOut,
+      idleTimedOut,
+    },
     'kiro-cli finished',
   );
 

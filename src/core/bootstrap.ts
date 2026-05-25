@@ -22,7 +22,7 @@ export interface RunBridgeHandle {
 }
 
 export async function runBridge(): Promise<RunBridgeHandle> {
-  const log = getLogger();
+  const log = getLogger().child({ module: 'bridge' });
   const config = loadConfig();
   log.info(
     {

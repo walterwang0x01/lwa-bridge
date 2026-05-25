@@ -73,6 +73,14 @@ export class RunCardController {
   feed(chunk: string): void {
     if (this.closed) return;
     this.parser.feed(chunk, this.state);
+    // 高频日志，用 trace 级别（默认看不到）。debug 级别给 runner.ts 的 chunk 已经够用。
+    this.log.trace(
+      {
+        chunkLen: chunk.length,
+        blocksCount: this.state.blocks.length,
+      },
+      'card feed',
+    );
     this.scheduleFlush();
   }
 
@@ -91,6 +99,25 @@ export class RunCardController {
     this.state.terminal = terminal;
     this.state.footer = null;
     if (errorMsg !== undefined) this.state.errorMsg = errorMsg;
+
+    // 排查"未返回内容"用：摘要 RunState，关键看 blocks 数量是否为 0
+    this.log.debug(
+      {
+        terminal,
+        blocksCount: this.state.blocks.length,
+        textBlocks: this.state.blocks.filter((b) => b.kind === 'text').length,
+        toolBlocks: this.state.blocks.filter((b) => b.kind === 'tool').length,
+        firstTextHead:
+          this.state.blocks.find((b) => b.kind === 'text')?.kind === 'text'
+            ? (
+                this.state.blocks.find((b) => b.kind === 'text') as { content: string }
+              ).content.slice(0, 80)
+            : undefined,
+        reasoningLen: this.state.reasoning.content.length,
+        errorMsg: this.state.errorMsg,
+      },
+      'finalize state snapshot',
+    );
 
     if (!this.messageId) {
       // open 都没成功：兜底 sendText
