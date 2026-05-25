@@ -307,6 +307,7 @@ node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 - **v0.4** ✅ Linux systemd / Windows Task Scheduler 守护 + `/ps` `/exit` 飞书内进程管理
 - **v0.5** ✅ `/steering` 飞书内管理 Kiro 指令文件（list/view/edit/new/rm，global/project scope）
 - **v0.6** ✅ `/cron` 定时任务（cron / shorthand / 中文关键词；不识别让 Kiro 翻译并二次确认）
+- **v0.7** ✅ `/schedule new` 可视化表单（小白入口，0 cron 心智）+ `/selftest` 健康检查 + 修飞书 form 200530 隐藏 bug
 - **v1.0** 服务器集中部署 / 多用户隔离 / Web 管理面板
 
 ## 📄 License

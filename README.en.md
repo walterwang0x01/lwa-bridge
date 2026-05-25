@@ -309,6 +309,7 @@ Conventions: TypeScript strict / Biome lint / vitest tests / conventional commit
 - **v0.4** ✅ Linux systemd / Windows Task Scheduler daemon + `/ps` `/exit` in-Feishu process management
 - **v0.5** ✅ `/steering` to manage Kiro instruction files in Feishu (list/view/edit/new/rm, global/project scope)
 - **v0.6** ✅ `/cron` scheduled tasks (cron / shorthand / Chinese keywords; LLM fallback with two-step confirmation)
+- **v0.7** ✅ `/schedule new` visual form (no cron syntax for non-engineers) + `/selftest` health checks + fix Feishu form 200530 hidden bug
 - **v1.0** Centralized server deployment / multi-user isolation / web admin panel
 
 ## 📄 License

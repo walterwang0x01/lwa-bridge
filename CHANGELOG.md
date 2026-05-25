@@ -7,6 +7,38 @@
 
 待发版的改动会先写在这里。
 
+## [0.7.0] — 2026-05-25
+
+### 新增（Added）
+
+- **`/schedule new` 可视化定时任务表单**：让非技术同事（HR / 销售 / 行政等）也能在飞书里建定时任务，0 cron 表达式心智
+  - 4 个字段（小时 / 分钟 / 内容 / 任务名）一张飞书表单卡填完即建
+  - 当前覆盖「每天 H:M」频率，底层 `formToCron` 已实现 6 种频率（daily / weekday / weekly / monthly / once / custom）转换器，未来加 UI 入口零改动
+  - 底层和 `/cron` 共享 `~/.lark-kiro-bridge/cron.json`：`/schedule new` 创建的任务可在 `/cron list` 里管理
+  - cron store 加 `runOnce` 字段为「一次性任务」铺路，scheduler 触发后自动 unregister + delete
+  - 新增 `src/cron/scheduleForm.ts` + `src/card/scheduleCard.ts`，31 个新单元测试
+- **`/selftest` 健康检查命令**（别名 `/check`）：一键看 9 项配置和运行时状态，方便排查问题
+  - 检查项：配置文件 / 数据目录 / kiro-cli 可达性 / WebSocket / 飞书 token / cron 存储 / 工作目录白名单 / 信任工具 / 当前用户访问权限
+  - 纯查询，无副作用，3s 内完成；超时 / 单项失败不影响其他项
+  - 报告卡片按等级（ok / warn / fail）配色，带底部排错指引（"WS 未连接 → /reconnect" 等）
+  - 新增 `src/lib/selftest.ts` + `src/card/selftestCard.ts`，20 个新单元测试
+- **SDK logger 适配 + debug 增强**：飞书 SDK 内部日志统一通过 pino 输出，终端格式不再混杂裸 `[info]: [ '...' ]`
+  - `createSdkLoggerAdapter` 把 SDK 期望的 logger 接口包成 pino，noise 模式自动降级到 trace
+  - `kiro-cli` spawn / stdout chunk / run finalize 加结构化 debug 日志，便于 `/doctor` 自诊断
+
+### 修复（Fixed）
+
+- **飞书 v2 form 卡片 200530 兼容**：form 内 `button` 必须带 `name` 属性，否则飞书客户端校验阶段直接拒发请求。修复 3 处历史 form 卡片：
+  - `buildConfigFormCard`     `/config` 提交按钮
+  - `buildMemoryEditFormCard` `/steering edit` 保存按钮
+  - `buildMemoryNewFormCard`  `/steering new` 创建按钮
+
+  之前用户反馈 `/config` 提交也报 200530，根因就在这里。参考 [zarazhangrui/feishu-claude-code-bridge v0.1.32](https://github.com/zarazhangrui/feishu-claude-code-bridge) 上游模板修复。
+
+### 测试
+
+全套 314 个单元测试通过（v0.6.0 时 254 个 → +60 个新增）。
+
 ## [0.6.0] — 2026-05-24
 
 ### 新增（Added）
