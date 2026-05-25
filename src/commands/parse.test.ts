@@ -581,4 +581,46 @@ describe('parseCommand', () => {
       expect(parseCommand('/cron foo bar').kind).toBe('unknown');
     });
   });
+
+  describe('/schedule 可视化定时任务', () => {
+    it('/schedule new → 弹表单', () => {
+      expect(parseCommand('/schedule new')).toEqual({
+        kind: 'schedule',
+        mode: 'new',
+      });
+    });
+
+    it('/schedule new 大小写不敏感', () => {
+      expect(parseCommand('/schedule NEW')).toEqual({
+        kind: 'schedule',
+        mode: 'new',
+      });
+    });
+
+    it('/schedule（不带子命令）→ 复用 cron list', () => {
+      expect(parseCommand('/schedule')).toEqual({ kind: 'cron', mode: 'list' });
+    });
+
+    it('/schedule list → 复用 cron list', () => {
+      expect(parseCommand('/schedule list')).toEqual({ kind: 'cron', mode: 'list' });
+    });
+
+    it('/schedule rm <id> → 复用 cron rm', () => {
+      expect(parseCommand('/schedule rm abc12345')).toEqual({
+        kind: 'cron',
+        mode: 'rm',
+        id: 'abc12345',
+      });
+    });
+
+    it('/cron new 仍然是 add 别名（工程师入口不受影响）', () => {
+      // /cron new 历史上是 /cron add 的别名，加了 /schedule new 不能破坏这个行为
+      expect(parseCommand('/cron new @daily 总结')).toEqual({
+        kind: 'cron',
+        mode: 'add',
+        expression: '@daily',
+        prompt: '总结',
+      });
+    });
+  });
 });

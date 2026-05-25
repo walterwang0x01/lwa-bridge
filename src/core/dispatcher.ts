@@ -57,6 +57,8 @@ import type { CronStore } from '../cron/store.js';
 import type { CronScheduler } from '../cron/scheduler.js';
 import type { CronTask } from '../cron/store.js';
 import { parseExpression, nextRun, formatNextRun } from '../cron/expression.js';
+import { formToCron, type ScheduleForm } from '../cron/scheduleForm.js';
+import { buildScheduleFormCard, type ScheduleFormState } from '../card/scheduleCard.js';
 import {
   isUserAllowed,
   isAdmin,
@@ -529,6 +531,10 @@ export class Dispatcher {
         }
         case 'cron': {
           await this.handleCronCmd(msg, cmd, session.currentCwd);
+          return;
+        }
+        case 'schedule': {
+          await this.handleScheduleCmd(msg);
           return;
         }
         case 'kiro-internal': {
@@ -1221,6 +1227,14 @@ export class Dispatcher {
         await this.handleCronCreate(evt, session.currentCwd, expression, description, prompt);
         return;
       }
+      case 'schedule.submit': {
+        await this.handleScheduleSubmit(evt, session.currentCwd);
+        return;
+      }
+      case 'schedule.cancel': {
+        await this.handleScheduleCancel(evt);
+        return;
+      }
       default:
         this.log.debug({ action }, 'unknown card action, ignored');
     }
@@ -1245,7 +1259,8 @@ export class Dispatcher {
       action === 'cron.resume' ||
       action === 'cron.rm' ||
       action === 'cron.translateConfirm' ||
-      action === 'cron.createConfirmed'
+      action === 'cron.createConfirmed' ||
+      action === 'schedule.submit'
     );
   }
 
@@ -2029,6 +2044,160 @@ export class Dispatcher {
     }
   }
 
+  // ===== /schedule new — 可视化定时任务表单 =====
+
+  /**
+   * /schedule new 入口：弹一张默认状态的表单卡片。
+   * 默认值：频率=daily，时分=09:00，prompt/name 都为空。
+   *
+   * 跟 /cron 一样，要求 cronStore + cronScheduler 注入；否则报"未启用"。
+   */
+  private async handleScheduleCmd(msg: IncomingMessage): Promise<void> {
+    if (!this.cronStore || !this.cronScheduler) {
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'error',
+          title: '⚠️ 定时任务未启用',
+          body: '当前 bridge 实例没启用 cron 模块。请升级到最新版后重启。',
+        }),
+      );
+      return;
+    }
+    // 写操作 admin 守卫：表单提交才需要 admin。打开表单本身不需要——
+    // 让普通用户也能看到这个 UI（实际能不能创建由 submit 的 admin 校验决定）。
+    const initial: ScheduleFormState = {
+      frequency: 'daily',
+      hour: 9,
+      minute: 0,
+    };
+    await this.sendInteractiveCard(msg, buildScheduleFormCard({ state: initial }));
+  }
+
+  /**
+   * 用户点了「取消」按钮：把表单卡替换成"已取消"提示。
+   */
+  private async handleScheduleCancel(evt: CardActionEvent): Promise<void> {
+    const card = buildAckCard({
+      state: 'aborted',
+      title: '已取消',
+      body: '没有创建任何任务。',
+    });
+    try {
+      await this.lark.patchCard(evt.messageId, card);
+    } catch (e) {
+      this.log.error({ err: e, action: 'schedule.cancel' }, 'patchCard failed');
+      await this.sendCardToChat(evt.chatId, card);
+    }
+  }
+
+  /**
+   * 用户点了「创建」按钮（form submit）。
+   *
+   * MVP 只处理 daily 频率，强制写死。其他频率请用 /cron add。
+   *
+   * 流程：
+   *   1. 从 evt.formValue 拿 hour/minute/prompt/name
+   *   2. 拼成 ScheduleForm，调 formToCron
+   *   3. 失败 → patchCard 显示带 error 的同张表单
+   *   4. 成功 → cronStore.create + scheduler.register，patchCard 替换为成功提示
+   */
+  private async handleScheduleSubmit(evt: CardActionEvent, cwd: string): Promise<void> {
+    if (!this.cronStore || !this.cronScheduler) return;
+    const fv = evt.formValue ?? {};
+
+    const hourRaw = String(fv['hour'] ?? '9').trim();
+    const minuteRaw = String(fv['minute'] ?? '0').trim();
+    // input 接收的是用户键入的字符串，可能是空、"9"、"09"、"9 " 等
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    const promptRaw = String(fv['prompt'] ?? '').trim();
+    const nameRaw = String(fv['name'] ?? '').trim();
+
+    const form: ScheduleForm = { frequency: 'daily', hour, minute };
+
+    // prompt 必填
+    if (!promptRaw) {
+      const errCard = buildScheduleFormCard({
+        state: this.formToState(form, promptRaw, nameRaw),
+        error: '请填写"内容"——到点要让 Kiro 做什么',
+      });
+      await this.replaceWithCard(evt, errCard);
+      return;
+    }
+
+    const result = formToCron(form);
+    if (!result.ok) {
+      const errCard = buildScheduleFormCard({
+        state: this.formToState(form, promptRaw, nameRaw),
+        error: result.error,
+      });
+      await this.replaceWithCard(evt, errCard);
+      return;
+    }
+
+    // 任务名：用户填了用用户的，否则取 prompt 前 20 字
+    const description = nameRaw || promptRaw.slice(0, 20);
+
+    try {
+      const task = await this.cronStore.create({
+        chatId: evt.chatId,
+        cwd,
+        expression: result.expression,
+        prompt: promptRaw,
+        description,
+        createdBy: evt.senderOpenId,
+        runOnce: result.runOnce,
+      });
+      this.cronScheduler.register(task);
+      const next = this.cronScheduler.nextRun(task.id) ?? nextRun(task.expression);
+      const card = buildAckCard({
+        state: 'done',
+        title: '✅ 定时任务已创建',
+        body: [
+          `\`${task.id.slice(0, 6)}\` · ${description}`,
+          `**频率**：${result.description}`,
+          `**下次触发**：${formatNextRun(next)}`,
+        ].join('\n'),
+      });
+      await this.replaceWithCard(evt, card);
+    } catch (e) {
+      const errCard = buildScheduleFormCard({
+        state: this.formToState(form, promptRaw, nameRaw),
+        error: `创建失败：${(e as Error).message}`,
+      });
+      await this.replaceWithCard(evt, errCard);
+    }
+  }
+
+  /**
+   * 把 ScheduleForm + 用户输入合并回 ScheduleFormState（出错时回填表单用）。
+   */
+  private formToState(form: ScheduleForm, prompt: string, name: string): ScheduleFormState {
+    const out: ScheduleFormState = { frequency: form.frequency };
+    if (form.hour !== undefined) out.hour = form.hour;
+    if (form.minute !== undefined) out.minute = form.minute;
+    if (form.weekdays !== undefined) out.weekdays = form.weekdays;
+    if (form.dayOfMonth !== undefined) out.dayOfMonth = form.dayOfMonth;
+    if (form.date !== undefined) out.date = form.date;
+    if (form.expression !== undefined) out.expression = form.expression;
+    if (prompt) out.prompt = prompt;
+    if (name) out.name = name;
+    return out;
+  }
+
+  /**
+   * 把卡片替换到原消息上（patchCard 失败时降级为新发卡）。
+   */
+  private async replaceWithCard(evt: CardActionEvent, card: object): Promise<void> {
+    try {
+      await this.lark.patchCard(evt.messageId, card);
+    } catch (e) {
+      this.log.error({ err: e }, 'patchCard failed; fallback to send new card');
+      await this.sendCardToChat(evt.chatId, card);
+    }
+  }
+
   /**
    * cron 任务到点触发：构造一个伪 IncomingMessage 调用 runKiroTask。
    *
@@ -2185,6 +2354,19 @@ export class Dispatcher {
 
     const idleMin = this.effectiveIdleMinutes(perChatIdleMin);
     const idleTimeoutMs = idleMin > 0 ? idleMin * 60 * 1000 : 0;
+
+    this.log.debug(
+      {
+        taskId,
+        chatId: msg.chatId,
+        cwd,
+        promptLen: finalPrompt.length,
+        promptHead: finalPrompt.slice(0, 120),
+        mediaCount: mediaPaths.length,
+        idleMin,
+      },
+      'executeKiroTask start',
+    );
 
     await pipeline.submit({
       id: taskId,

@@ -43,6 +43,11 @@ const CronTaskSchema = z.object({
   lastRunAt: z.number().int().nonnegative().default(0),
   /** 暂停 / 恢复 */
   enabled: z.boolean().default(true),
+  /**
+   * 一次性任务标记。true = 触发一次后由 scheduler 自动删除（用于 /schedule new 的"一次性"频率）。
+   * 默认 false 保持向后兼容旧数据。
+   */
+  runOnce: z.boolean().default(false),
 });
 
 const CronFileSchema = z.object({
@@ -147,6 +152,7 @@ export class CronStore {
     prompt: string;
     description?: string;
     createdBy?: string;
+    runOnce?: boolean;
   }): Promise<CronTask> {
     if (opts.prompt.length > 1000) {
       throw new CronStoreError(`prompt 超过 1000 字符（当前 ${opts.prompt.length}）`);
@@ -171,11 +177,12 @@ export class CronStore {
         createdBy: opts.createdBy ?? '',
         lastRunAt: 0,
         enabled: true,
+        runOnce: opts.runOnce ?? false,
       };
       data.tasks.push(task);
       writeFile(data);
       log().info(
-        { id: task.id, chatId: task.chatId, expression: task.expression },
+        { id: task.id, chatId: task.chatId, expression: task.expression, runOnce: task.runOnce },
         'cron task created',
       );
       return task;

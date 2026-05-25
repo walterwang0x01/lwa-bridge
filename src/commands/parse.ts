@@ -56,6 +56,7 @@ export type ParsedCommand =
   | { kind: 'cron'; mode: 'run'; id: string }
   | { kind: 'cron'; mode: 'next'; id: string }
   | { kind: 'cron'; mode: 'translate'; raw: string }
+  | { kind: 'schedule'; mode: 'new' }
   | { kind: 'model'; mode: 'show' }
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
@@ -231,6 +232,15 @@ export function parseCommand(text: string): ParsedCommand | null {
       // /cron run <id>           手动立即跑一次
       // /cron next <id>          看下次触发
       // /cron translate <raw>    让 Kiro 翻译自然语言（卡片确认后才会调）
+      //
+      // /schedule 是 cron 的别名，但额外支持 /schedule new 弹可视化表单（小白入口）。
+      // 当 head === 'schedule' 且 sub === 'new' 时走新表单分支。
+      if (head === 'schedule') {
+        const firstTok = (tail.split(/\s+/)[0] ?? '').toLowerCase();
+        if (firstTok === 'new') {
+          return { kind: 'schedule', mode: 'new' };
+        }
+      }
       if (!tail) return { kind: 'cron', mode: 'list' };
       const tokens = tail.split(/\s+/);
       const sub = (tokens[0] ?? '').toLowerCase();

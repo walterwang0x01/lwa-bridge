@@ -99,7 +99,12 @@ export class CronScheduler {
       async () => {
         const firedAt = new Date();
         this.log.info(
-          { id: task.id, chatId: task.chatId, firedAt: firedAt.toISOString() },
+          {
+            id: task.id,
+            chatId: task.chatId,
+            firedAt: firedAt.toISOString(),
+            runOnce: task.runOnce,
+          },
           'cron fired',
         );
         // 异步触发 onFire，自身错误不影响调度器
@@ -112,6 +117,14 @@ export class CronScheduler {
         this.store.markRun(task.id, firedAt.getTime()).catch((e) => {
           this.log.warn({ err: e, id: task.id }, 'failed to mark cron run');
         });
+        // 一次性任务：触发后自删
+        if (task.runOnce) {
+          this.unregister(task.id);
+          this.store.delete(task.id).catch((e) => {
+            this.log.warn({ err: e, id: task.id }, 'failed to auto-delete runOnce task');
+          });
+          this.log.info({ id: task.id }, 'runOnce task auto-deleted after fire');
+        }
       },
     );
     this.jobs.set(task.id, job);

@@ -60,6 +60,7 @@
 - 📝 **`/config` 飞书内表单** — 在飞书里改访问控制和偏好，即时生效，防自锁校验
 - 🚄 **rapid-fire 消息合并** — 200ms 内连发的多条短消息自动合并为一次 Kiro 调用，不再被前一条 abort
 - ⏰ **`/cron` 定时任务** — 标准 cron / shorthand / 中文关键词都接受；不识别时让 Kiro 自己翻译，二次确认后创建。"每天 9 点总结昨天的 commits" 一句话搞定
+- 📅 **`/schedule new` 可视化定时表单** — 不会写 cron 表达式的同学（HR / 销售 / 行政等）直接填表：小时、分钟、内容三个框搞定。底层和 `/cron` 共享存储
 - 🧠 **`/steering` 飞书内管理 Kiro 指令文件** — list/view/edit/new/rm，全局或项目 scope，飞书表单直接改，永久生效
 - 🎤 **语音输入** — 飞书发语音消息 → 自动转写（飞书 ASR）→ 喂给 Kiro，需 `ffmpeg` 和 ASR 权限
 - 🛡️ **进程组 kill** — `detached: true` + `process.kill(-pid)` 杀掉 kiro-cli 全部子孙
@@ -160,6 +161,7 @@ lark-kiro-bridge restart        # 重启
 | `/steering edit/new/rm <name>` | 编辑 / 新建 / 删除 steering 文件 |
 | `/cron add <expr> <prompt>` | 添加定时任务；expr 接受 cron / `@daily` / `每天9点` 等 |
 | `/cron rm/pause/resume/run <id>` | 删除/暂停/恢复/手动跑指定任务 |
+| `/schedule new` | 弹一张表单卡片，0 cron 表达式建任务（小白入口；当前覆盖「每天 H:M」频率） |
 | `/exit <id\|#>` | 停止指定 bridge 进程（自己 / 他人） |
 | `/reconnect` | 强制重连飞书 WebSocket |
 

@@ -60,6 +60,7 @@
 - 📝 **`/config` in-Feishu form** — Edit access control & preferences inside Feishu, takes effect instantly, anti-lockout validation
 - 🚄 **Rapid-fire message merging** — Multiple short messages within 200ms merge into a single Kiro call, no more abort-and-retry
 - ⏰ **`/cron` scheduled tasks** — Accepts standard cron, shorthand (`@daily`), and Chinese keywords; falls back to Kiro translation with two-step confirmation. "Every day 9am summarize yesterday's commits" — done.
+- 📅 **`/schedule new` visual form** — For non-engineers (HR / Sales / Ops): fill in hour, minute, and content. No cron syntax needed. Shares the same backing store as `/cron`.
 - 🧠 **`/steering` to manage Kiro instruction files in Feishu** — list/view/edit/new/rm, global or project scope, edit via in-Feishu form, persists permanently
 - 🎤 **Voice input** — Send a voice message in Feishu → auto-transcribed (Feishu ASR) → fed to Kiro. Requires `ffmpeg` and ASR scope.
 - 🛡️ **Process group kill** — `detached: true` + `process.kill(-pid)` reaches kiro-cli's grandchildren
@@ -160,6 +161,7 @@ Platform mapping:
 | `/steering edit/new/rm <name>` | Edit / create / delete a steering file |
 | `/cron add <expr> <prompt>` | Add a scheduled task; expr accepts cron / `@daily` / Chinese keywords |
 | `/cron rm/pause/resume/run <id>` | Delete/pause/resume/manually run a task |
+| `/schedule new` | Open a form card to create a scheduled task without cron syntax (covers "every day H:M") |
 | `/exit <id\|#>` | Stop a bridge process (self / others) |
 | `/reconnect` | Force reconnect Feishu WebSocket |
 
