@@ -165,11 +165,24 @@ export class Dispatcher {
       return;
     }
 
-    // 1) 学习 botOpenId（第一次有人 @bot 的时候）
-    if (!this.lark['botOpenIdCache' as never]) {
-      // 私有字段访问不太优雅；改用 setBotOpenId 即可
-      const guess = msg.mentions.find((m) => m.name?.toLowerCase().includes('kiro'))?.openId;
-      if (guess) this.lark.setBotOpenId(guess);
+    // 1) 学习 botOpenId（兜底：bootstrap 启动时已经调过 /open-apis/bot/v3/info 主动获取，
+    //    极少数情况下接口没返回，就按"第一次有人 @ 任意 bot"的方式学习）
+    if (!this.lark.getCachedBotOpenId()) {
+      // 飞书 mention.id_type 在 mentions[].key="@_user_X" 体系里区分不出"是不是机器人"，
+      // 但群里被 @ 的人有 open_id；如果只有一个 mention，多半就是 @ 了 bot 自己。
+      // 名字带 kiro / bot 的优先级最高（兼容老用户），其次回退到第一个 mention。
+      const byName = msg.mentions.find((m) =>
+        ['kiro', 'bot'].some((kw) => (m.name ?? '').toLowerCase().includes(kw)),
+      )?.openId;
+      const fallback = msg.mentions[0]?.openId;
+      const guess = byName ?? fallback;
+      if (guess) {
+        this.lark.setBotOpenId(guess);
+        this.log.info(
+          { openId: guess, source: byName ? 'name-match' : 'first-mention-fallback' },
+          'bot open_id learned from mention',
+        );
+      }
     }
 
     // 2) 访问控制
@@ -184,20 +197,24 @@ export class Dispatcher {
     // 3) 群里要 @bot 才回复（除非 preferences.requireMentionInGroup=false）
     if (msg.chatType === 'group' || msg.chatType === 'topic_group') {
       if (this.config.preferences.requireMentionInGroup) {
-        // 暂时还没拿到 botOpenId 的话先放过（避免漏消息）；后续 setBotOpenId 后会生效
-        // 简化逻辑：mentions 不为空且没人提到 bot → 跳过
-        const botMentioned = msg.mentions.some(
-          (m) =>
-            (m.name ?? '').toLowerCase().includes('kiro') ||
-            (m.name ?? '').toLowerCase().includes('bot'),
-        );
-        if (!botMentioned && msg.mentions.length > 0) {
-          this.log.debug('group message without @bot, ignored');
-          return;
-        }
-        if (msg.mentions.length === 0) {
-          this.log.debug('group message has no mentions at all, ignored (requireMentionInGroup)');
-          return;
+        const botOpenId = this.lark.getCachedBotOpenId();
+        if (botOpenId) {
+          // 标准路径：用 open_id 精确判定，不依赖 bot 起的名字
+          const botMentioned = msg.mentions.some((m) => m.openId === botOpenId);
+          if (!botMentioned) {
+            this.log.debug(
+              { mentions: msg.mentions.length },
+              'group message without @bot, ignored',
+            );
+            return;
+          }
+        } else {
+          // 启动初期 botOpenId 还没 ready 的兜底：放过有 mention 的消息（可能就是 @bot），
+          // 丢弃没有 mention 的消息。学习路径会在上一步生效，下一条消息起恢复正常。
+          if (msg.mentions.length === 0) {
+            this.log.debug('group message has no mentions and botOpenId unknown, ignored');
+            return;
+          }
         }
       }
     }
@@ -218,9 +235,11 @@ export class Dispatcher {
     }
 
     // 提取纯净文本（去掉 @bot mention key）
-    const guessedBotOpenId =
-      msg.mentions.find((m) => (m.name ?? '').toLowerCase().includes('kiro'))?.openId ?? '';
-    const cleanText = stripMentions(msg, guessedBotOpenId).trim();
+    const botOpenIdForStrip =
+      this.lark.getCachedBotOpenId() ||
+      msg.mentions.find((m) => (m.name ?? '').toLowerCase().includes('kiro'))?.openId ||
+      '';
+    const cleanText = stripMentions(msg, botOpenIdForStrip).trim();
 
     // 4.5) 媒体下载（在文本之前完成，下面 prompt 拼接时把路径塞前面）
     let mediaPaths: string[] = [];

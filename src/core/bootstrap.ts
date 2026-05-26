@@ -57,6 +57,13 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     appSecret: config.lark.appSecret,
     logger: log,
   });
+
+  // 启动时主动查一次 bot 的 open_id，后续群消息 @判定不再依赖名字字符串
+  // 失败也不阻塞启动，dispatcher 会降级到"等第一次 @bot 学习"的旧路径
+  void lark.getBotOpenId().catch((e) => {
+    log.warn({ err: e }, 'initial bot open_id resolution failed (non-fatal)');
+  });
+
   const sessions = new SessionStore();
   const workspaces = new WorkspaceStore();
   const cronStore = new CronStore();

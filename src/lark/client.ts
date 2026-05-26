@@ -161,14 +161,39 @@ export class LarkClient {
   /**
    * 查询当前机器人在租户里的 open_id（用来识别 @bot）。
    * 应用启动时调用一次后缓存。
+   *
+   * 实现：调飞书 OpenAPI `GET /open-apis/bot/v3/info`，
+   * 返回 { bot: { open_id, app_name, ... } }。SDK 没暴露具体方法，用 client.request 直发。
+   * 失败不抛，返回空字符串；调用方可降级到"听到第一条 mention 时学习"的旧逻辑。
    */
   async getBotOpenId(): Promise<string> {
     if (this.botOpenIdCache) return this.botOpenIdCache;
-    // 调 bot/v3/info 接口拿 app_id 关联的 bot 信息
-    // SDK 路径：client.bot.info.get / client.application... 因版本而异；
-    // 实践里最稳的方式是听到第一条 mention 时学习一下。这里先返回空字符串，
-    // 调用方应在收到带 @bot 的消息时通过 mentions 学习并缓存。
+    try {
+      const resp = (await this.api.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      })) as { code?: number; msg?: string; bot?: { open_id?: string; app_name?: string } };
+      if (resp?.code === 0 && resp.bot?.open_id) {
+        this.botOpenIdCache = resp.bot.open_id;
+        this.log.info(
+          { openId: resp.bot.open_id, name: resp.bot.app_name },
+          'bot open_id resolved via /open-apis/bot/v3/info',
+        );
+        return this.botOpenIdCache;
+      }
+      this.log.warn(
+        { resp },
+        'bot/v3/info returned no open_id; will fall back to mention-learning',
+      );
+    } catch (e) {
+      this.log.warn({ err: e }, 'bot/v3/info call failed; will fall back to mention-learning');
+    }
     return '';
+  }
+
+  /** 同步读取已缓存的 botOpenId，没缓存返回空串。dispatcher 热路径用。 */
+  getCachedBotOpenId(): string {
+    return this.botOpenIdCache ?? '';
   }
 
   /** 业务侧主动设置 botOpenId（一般从配置或第一次 @bot 学习而来）。 */
