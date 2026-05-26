@@ -87,6 +87,11 @@ export interface RunState {
   footer: FooterStatus;
   /** Idle watchdog 阈值（分钟）；展示用 */
   idleTimeoutMinutes?: number;
+  /**
+   * 任务计划（可选）——存在时由 renderRunCard 在主体顶部渲染一个 plan 面板。
+   * 数据来源由 PlanSource 提供（当前是 FilePlanSource，将来 ACP）。
+   */
+  plan?: import('../plan/types.js').Plan;
 }
 
 /** 创建一个初始 RunState */

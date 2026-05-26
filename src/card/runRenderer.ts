@@ -16,6 +16,7 @@
  */
 import type { Block, FooterStatus, RunState, ToolEntry } from '../kiro/runState.js';
 import { toolBodyMd, toolHeaderText } from './toolRender.js';
+import { renderPlanElements, shouldShowPlan } from '../plan/render.js';
 
 const REASONING_MAX = 1500;
 const COLLAPSE_TOOL_THRESHOLD = 3;
@@ -35,6 +36,11 @@ type Group = ToolGroup | TextGroup;
  */
 export function renderRunCard(state: RunState): object {
   const elements: object[] = [];
+
+  // 任务计划 panel（如果有）—— 在主体最顶部，让用户优先看到进度
+  if (shouldShowPlan(state.plan)) {
+    elements.push(...renderPlanElements(state.plan));
+  }
 
   // 思考过程 panel
   if (state.reasoning.content) {

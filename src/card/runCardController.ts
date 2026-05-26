@@ -72,6 +72,16 @@ export class RunCardController {
   }
 
   /**
+   * 注入/更新任务计划。PlanSource 监听文件变化时调用这里。
+   * 调用后立刻安排一次 flush，让用户尽快看到计划更新。
+   */
+  setPlan(plan: import('../plan/types.js').Plan): void {
+    if (this.closed) return;
+    this.state.plan = plan;
+    this.scheduleFlush();
+  }
+
+  /**
    * 喂入一段 stdout chunk（已 stripAnsi）。
    * 内部经过 parser 更新 state，节流后 patchCard。
    */

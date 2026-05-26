@@ -23,6 +23,8 @@ import { readRecentLogLines } from '../lib/logger.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
 import type { ActiveCardsStore } from '../store/activeCards.js';
+import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
+import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
@@ -2459,13 +2461,31 @@ export class Dispatcher {
     const pipeline = this.getPipeline(msg.chatId);
     const taskId = `${msg.eventId || msg.messageId}-${Date.now().toString(36)}`;
 
-    // 拼接 prompt：[系统前缀] + 媒体路径 + 用户文本
-    // 系统前缀用于约束 kiro-cli 的工具偏好，避免它默认想 npm install 卡死
+    // 任务开始前：清理该 chat 上次任务遗留的 plan 文件，准备新目录
+    const planDir = planDirFor(msg.chatId);
+    try {
+      rmSync(planDir, { recursive: true, force: true });
+      mkdirSync(planDir, { recursive: true, mode: 0o700 });
+    } catch (e) {
+      this.log.warn({ err: e, planDir }, 'plan dir reset failed (non-fatal)');
+    }
+    const planFilePath = planFilePathFor(msg.chatId);
+
+    // 拼接 prompt：[系统前缀] + [plan 路径提示] + 媒体路径 + 用户文本
+    // 系统前缀约束工具偏好；plan 路径提示让 kiro 知道写计划文件的位置
     const systemPrefix = this.config.kiro.systemPromptPrefix;
+    const planHint =
+      `\n\n# 任务计划文件\n\n` +
+      `如果当前任务超过 3 步，把 JSON 计划写到 \`${planFilePath}\`，bridge 会自动渲染到飞书卡片让用户看到进度。\n` +
+      `Schema：{version:1, chatId, status:"planning"|"running"|"completed"|"failed"|"cancelled", title?, items:[{id,title,status:"pending"|"in_progress"|"done"|"failed"|"skipped",detail?,startedAt?,finishedAt?}], createdAt, updatedAt}\n` +
+      `**原子写入**：先写 \`${planFilePath}.tmp\` 再 \`mv\` 成正式文件，避免读到半截 JSON。\n` +
+      `每完成一步 update 一次（status 改 done）；不要一次性把所有 step 标 done；不要提交后忘了写。`;
     const userPrompt = mediaPaths.length
       ? mediaPaths.map((p) => `@${p}`).join(' ') + (prompt ? '\n\n' + prompt : '')
       : prompt;
-    const finalPrompt = systemPrefix ? `${systemPrefix}\n\n---\n\n${userPrompt}` : userPrompt;
+    const finalPrompt = systemPrefix
+      ? `${systemPrefix}${planHint}\n\n---\n\n${userPrompt}`
+      : userPrompt;
 
     const idleMin = this.effectiveIdleMinutes(perChatIdleMin);
     const idleTimeoutMs = idleMin > 0 ? idleMin * 60 * 1000 : 0;
@@ -2518,6 +2538,12 @@ export class Dispatcher {
               this.log.warn({ err: e, taskId }, 'active-cards add failed (non-fatal)');
             });
         }
+
+        // 启动 PlanSource 监听该 chat 的 plan 文件变化；变化推到 ctrl 触发 patch
+        const planSource = new FilePlanSource(msg.chatId, this.log);
+        await planSource.start((plan) => {
+          ctrl.setPlan(plan);
+        });
 
         try {
           const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
@@ -2575,7 +2601,8 @@ export class Dispatcher {
           }
           await ctrl.finalize('done');
         } finally {
-          // 任务终结（任何路径）后从注册表移除；下次启动不会被当孤儿恢复
+          // 任务终结（任何路径）后清理资源
+          planSource.stop();
           if (this.activeCards && cardMessageId) {
             await this.activeCards.remove(msg.chatId, cardMessageId).catch((e) => {
               this.log.warn({ err: e, taskId }, 'active-cards remove failed (non-fatal)');

@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 export const DATA_DIR = join(homedir(), '.lark-kiro-bridge');
 export const LOGS_DIR = join(DATA_DIR, 'logs');
 export const MEDIA_DIR = join(DATA_DIR, 'media');
+export const PLANS_DIR = join(DATA_DIR, 'plans');
 
 export const CONFIG_FILE = join(DATA_DIR, 'config.json');
 export const SESSIONS_FILE = join(DATA_DIR, 'sessions.json');
@@ -24,4 +25,5 @@ export function ensureDataDirs(): void {
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
   mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(PLANS_DIR, { recursive: true, mode: 0o700 });
 }
