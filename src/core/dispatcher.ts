@@ -1030,6 +1030,13 @@ export class Dispatcher {
         );
         return;
       }
+      case 'session.continue': {
+        // 用户在超时卡片上点了"继续未完成的部分"
+        // 用同一 chat 的 sessionId 续接，给 kiro-cli 一条简短的"继续"指令
+        // sessionId 在 storage 里，这里走 fireContinue 触发 executeKiroTask
+        await this.fireContinue(evt.chatId);
+        return;
+      }
       case 'session.status': {
         const kiroSid = await this.sessions.getKiroSession(evt.chatId, session.currentCwd);
         const wsName = await this.workspaceNameOf(session.currentCwd);
@@ -2289,6 +2296,54 @@ export class Dispatcher {
     await this.executeKiroTask(fakeMessage, task.prompt, task.cwd, [], undefined);
   }
 
+  /**
+   * 用户在超时卡片上点"继续未完成的部分"按钮的处理。
+   *
+   * 关键：靠 kiro-cli 的 session 续接能力——sessionId 已存在 sessions store，
+   * executeKiroTask 拿到 resumeId 就会传 `--resume-id` 给 kiro-cli，
+   * 模型读到完整对话历史，自然知道接着上次的工作干。
+   *
+   * 我们这里只需要构造一条"继续"prompt 触发任务，无需重传全部上下文。
+   */
+  async fireContinue(chatId: string): Promise<void> {
+    const session = await this.sessions.get(chatId, this.config.workspace.defaultCwd);
+    const resumeId = await this.sessions.getKiroSession(chatId, session.currentCwd);
+    if (!resumeId) {
+      // 没有 sessionId 说明上次根本没跑成功；提示一下就行
+      await this.sendCardToChat(
+        chatId,
+        buildAckCard({
+          state: 'error',
+          title: '⚠️ 无法继续',
+          body: '当前 chat 在该工作目录下没有可续接的会话。请重新发送原消息。',
+        }),
+      );
+      return;
+    }
+    const fakeMessage: IncomingMessage = {
+      eventId: `continue-${chatId}-${Date.now()}`,
+      messageId: '',
+      chatId,
+      chatType: 'group',
+      senderOpenId: 'continue-button',
+      messageType: 'text',
+      rawContent: '',
+      text: '',
+      mentions: [],
+      receivedAt: Date.now(),
+    };
+    const continuePrompt =
+      '继续上次未完成的工作。如果上次任务有明确的剩余步骤就只完成剩余的；如果接近完成就只补完最后一步。' +
+      '不要重做已经完成的部分。';
+    await this.executeKiroTask(
+      fakeMessage,
+      continuePrompt,
+      session.currentCwd,
+      [],
+      session.idleTimeoutMinutes,
+    );
+  }
+
   private async replyErrorCard(msg: IncomingMessage, body: string, cwd: string): Promise<void> {
     const renderer = new CardRenderer({
       lark: this.lark,
@@ -2492,10 +2547,9 @@ export class Dispatcher {
             return;
           }
           if (result.timedOut) {
-            await ctrl.finalize(
-              'error',
-              `超过 ${this.config.kiro.timeoutMs / 1000}s 未完成，已强制终止`,
-            );
+            // 总超时：保留全部已产出的 blocks（不当 error 处理），用 'timeout' 终态。
+            // 用户可以点卡片底部的"继续未完成部分"按钮触发续接。
+            await ctrl.finalize('timeout');
             return;
           }
           if (result.exitCode !== 0) {

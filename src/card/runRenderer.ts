@@ -58,6 +58,13 @@ export function renderRunCard(state: RunState): object {
   } else if (state.terminal === 'idle_timeout') {
     const mins = state.idleTimeoutMinutes ?? 0;
     elements.push(noteMd(`<font color='grey'>⏱ ${mins} 分钟无响应，已自动终止</font>`));
+  } else if (state.terminal === 'timeout') {
+    // 总超时：跟 idle_timeout 区分——这里是任务真在跑、只是太久没完。
+    // 已产出的 blocks 全保留（前面已经渲染过），只在尾部加状态行 + 一个"继续"按钮
+    elements.push(
+      noteMd("<font color='orange'>⏰ 任务超时（已运行超过最大时长），上方为已完成的部分</font>"),
+    );
+    elements.push(continueButton());
   } else if (state.terminal === 'error' && state.errorMsg) {
     elements.push(noteMd(`<font color='red'>⚠️ Kiro 失败：${escapeMd(state.errorMsg)}</font>`));
   } else if (state.terminal === 'done' && elements.length === 0) {
@@ -102,6 +109,9 @@ function headerOf(terminal: RunState['terminal']): { title: string; template: st
       return { title: '⏹ 已中止', template: 'orange' };
     case 'idle_timeout':
       return { title: '⏱ 超时', template: 'red' };
+    case 'timeout':
+      // 跟 error 区分用 yellow（飞书 template）：黄色暗示"产出可用，但需要后续动作"
+      return { title: '⏰ 任务超时（已产出可用）', template: 'yellow' };
   }
 }
 
@@ -237,6 +247,22 @@ function stopButton(): object {
   };
 }
 
+/**
+ * "继续未完成部分"按钮——出现在 timeout 终态卡片底部。
+ * 点击后 dispatcher 会在同一 chat 复用 sessionId 触发新一轮 prompt：
+ *   "继续上次未完成的工作"
+ * kiro-cli 借助 session 续接读到上下文，知道接着干哪一步。
+ */
+function continueButton(): object {
+  return {
+    tag: 'button',
+    text: { tag: 'plain_text', content: '▶️ 继续未完成的部分' },
+    type: 'primary',
+    size: 'small',
+    behaviors: [{ type: 'callback', value: { action: 'session.continue' } }],
+  };
+}
+
 function footerStatus(status: Exclude<FooterStatus, null>): object {
   const text =
     status === 'thinking'
@@ -251,6 +277,7 @@ function footerStatus(status: Exclude<FooterStatus, null>): object {
 function summaryText(state: RunState): string {
   if (state.terminal === 'interrupted') return '已中断';
   if (state.terminal === 'idle_timeout') return '已超时';
+  if (state.terminal === 'timeout') return '超时（已产出可用）';
   if (state.terminal === 'error') return '出错';
   if (state.terminal === 'done') return '已完成';
   if (state.footer === 'tool_running') return '正在调用工具';

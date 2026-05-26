@@ -59,8 +59,15 @@ export interface Reasoning {
  *  - error: kiro-cli 报错或 exitCode != 0
  *  - interrupted: 用户主动中止（点了 stop 按钮 或 /stop）
  *  - idle_timeout: 触发空闲 watchdog
+ *  - timeout: 触发总超时（区别于 error：保留全部已产出内容；用户可点"继续未完成部分"）
  */
-export type TerminalState = 'running' | 'done' | 'error' | 'interrupted' | 'idle_timeout';
+export type TerminalState =
+  | 'running'
+  | 'done'
+  | 'error'
+  | 'interrupted'
+  | 'idle_timeout'
+  | 'timeout';
 
 /**
  * 底部进度状态指示。null 表示不显示。
