@@ -915,14 +915,16 @@ export class Dispatcher {
    * 安全：button 触发的命令也会经过 admin 校验（调用 needAdminForAction）。
    */
   async handleCardAction(evt: CardActionEvent): Promise<void> {
-    // 访问控制：跟普通消息一样
-    // card.action.trigger 没有 chatType 字段，但卡片是从 chat 里出来的；
-    // 用 chatId 前缀粗判：oc_ 开头是群，ou_/p2p 开头是 DM。
-    // 飞书的实际惯例：DM 的 chatId 也是 oc_，无法可靠区分；这里按"非 DM"处理，
-    // 即让 chat allowlist 生效；如需精确判断需查 chat info API（性价比低，先这样）。
-    const chatTypeGuess: 'group' = 'group';
-    if (!isUserAllowed(evt.senderOpenId, evt.chatId, chatTypeGuess, this.config)) {
-      this.log.debug({ user: evt.senderOpenId }, 'card action dropped by access control');
+    // 访问控制：cardAction 没有 chatType 字段（飞书 SDK 不给），所以**只校验 senderOpenId**。
+    // 这是合理的：卡片是 bridge 自己发出去的，飞书已经做了"消息可见性"的访问控制；
+    // 我们再用 allowedChats 校验会误伤私聊（chatId 不在群白名单里 → 私聊按钮永远点不动）。
+    // 安全性：senderOpenId 校验已经能挡住租户外用户；admin 写操作另有 isAdmin 校验。
+    const { allowedUsers } = this.config.access;
+    if (allowedUsers.length > 0 && !allowedUsers.includes(evt.senderOpenId)) {
+      this.log.warn(
+        { user: evt.senderOpenId, chat: evt.chatId },
+        'card action dropped by access control (sender not in allowedUsers)',
+      );
       return;
     }
     const action = String(evt.value['action'] ?? '');
@@ -1294,7 +1296,11 @@ export class Dispatcher {
         return;
       }
       default:
-        this.log.debug({ action }, 'unknown card action, ignored');
+        // 用 warn 级别（默认日志可见），方便排查"按钮点了没反应"这类问题
+        this.log.warn(
+          { action, valueKeys: Object.keys(evt.value) },
+          'unknown card action, ignored',
+        );
     }
   }
 
