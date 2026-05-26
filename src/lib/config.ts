@@ -39,6 +39,13 @@ export const ConfigSchema = z.object({
       idleTimeoutMinutes: z.number().int().nonnegative().default(5),
       model: z.string().optional(),
       agent: z.string().optional(),
+      /**
+       * 注入到每条 user prompt 之前的"系统级"前缀。
+       * 用途：约束 kiro-cli 的工具偏好（比如"优先用系统已装工具，禁止安装大型依赖"），
+       * 减少 bot 自己卡在 npm install / playwright install 的概率。
+       * 设为空字符串则不注入。
+       */
+      systemPromptPrefix: z.string().default(''),
     })
     .default({}),
   workspace: z

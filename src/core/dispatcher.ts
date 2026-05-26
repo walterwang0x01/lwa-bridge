@@ -22,6 +22,7 @@ import { parseCommand, type ParsedCommand } from '../commands/parse.js';
 import { readRecentLogLines } from '../lib/logger.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
+import type { ActiveCardsStore } from '../store/activeCards.js';
 import { runKiro } from '../kiro/runner.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
@@ -80,6 +81,8 @@ export interface DispatcherOptions {
   /** Cron 持久化与调度（v0.6+ 注入；不注入则 /cron 命令报"未启用"）*/
   cronStore?: CronStore;
   cronScheduler?: CronScheduler;
+  /** 进行中卡片注册表；由 bootstrap 注入。不传时所有 add/remove 都是 no-op（兼容老调用方）*/
+  activeCards?: ActiveCardsStore;
 }
 
 export class Dispatcher {
@@ -93,6 +96,7 @@ export class Dispatcher {
   private readonly memory = new MemoryStore();
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
+  private readonly activeCards?: ActiveCardsStore;
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config;
@@ -103,6 +107,7 @@ export class Dispatcher {
     if (opts.onReconnect) this.onReconnect = opts.onReconnect;
     if (opts.cronStore) this.cronStore = opts.cronStore;
     if (opts.cronScheduler) this.cronScheduler = opts.cronScheduler;
+    if (opts.activeCards) this.activeCards = opts.activeCards;
   }
 
   private getPipeline(chatId: string): ChatPipeline {
@@ -2393,10 +2398,13 @@ export class Dispatcher {
     const pipeline = this.getPipeline(msg.chatId);
     const taskId = `${msg.eventId || msg.messageId}-${Date.now().toString(36)}`;
 
-    // 拼接 prompt：媒体路径 + 文本
-    const finalPrompt = mediaPaths.length
+    // 拼接 prompt：[系统前缀] + 媒体路径 + 用户文本
+    // 系统前缀用于约束 kiro-cli 的工具偏好，避免它默认想 npm install 卡死
+    const systemPrefix = this.config.kiro.systemPromptPrefix;
+    const userPrompt = mediaPaths.length
       ? mediaPaths.map((p) => `@${p}`).join(' ') + (prompt ? '\n\n' + prompt : '')
       : prompt;
+    const finalPrompt = systemPrefix ? `${systemPrefix}\n\n---\n\n${userPrompt}` : userPrompt;
 
     const idleMin = this.effectiveIdleMinutes(perChatIdleMin);
     const idleTimeoutMs = idleMin > 0 ? idleMin * 60 * 1000 : 0;
@@ -2433,55 +2441,81 @@ export class Dispatcher {
           return;
         }
 
-        const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
+        // 注册到 active-cards 注册表：daemon 异常退出时下次启动可以认领并 finalize
+        const cardMessageId = ctrl.getMessageId();
+        if (this.activeCards && cardMessageId) {
+          await this.activeCards
+            .add({
+              chatId: msg.chatId,
+              messageId: cardMessageId,
+              taskId,
+              startedAt: Date.now(),
+              replyToMessageId: msg.messageId,
+            })
+            .catch((e) => {
+              // 持久化失败不影响主流程；只是失去崩溃恢复能力
+              this.log.warn({ err: e, taskId }, 'active-cards add failed (non-fatal)');
+            });
+        }
 
-        const runOpts: Parameters<typeof runKiro>[0] = {
-          prompt: finalPrompt,
-          cwd,
-          binPath: this.config.kiro.binPath,
-          trustedTools: this.config.kiro.trustedTools,
-          timeoutMs: this.config.kiro.timeoutMs,
-          idleTimeoutMs,
-          signal,
-          onChunk: (text) => ctrl.feed(text),
-        };
-        if (resumeId !== undefined) runOpts.resumeId = resumeId;
-        if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
-        if (this.config.kiro.agent !== undefined) runOpts.agent = this.config.kiro.agent;
-
-        let result: Awaited<ReturnType<typeof runKiro>>;
         try {
-          result = await runKiro(runOpts);
-        } catch (e) {
-          await ctrl.finalize('error', (e as Error).message);
-          return;
-        }
+          const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
 
-        if (result.aborted) {
-          await ctrl.finalize('interrupted');
-          return;
-        }
-        if (result.idleTimedOut) {
-          await ctrl.finalize('idle_timeout');
-          return;
-        }
-        if (result.timedOut) {
-          await ctrl.finalize(
-            'error',
-            `超过 ${this.config.kiro.timeoutMs / 1000}s 未完成，已强制终止`,
-          );
-          return;
-        }
-        if (result.exitCode !== 0) {
-          await ctrl.finalize('error', `kiro-cli 退出码 ${result.exitCode}`);
-          return;
-        }
+          const runOpts: Parameters<typeof runKiro>[0] = {
+            prompt: finalPrompt,
+            cwd,
+            binPath: this.config.kiro.binPath,
+            trustedTools: this.config.kiro.trustedTools,
+            timeoutMs: this.config.kiro.timeoutMs,
+            idleTimeoutMs,
+            signal,
+            onChunk: (text) => ctrl.feed(text),
+          };
+          if (resumeId !== undefined) runOpts.resumeId = resumeId;
+          if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
+          if (this.config.kiro.agent !== undefined) runOpts.agent = this.config.kiro.agent;
 
-        // 成功：保存新 sessionId 用于续接
-        if (result.newSessionId && result.newSessionId !== resumeId) {
-          await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
+          let result: Awaited<ReturnType<typeof runKiro>>;
+          try {
+            result = await runKiro(runOpts);
+          } catch (e) {
+            await ctrl.finalize('error', (e as Error).message);
+            return;
+          }
+
+          if (result.aborted) {
+            await ctrl.finalize('interrupted');
+            return;
+          }
+          if (result.idleTimedOut) {
+            await ctrl.finalize('idle_timeout');
+            return;
+          }
+          if (result.timedOut) {
+            await ctrl.finalize(
+              'error',
+              `超过 ${this.config.kiro.timeoutMs / 1000}s 未完成，已强制终止`,
+            );
+            return;
+          }
+          if (result.exitCode !== 0) {
+            await ctrl.finalize('error', `kiro-cli 退出码 ${result.exitCode}`);
+            return;
+          }
+
+          // 成功：保存新 sessionId 用于续接
+          if (result.newSessionId && result.newSessionId !== resumeId) {
+            await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
+          }
+          await ctrl.finalize('done');
+        } finally {
+          // 任务终结（任何路径）后从注册表移除；下次启动不会被当孤儿恢复
+          if (this.activeCards && cardMessageId) {
+            await this.activeCards.remove(msg.chatId, cardMessageId).catch((e) => {
+              this.log.warn({ err: e, taskId }, 'active-cards remove failed (non-fatal)');
+            });
+          }
         }
-        await ctrl.finalize('done');
       },
     });
   }

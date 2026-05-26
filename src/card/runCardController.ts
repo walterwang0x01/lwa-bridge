@@ -66,6 +66,11 @@ export class RunCardController {
     this.log.debug({ messageId: this.messageId }, 'run card opened');
   }
 
+  /** open() 完成后供外部读取 messageId（用于持久化注册到 ActiveCardsStore）。 */
+  getMessageId(): string | null {
+    return this.messageId;
+  }
+
   /**
    * 喂入一段 stdout chunk（已 stripAnsi）。
    * 内部经过 parser 更新 state，节流后 patchCard。

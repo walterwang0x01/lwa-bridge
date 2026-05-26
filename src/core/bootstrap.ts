@@ -11,10 +11,12 @@ import { LarkClient } from '../lark/client.js';
 import { pruneOldMedia } from '../lark/media.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
+import { ActiveCardsStore, type ActiveCard } from '../store/activeCards.js';
 import { Dispatcher } from './dispatcher.js';
 import { registerSelf, unregisterSelf, listProcesses } from '../daemon/registry.js';
 import { CronStore } from '../cron/store.js';
 import { CronScheduler } from '../cron/scheduler.js';
+import { buildAckCard } from '../card/builders.js';
 
 export interface RunBridgeHandle {
   /** 主动停止；返回 promise 在所有清理完成后 resolve */
@@ -67,6 +69,12 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   const sessions = new SessionStore();
   const workspaces = new WorkspaceStore();
   const cronStore = new CronStore();
+  const activeCards = new ActiveCardsStore();
+
+  // 启动时扫描遗留的"进行中卡片"——上次 bridge 被杀时还没 finalize 的任务。
+  // 把它们 patch 成"已中断"卡片，避免飞书侧永远显示 loading。
+  // 失败不阻塞启动；遗留太多时控制并发避免压垮飞书 API。
+  void recoverOrphanCards(activeCards, lark, log);
 
   // 当前实现里 lark 实例不会被替换（reconnect 复用同一实例），所以是 const。
   // 如果未来需要在 reconnect 时换新实例（比如换 appId），把这里改成 let 即可。
@@ -102,6 +110,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     logger: log,
     cronStore,
     cronScheduler,
+    activeCards,
     onReconnect: async () => {
       log.info('reconnect requested via /reconnect');
       try {
@@ -149,4 +158,65 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   process.once('SIGTERM', signalHandler);
 
   return { stop };
+}
+
+/**
+ * 启动时把上次未完成的卡片处理掉。
+ *
+ * 触发场景：
+ *   - 上次 daemon 被 SIGTERM 强杀（这次启动时进程刚 launchd 拉起）
+ *   - 上次进程崩溃没正常 finalize
+ *
+ * 行为：
+ *   - 逐条把卡片 patch 成"已中断（daemon 重启）"
+ *   - 一条失败不影响后续（可能消息已被撤回 / chat 被踢）
+ *   - 全部处理完后 clear() 清空注册表
+ *   - 串行处理，避免一次性打满飞书 API；超过 50 条时 warn
+ */
+async function recoverOrphanCards(
+  store: ActiveCardsStore,
+  lark: LarkClient,
+  log: ReturnType<typeof getLogger>,
+): Promise<void> {
+  let orphans: ActiveCard[];
+  try {
+    orphans = await store.list();
+  } catch (e) {
+    log.warn({ err: e }, 'orphan cards list failed (non-fatal)');
+    return;
+  }
+  if (orphans.length === 0) return;
+  log.info({ count: orphans.length }, 'recovering orphan cards from previous run');
+  if (orphans.length > 50) {
+    log.warn(
+      { count: orphans.length },
+      'too many orphan cards; consider checking for a runaway loop',
+    );
+  }
+  let recovered = 0;
+  let failed = 0;
+  for (const card of orphans) {
+    const ageSec = Math.round((Date.now() - card.startedAt) / 1000);
+    try {
+      await lark.patchCard(
+        card.messageId,
+        buildAckCard({
+          state: 'aborted',
+          title: '⏹ 任务被中断',
+          body: `bridge 进程在任务执行期间退出（运行时长 ${ageSec}s）。\n\n如需继续，请重新发送消息。`,
+        }),
+      );
+      recovered++;
+    } catch (e) {
+      // 消息可能已撤回 / chat 已踢 / token 失效，单条失败不影响其他
+      failed++;
+      log.debug({ err: e, messageId: card.messageId }, 'orphan card patch failed');
+    }
+  }
+  try {
+    await store.clear();
+  } catch (e) {
+    log.warn({ err: e }, 'orphan cards clear failed (non-fatal)');
+  }
+  log.info({ recovered, failed, total: orphans.length }, 'orphan cards recovery done');
 }
