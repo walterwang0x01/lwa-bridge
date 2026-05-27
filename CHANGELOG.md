@@ -1,5 +1,11 @@
 # lark-kiro-bridge
 
+## 0.8.0
+
+### Minor Changes
+
+- P0/P1 可靠性 + 体验升级
+
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 和
 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
@@ -29,9 +35,10 @@
 ### 修复（Fixed）
 
 - **飞书 v2 form 卡片 200530 兼容**：form 内 `button` 必须带 `name` 属性，否则飞书客户端校验阶段直接拒发请求。修复 3 处历史 form 卡片：
-  - `buildConfigFormCard`     `/config` 提交按钮
+
+  - `buildConfigFormCard` `/config` 提交按钮
   - `buildMemoryEditFormCard` `/steering edit` 保存按钮
-  - `buildMemoryNewFormCard`  `/steering new` 创建按钮
+  - `buildMemoryNewFormCard` `/steering new` 创建按钮
 
   之前用户反馈 `/config` 提交也报 200530，根因就在这里。参考 [zarazhangrui/feishu-claude-code-bridge v0.1.32](https://github.com/zarazhangrui/feishu-claude-code-bridge) 上游模板修复。
 
@@ -155,6 +162,7 @@
 ### 新增（Added）
 
 #### 核心交互
+
 - 飞书 / Lark 消息转发到本机 `kiro-cli chat`，回复通过流式卡片实时刷新
 - 结构化运行卡片：每次工具调用一个独立 collapsible_panel（Read / Bash / Grep / WebFetch / …）
 - 多个工具调用聚合：≥3 个时前面折叠成「☕ N 个工具调用」总结，最新一个完整展示
@@ -162,11 +170,13 @@
 - 底部 footer 状态指示（🧠 思考中 / 🧰 调工具 / ✍️ 输出中）+ ⏹ 终止按钮
 
 #### 工作区管理
+
 - 工作目录方案 B：`(chatId, cwd) → kiroSessionId` 双层映射，切目录不丢上下文
 - 命名工作区：`/ws save|use|list|remove` 快速切换
 - 根目录白名单：`workspace.allowedRoots` 限制 `/cd` 范围
 
 #### 斜杠命令（含别名容错）
+
 - `/new` `/cd` `/pwd` `/status` `/stop` `/timeout` `/model` `/reconnect` `/doctor` `/help`
 - `/ws list|save|use|remove`
 - 别名：`/m`=`/model`, `/h`=`/help`, `/s`=`/status`, `/reset`=`/new`, `/abort`=`/stop` 等
@@ -174,6 +184,7 @@
 - 未知 `/xxx` 命令原样转发给 Kiro
 
 #### 命令型卡片（按钮回调）
+
 - v2 交互卡片，按钮走 `card.action.trigger` 长连接回调
 - `/model` 卡片：每行模型带「选用」蓝色按钮，主力 / 实验性 / 旧版分组折叠
 - `/help` 卡片：底部「📊 状态 / 🎛️ 模型 / 🗂️ 工作区 / 🔄 重置会话」快捷按钮
@@ -181,15 +192,18 @@
 - `/ws list` 卡片：每行「切换」按钮
 
 #### 多媒体输入
+
 - 图片 / 文件自动下载到 `~/.lark-kiro-bridge/media/<chatId>/`，绝对路径喂给 Kiro
 - 媒体文件 24h 后自动清理
 
 #### 多模型管理
+
 - `kiro chat --list-models` 查询，5 分钟缓存
 - 短名补全：`/m sonnet-4.6` 自动补 `claude-` 前缀
 - 模型选择写入 `config.kiro.model`，下条消息立即生效
 
 #### 运维与稳定性
+
 - **进程组 kill**：`detached: true` + `process.kill(-pid)` 杀掉 kiro-cli 全部子孙进程
 - **Idle watchdog**：默认 5 分钟，可全局或 per-chat 覆盖
 - **进程注册表**：`processes.json` 检测同 app 多实例，避免 WS 事件随机分发
@@ -199,6 +213,7 @@
 - **`/doctor`**：把日志反喂给 Kiro 自诊断
 
 #### CLI
+
 - `init` `run` `config-show`
 - `start` `stop` `restart` `status` `unregister`
 - `service install|uninstall|start|stop|status`

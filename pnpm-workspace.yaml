@@ -1,6 +1,8 @@
-# Single-package project; declare packages: [] explicitly so pnpm 11+ doesn't
-# error with "packages field missing or empty" on CI.
-packages: []
+# Single-package project; declare the root package explicitly so both
+# pnpm 11+ and changesets find it. Empty list ('packages: []') makes
+# changesets fail with "No packages found".
+packages:
+  - '.'
 
 allowBuilds:
   esbuild: set this to true or false
