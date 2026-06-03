@@ -7,8 +7,8 @@
  *
  * 生命周期：
  *   open() → 发"⏳ 思考中"卡片，记 messageId
- *   feed(chunk) → 流式喂 stdout，内部通过 parser 更新 RunState；
- *                 节流后 patchCard 重新渲染整个 RunState
+ *   applyEvent(ev) → 消费 ACP SessionEvent，结构化更新 RunState；
+ *                    节流后 patchCard 重新渲染整个 RunState
  *   markInterrupted() / markIdleTimeout() / markError() → 设置终态
  *   finalize(terminal) → 立即取消节流，发最终态卡片
  */
@@ -16,8 +16,15 @@ import type { Logger } from 'pino';
 import type { LarkClient } from '../lark/client.js';
 import { Debouncer } from '../lib/debounce.js';
 import { renderRunCard } from './runRenderer.js';
-import { createInitialState, type RunState, type TerminalState } from '../kiro/runState.js';
-import { createRunStreamParser, type RunStreamParser } from '../kiro/runStreamParser.js';
+import {
+  appendText,
+  createInitialState,
+  pushTool,
+  type RunState,
+  type TerminalState,
+  type ToolEntry,
+} from '../kiro/runState.js';
+import type { SessionEvent } from '../kiro/acp/messages.js';
 
 export interface RunCardControllerOptions {
   lark: LarkClient;
@@ -37,7 +44,8 @@ export class RunCardController {
   private readonly replyToMessageId?: string;
   private readonly debouncer: Debouncer;
   private readonly log: Logger;
-  private readonly parser: RunStreamParser;
+  /** toolCallId → ToolEntry，用于 tool_call_update 按 id 更新状态 */
+  private readonly tools = new Map<string, ToolEntry>();
 
   private messageId: string | null = null;
   private state: RunState;
@@ -51,7 +59,6 @@ export class RunCardController {
     }
     this.debouncer = new Debouncer(opts.intervalMs);
     this.log = opts.logger.child({ module: 'run-card' });
-    this.parser = createRunStreamParser();
     this.state = createInitialState(opts.idleTimeoutMinutes);
   }
 
@@ -82,21 +89,54 @@ export class RunCardController {
   }
 
   /**
-   * 喂入一段 stdout chunk（已 stripAnsi）。
-   * 内部经过 parser 更新 state，节流后 patchCard。
+   * 消费一个结构化 SessionEvent，更新 RunState，节流后 patchCard。
+   *
+   * 派发：
+   *   - message       → 追加正文文本
+   *   - thought       → 写入 reasoning
+   *   - tool          → 首次见到 toolCallId 新建工具块；已存在则按 id 更新状态
+   *   - turn_end      → no-op（终态由调用方在 runKiro 返回后 finalize）
    */
-  feed(chunk: string): void {
+  applyEvent(ev: SessionEvent): void {
     if (this.closed) return;
-    this.parser.feed(chunk, this.state);
-    // 高频日志，用 trace 级别（默认看不到）。debug 级别给 runner.ts 的 chunk 已经够用。
-    this.log.trace(
-      {
-        chunkLen: chunk.length,
-        blocksCount: this.state.blocks.length,
-      },
-      'card feed',
-    );
+    switch (ev.kind) {
+      case 'message':
+        appendText(this.state, ev.text);
+        break;
+      case 'thought':
+        this.state.reasoning.content += ev.text;
+        this.state.reasoning.active = true;
+        break;
+      case 'tool':
+        this.applyToolEvent(ev);
+        break;
+      case 'turn_end':
+        break;
+    }
     this.scheduleFlush();
+  }
+
+  /** tool_call / tool_call_update 统一入口：按 toolCallId 建块或更新状态。 */
+  private applyToolEvent(ev: Extract<SessionEvent, { kind: 'tool' }>): void {
+    const status = mapToolStatus(ev.status);
+    const existing = this.tools.get(ev.toolCallId);
+    if (existing) {
+      existing.status = status;
+      if (status !== 'running') existing.finishedAt = Date.now();
+      return;
+    }
+    const raw = ev.raw as Record<string, unknown>;
+    const input = (raw['rawInput'] ?? raw['input'] ?? {}) as Record<string, unknown>;
+    const tool: ToolEntry = {
+      id: ev.toolCallId || `t${Date.now().toString(36)}-${this.tools.size}`,
+      name: prettifyToolName(ev.name),
+      input,
+      status,
+      startedAt: Date.now(),
+    };
+    if (status !== 'running') tool.finishedAt = Date.now();
+    this.tools.set(ev.toolCallId, tool);
+    pushTool(this.state, tool);
   }
 
   /**
@@ -109,8 +149,6 @@ export class RunCardController {
     if (this.closed) return;
     this.closed = true;
     this.debouncer.cancel();
-    // 把 parser 缓冲里残余的最后一行刷出来
-    this.parser.flush(this.state);
     this.state.terminal = terminal;
     this.state.footer = null;
     if (errorMsg !== undefined) this.state.errorMsg = errorMsg;
@@ -206,5 +244,45 @@ export class RunCardController {
     }
     if (this.state.errorMsg) parts.push(`\n[错误] ${this.state.errorMsg}`);
     return parts.join('') || '（无回复）';
+  }
+}
+
+/** ACP 工具状态 → RunState 工具状态。 */
+function mapToolStatus(status: string): ToolEntry['status'] {
+  if (status === 'completed') return 'done';
+  if (status === 'failed') return 'error';
+  return 'running'; // pending / in_progress / 未知
+}
+
+/** 把 ACP 工具名（fs_read / execute_bash 等）规范化成易读名（Read / Bash 等）。 */
+function prettifyToolName(name: string): string {
+  switch (name) {
+    case 'fs_read':
+    case 'read':
+      return 'Read';
+    case 'fs_write':
+    case 'write':
+      return 'Write';
+    case 'execute_bash':
+    case 'shell':
+    case 'bash':
+      return 'Bash';
+    case 'grep':
+      return 'Grep';
+    case 'glob':
+      return 'Glob';
+    case 'web_search':
+      return 'WebSearch';
+    case 'web_fetch':
+      return 'WebFetch';
+    case 'use_aws':
+      return 'AWS';
+    case 'code':
+      return 'Code';
+    default:
+      return name
+        .split('_')
+        .map((s) => (s ? s[0]!.toUpperCase() + s.slice(1) : ''))
+        .join('');
   }
 }

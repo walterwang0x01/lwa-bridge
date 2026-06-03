@@ -5,10 +5,18 @@
  * 解析后供 /model 命令使用。结果在进程内缓存 5 分钟，避免每次都启子进程。
  */
 import { execa } from 'execa';
-import { stripAnsi } from './runner.js';
 import { getLogger } from '../lib/logger.js';
 
 const log = () => getLogger().child({ module: 'kiro-models' });
+
+/** ANSI 转义序列剥离正则；覆盖 CSI、OSC 和常见控制序列。 */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes require explicit \x1B / \x07
+const ANSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[ -/]*[0-9?])/g;
+
+/** 剥离 ANSI 着色，--list-models 的 JSON 输出可能被着色。 */
+function stripAnsi(input: string): string {
+  return input.replace(ANSI_REGEX, '');
+}
 
 export interface ModelInfo {
   /** 模型名（用作 --model 参数值，比如 "claude-opus-4.6"） */
