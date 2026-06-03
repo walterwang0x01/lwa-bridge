@@ -2094,7 +2094,6 @@ export class Dispatcher {
         timeoutMs: 60_000,
         idleTimeoutMs: 30_000,
         signal: new AbortController().signal,
-        onChunk: () => undefined,
       };
       if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
       result = await runKiro(runOpts);
@@ -2708,7 +2707,7 @@ export class Dispatcher {
             timeoutMs: this.config.kiro.timeoutMs,
             idleTimeoutMs,
             signal,
-            onChunk: (text) => ctrl.feed(text),
+            onEvent: (ev) => ctrl.applyEvent(ev),
             // 把飞书上下文注入子进程，让 kiro-cli 用 lark-cli 时不用反向搜 chat_id
             extraEnv: {
               LARK_KIRO_CHAT_ID: msg.chatId,
