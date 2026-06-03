@@ -170,6 +170,10 @@ export class AcpClient {
     if (!queue) {
       throw new Error(`unknown sessionId: ${sessionId}`);
     }
+    // prompt 调用失败（JSON-RPC error / 子进程崩溃 / 超时）时记录错误，
+    // iterate 在队列结束时据此抛出，让上层（runner）走 error 终态，
+    // 而不是静默结束被误判为"成功完成"。
+    let promptError: Error | null = null;
     this.call(Method.SESSION_PROMPT, {
       sessionId,
       prompt: [{ type: 'text', text: content }],
@@ -184,10 +188,11 @@ export class AcpClient {
       },
       (err) => {
         log().debug({ err }, 'prompt call failed; closing session queue');
+        promptError = err instanceof Error ? err : new Error(String(err));
         queue.close();
       },
     );
-    return this.iterate(queue);
+    return this.iterate(queue, () => promptError);
   }
 
   /** 取消当前 session 进行中的操作。 */
@@ -221,10 +226,19 @@ export class AcpClient {
 
   // --------------------------------------------------------------- internal
 
-  private async *iterate(queue: AsyncQueue<SessionEvent>): AsyncIterableIterator<SessionEvent> {
+  private async *iterate(
+    queue: AsyncQueue<SessionEvent>,
+    getError?: () => Error | null,
+  ): AsyncIterableIterator<SessionEvent> {
     while (true) {
       const item = await queue.take();
-      if (item === QUEUE_CLOSED) return;
+      if (item === QUEUE_CLOSED) {
+        // 队列因 prompt 失败而关闭时，把错误抛给上层而不是静默结束，
+        // 避免 Kiro 报错被误判为"成功完成"（空回复 + done 终态）。
+        const err = getError?.();
+        if (err) throw err;
+        return;
+      }
       yield item;
       if (item.kind === 'turn_end') return;
     }

@@ -174,7 +174,7 @@ describe('AcpClient lifecycle', () => {
     expect(String(err)).toMatch(/closed/);
   });
 
-  it('子进程崩溃后事件源收尾，迭代器结束', async () => {
+  it('子进程崩溃后迭代器抛错（不被误判为正常结束）', async () => {
     const client = makeClient({
       sessionNew: { sessionId: 'sess_crash' },
       prompts: [
@@ -187,11 +187,17 @@ describe('AcpClient lifecycle', () => {
       behaviors: { crashDuringPrompt: true },
     });
     const sid = await client.newSession(ABS_CWD);
-    const events = await collect(client, sid, 'go');
-    // 崩溃前的 message 应收到，但没有 turn_end，且迭代器正常结束
-    expect(
-      events.some((e) => e.kind === 'message' && (e as { text: string }).text === 'partial'),
-    ).toBe(true);
-    expect(events.some((e) => e.kind === 'turn_end')).toBe(false);
+    // 崩溃前的 message 可能先到，但 prompt 调用最终失败 → 迭代器抛错，
+    // 让上层走 error 终态，而不是静默结束被误判为"成功完成"。
+    await expect(collect(client, sid, 'go')).rejects.toThrow();
+  });
+
+  it('prompt 返回 JSON-RPC error 时迭代器抛错', async () => {
+    const client = makeClient({
+      sessionNew: { sessionId: 'sess_err' },
+      prompts: [{ error: { code: -32000, message: 'kiro quota exceeded' } }],
+    });
+    const sid = await client.newSession(ABS_CWD);
+    await expect(collect(client, sid, 'go')).rejects.toThrow(/quota exceeded/);
   });
 });

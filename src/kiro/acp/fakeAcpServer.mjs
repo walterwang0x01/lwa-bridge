@@ -130,6 +130,12 @@ function handleLine(line) {
     const scenario = prompts[promptIdx] || { result: { stopReason: 'end_turn' } };
     promptIdx += 1;
 
+    // prompt 直接返回 JSON-RPC error（模拟 Kiro 报错：quota/登录过期等）
+    if (scenario.error) {
+      send({ jsonrpc: '2.0', id, error: scenario.error });
+      return;
+    }
+
     if (behaviors.crashDuringPrompt) {
       for (const notif of scenario.notifications || []) sendNotification(notif);
       setTimeout(() => process.exit(1), 20);
