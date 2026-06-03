@@ -116,11 +116,21 @@ function handleLine(line) {
   }
 
   if (method === 'session/new') {
+    // Kiro 要求 session/new 必须带 mcpServers 字段；缺失则报 parse error。
+    if (msg.params?.mcpServers === undefined) {
+      send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'missing field `mcpServers`' } });
+      return;
+    }
     send({ jsonrpc: '2.0', id, result: { ...(script.sessionNew || {}), sessionId } });
     return;
   }
 
   if (method === 'session/load') {
+    // 同 session/new：Kiro 的 session/load 也要求 cwd + mcpServers。
+    if (msg.params?.mcpServers === undefined) {
+      send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'missing field `mcpServers`' } });
+      return;
+    }
     send({ jsonrpc: '2.0', id, result: {} });
     return;
   }

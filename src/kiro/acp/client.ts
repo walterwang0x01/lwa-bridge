@@ -153,9 +153,12 @@ export class AcpClient {
     return sessionId;
   }
 
-  /** 续接已有 session。 */
-  async loadSession(sessionId: string): Promise<void> {
-    await this.call(Method.SESSION_LOAD, { sessionId });
+  /** 续接已有 session。cwd 必须绝对路径（Kiro 的 session/load 与 session/new 同样要求 cwd + mcpServers）。 */
+  async loadSession(sessionId: string, cwd: string): Promise<void> {
+    if (!isAbsolute(cwd)) {
+      throw new Error(`session/load cwd must be absolute, got ${cwd}`);
+    }
+    await this.call(Method.SESSION_LOAD, { sessionId, cwd, mcpServers: [] });
     if (!this.sessionQueues.has(sessionId)) {
       this.sessionQueues.set(sessionId, new AsyncQueue<SessionEvent>());
     }

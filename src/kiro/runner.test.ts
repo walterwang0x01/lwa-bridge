@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEvent } from './acp/messages.js';
 
 const h = vi.hoisted(() => ({
-  loadSession: vi.fn<(id: string) => Promise<void>>(),
+  loadSession: vi.fn<(id: string, cwd: string) => Promise<void>>(),
   newSession: vi.fn<(cwd: string) => Promise<string>>(),
   cancel: vi.fn<() => Promise<void>>(),
   close: vi.fn<() => Promise<void>>(),
@@ -22,8 +22,8 @@ vi.mock('./acp/client.js', () => {
     async initialize() {
       return {};
     }
-    loadSession(id: string) {
-      return h.loadSession(id);
+    loadSession(id: string, cwd: string) {
+      return h.loadSession(id, cwd);
     }
     newSession(cwd: string) {
       return h.newSession(cwd);
@@ -62,7 +62,7 @@ describe('runKiro session 续接降级', () => {
       onEvent: (ev) => events.push(ev),
     });
 
-    expect(h.loadSession).toHaveBeenCalledWith('sess_old');
+    expect(h.loadSession).toHaveBeenCalledWith('sess_old', '/tmp/proj');
     expect(h.newSession).toHaveBeenCalledWith('/tmp/proj');
     expect(result.text).toBe('Hello world');
     expect(result.newSessionId).toBe('sess_new');
@@ -83,7 +83,7 @@ describe('runKiro session 续接降级', () => {
       resumeId: 'sess_old',
     });
 
-    expect(h.loadSession).toHaveBeenCalledWith('sess_old');
+    expect(h.loadSession).toHaveBeenCalledWith('sess_old', '/tmp/proj');
     expect(h.newSession).not.toHaveBeenCalled();
     expect(result.newSessionId).toBe('sess_old');
     expect(result.exitCode).toBe(0);

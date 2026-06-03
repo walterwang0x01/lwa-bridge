@@ -153,7 +153,7 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
 
     if (resumeId) {
       try {
-        await client.loadSession(resumeId);
+        await client.loadSession(resumeId, cwd);
         sessionId = resumeId;
       } catch (e) {
         log().warn({ err: e, resumeId }, 'loadSession failed; falling back to newSession');

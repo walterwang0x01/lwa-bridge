@@ -53,6 +53,16 @@ describe('AcpClient.newSession', () => {
     const client = makeClient({ sessionNew: { sessionId: 'sess_abc' } });
     await expect(client.newSession(ABS_CWD)).resolves.toBe('sess_abc');
   });
+
+  it('loadSession 相对路径报错', async () => {
+    const client = makeClient({});
+    await expect(client.loadSession('sess_x', 'relative/dir')).rejects.toThrow(/absolute/);
+  });
+
+  it('loadSession 带 cwd + mcpServers 成功续接', async () => {
+    const client = makeClient({});
+    await expect(client.loadSession('sess_resume', ABS_CWD)).resolves.toBeUndefined();
+  });
 });
 
 describe('AcpClient.prompt', () => {
