@@ -11,6 +11,10 @@ export interface IncomingMessage {
   messageId: string;
   /** 飞书 chat id（DM 或群） */
   chatId: string;
+  /** 被引用消息的 message id（用户"引用回复"时存在），用于拉取被引用原文 */
+  parentId?: string;
+  /** 话题/回复链根消息 id，普通消息为 undefined */
+  rootId?: string;
   /** 主题群里的 thread id，普通群/DM 为 undefined */
   threadId?: string;
   /** 单聊 / 群聊 / 主题群 */
@@ -56,4 +60,30 @@ export interface CardActionEvent {
   token?: string;
   /** 触发时间戳 */
   receivedAt: number;
+}
+
+/**
+ * 飞书「获取指定消息内容」接口（GET /open-apis/im/v1/messages/:message_id）
+ * 返回的 data.items[] 单项，业务层只关心其中一部分字段。
+ *
+ * 用途：
+ *   - 引用回复：用 parentId 拉父消息，取首项 body.content
+ *   - 合并转发：用本条 message_id 拉，items[0] 是父，其余是子消息（按时间序）
+ */
+export interface LarkMessageItem {
+  messageId: string;
+  /** 合并转发场景下指向上一级消息；首项（父）没有 */
+  upperMessageId?: string;
+  msgType: string;
+  /** 发送者展示名（飞书在 sender.sender_name 返回，可能为空） */
+  senderName?: string;
+  /**
+   * 发送者类型（飞书 sender.sender_type）：'app' 表示机器人/应用，'user' 表示真人。
+   * 用于区分「引用 bot 自己的回复」与「引用他人消息」，注入 Kiro 时措辞不同。
+   */
+  senderType?: string;
+  /** body.content 的 JSON 字符串，结构随 msgType 而异 */
+  content: string;
+  /** @_user_N 占位符 → 真实姓名 的映射表 */
+  mentions: Array<{ key: string; name: string }>;
 }

@@ -15,7 +15,7 @@ import type { Config } from '../lib/config.js';
 import { patchAndSaveConfig } from '../lib/config.js';
 import type { LarkClient } from '../lark/client.js';
 import type { IncomingMessage, CardActionEvent } from '../lark/types.js';
-import { stripMentions } from '../lark/parse.js';
+import { stripMentions, larkItemToText } from '../lark/parse.js';
 import { downloadMessageMedia } from '../lark/media.js';
 import { transcribeAudio } from '../lark/asr.js';
 import { parseCommand, type ParsedCommand } from '../commands/parse.js';
@@ -143,12 +143,37 @@ export class Dispatcher {
       anchor: IncomingMessage;
       texts: string[];
       mediaPaths: string[];
+      /**
+       * 待拉取的"引用/转发"来源消息 id 集合（合并转发自身 id 或引用回复的 parentId）。
+       * 用 Set 去重：用户"转发 + 引用提问"时两条消息往往指向同一条源消息，只需拉一次。
+       * 真正的网络拉取推迟到 flush 时进行，避免阻塞 200ms 合并窗口。
+       */
+      quoteSourceIds: Set<string>;
       cwd: string;
       perChatIdleMin: number | undefined;
       timer: NodeJS.Timeout;
     }
   >();
   private readonly MERGE_WINDOW_MS = 200;
+  /**
+   * 合并转发消息的专属首窗，比普通消息长得多。
+   * 用户「转发一段记录 → 切到输入框打字提问」的间隔通常 0.3–3 秒，远超 200ms。
+   * 给 merge_forward 一个更长的等待窗，让后续追问能合并进同一次 Kiro 调用，
+   * 避免"转发触发一次、提问又触发一次"的双任务抢占（一个被中止、一个回答）。
+   * 续窗（已有 buffer 后再来消息）仍回落到 200ms——此时用户已在连发，不必久等。
+   */
+  private readonly MERGE_WINDOW_FORWARD_MS = 2500;
+
+  /**
+   * 引用/转发上下文的长度护栏。合并转发可能含几十条消息、大段文本，
+   * 不限制会撑爆 Kiro 的 context window、烧 token、甚至触发模型长度上限错误。
+   *   - QUOTE_MAX_SUBS：最多渲染多少条子消息（超出截断并提示"还有 N 条"）
+   *   - QUOTE_MAX_LINE_CHARS：单条消息最多保留多少字符
+   *   - QUOTE_MAX_TOTAL_CHARS：整段引用上下文的总字符上限
+   */
+  private readonly QUOTE_MAX_SUBS = 40;
+  private readonly QUOTE_MAX_LINE_CHARS = 800;
+  private readonly QUOTE_MAX_TOTAL_CHARS = 6000;
 
   private isDuplicate(eventId: string): boolean {
     if (!eventId) return false;
@@ -226,10 +251,16 @@ export class Dispatcher {
       }
     }
 
-    // 4) 仅支持 text/post 消息；image/file/audio 走媒体下载
+    // 4) 仅支持 text/post 消息；image/file/audio 走媒体下载；merge_forward 走转发内容拉取
     const supportedMedia =
       msg.messageType === 'image' || msg.messageType === 'file' || msg.messageType === 'audio';
-    if (msg.messageType !== 'text' && msg.messageType !== 'post' && !supportedMedia) {
+    const isMergeForward = msg.messageType === 'merge_forward';
+    if (
+      msg.messageType !== 'text' &&
+      msg.messageType !== 'post' &&
+      !supportedMedia &&
+      !isMergeForward
+    ) {
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
@@ -308,8 +339,16 @@ export class Dispatcher {
       }
     }
 
-    if (!cleanText && !asrText && mediaPaths.length === 0) {
-      this.log.debug('empty text after strip and no media, ignored');
+    // 4.6) 引用回复 / 合并转发：标记需要拉取的"源消息 id"，真正拉取推迟到合并 flush 时。
+    //   - 引用回复：msg.parentId 指向被引用消息
+    //   - 合并转发：messageType==merge_forward，用本条消息 id 拉出子消息
+    // 关键：这里**不做网络请求**。之前在主路径 await 拉取，~250ms 的延迟会把
+    // "转发 + 紧跟引用提问"这两条消息推过 200ms 合并窗口，导致它们变成两个互相
+    // 抢占的独立任务（一个"已中止"一个正常回答）。推迟到 flush 拉取即可解决。
+    const quoteSourceId = isMergeForward ? msg.messageId : (msg.parentId ?? '');
+
+    if (!cleanText && !asrText && mediaPaths.length === 0 && !quoteSourceId) {
+      this.log.debug('empty text after strip and no media/quote, ignored');
       return;
     }
 
@@ -596,7 +635,91 @@ export class Dispatcher {
       session.currentCwd,
       mediaPaths,
       session.idleTimeoutMinutes,
+      quoteSourceId,
     );
+  }
+
+  /**
+   * 拉取一条「源消息」的内容，渲染成给 Kiro 的上下文文本。
+   *
+   * 源消息可能是：
+   *   - 合并转发消息本身（用户直接转发）
+   *   - 被引用回复的消息（用户引用提问），它本身又可能是一条合并转发
+   *
+   * 渲染策略（关键）：不再假设"引用回复一定是单条正文"。拉回 items 后：
+   *   - 若存在带 upperMessageId 的子消息（说明源是合并转发）→ 渲染全部子消息为聊天记录。
+   *     这修了之前的 bug：引用回复指向一条合并转发时，旧代码只取首项（父占位符
+   *     [合并转发消息]），拿不到真正的子消息内容，导致 Kiro 收到空上下文乱答。
+   *   - 否则（普通单条消息）→ 取首项正文。
+   *
+   * 拉取失败 / 无可读内容时返回空字符串，调用方据此降级。
+   */
+  private async fetchQuoteContent(sourceMessageId: string): Promise<string> {
+    const clip = (s: string, max: number): string =>
+      s.length > max ? `${s.slice(0, max)}…[已截断]` : s;
+    try {
+      const items = await this.lark.getMessageContent(sourceMessageId);
+      if (items.length === 0) return '';
+
+      const subs = items.filter((it) => it.upperMessageId);
+      if (subs.length > 0) {
+        // 合并转发：渲染子消息为「发送者：内容」，带长度/条数护栏
+        const total = subs.length;
+        const shown = subs.slice(0, this.QUOTE_MAX_SUBS);
+        const lines: string[] = [];
+        for (const it of shown) {
+          const text = larkItemToText(it);
+          if (!text) continue;
+          const clipped = clip(text, this.QUOTE_MAX_LINE_CHARS);
+          lines.push(it.senderName ? `${it.senderName}：${clipped}` : clipped);
+        }
+        if (lines.length === 0) {
+          this.log.info({ sourceMessageId }, 'forward fetched but no readable sub-message');
+          return '';
+        }
+        if (total > shown.length) {
+          lines.push(`…（还有 ${total - shown.length} 条消息未展示）`);
+        }
+        let body = lines.join('\n');
+        body = clip(body, this.QUOTE_MAX_TOTAL_CHARS);
+        this.log.info(
+          { sourceMessageId, total, shown: lines.length, chars: body.length },
+          'forward context fetched',
+        );
+        return `【以下是用户转发的聊天记录】\n${body}`;
+      }
+
+      // 普通单条消息：取首项正文
+      const first = items[0];
+      if (!first) return '';
+      const text = larkItemToText(first);
+      // interactive 卡片由 getMessageContent 带 card_msg_content_type=user_card_content
+      // 拉到原始卡片 JSON，larkItemToText 会抽出其正文 markdown。
+      // 仍为空则放弃（纯按钮卡片、被撤回等），调用方降级。
+      if (!text) {
+        this.log.info(
+          { sourceMessageId, msgType: first.msgType },
+          'quoted message has no extractable text',
+        );
+        return '';
+      }
+      this.log.info(
+        { sourceMessageId, senderType: first.senderType },
+        'quoted message context fetched',
+      );
+      const clipped = clip(text, this.QUOTE_MAX_TOTAL_CHARS);
+      // 引用 bot 自己的回复（sender_type==app 或 interactive 卡片）：语义是「针对你刚才那段展开/追问」，
+      // 配合 FOCUS_HINT 让 Kiro 锁定这一条而不是反问「你想说哪个」。
+      const isFromBot = first.senderType === 'app' || first.msgType === 'interactive';
+      if (isFromBot) {
+        return `【用户引用了你（助手）之前的这条回复，希望你针对它继续展开或追问】\n${clipped}`;
+      }
+      const who = first.senderName ? `（来自 ${first.senderName}）` : '';
+      return `【用户引用了以下消息${who}】\n${clipped}`;
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message, sourceMessageId }, 'fetchQuoteContent failed');
+      return '';
+    }
   }
 
   private async workspaceNameOf(cwd: string): Promise<string | undefined> {
@@ -2379,6 +2502,7 @@ export class Dispatcher {
     cwd: string,
     mediaPaths: string[] = [],
     perChatIdleMin?: number,
+    quoteSourceId?: string,
   ): Promise<void> {
     // 命令型场景（doctor 等）prompt 极长且不该合并，跳过合并直接执行
     // 这里用启发式：prompt > 500 字符或 包含 "**最近日志**" 视为命令型
@@ -2393,7 +2517,8 @@ export class Dispatcher {
       // 追加到现有 buffer
       if (prompt) existing.texts.push(prompt);
       existing.mediaPaths.push(...mediaPaths);
-      // 重置计时器，给最新一条消息再续 200ms
+      if (quoteSourceId) existing.quoteSourceIds.add(quoteSourceId);
+      // 重置计时器：续窗用短窗（用户已在连发，不必久等）
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => {
         this.flushMergeBuffer(msg.chatId);
@@ -2405,14 +2530,18 @@ export class Dispatcher {
       return;
     }
 
-    // 第一条：开 buffer 等更多
+    // 第一条：开 buffer 等更多。
+    // 合并转发用长首窗（等可能的追问），普通消息用短首窗（保持响应灵敏）。
+    const firstWindow =
+      msg.messageType === 'merge_forward' ? this.MERGE_WINDOW_FORWARD_MS : this.MERGE_WINDOW_MS;
     const timer = setTimeout(() => {
       this.flushMergeBuffer(msg.chatId);
-    }, this.MERGE_WINDOW_MS);
+    }, firstWindow);
     this.mergeBuffers.set(msg.chatId, {
       anchor: msg,
       texts: prompt ? [prompt] : [],
       mediaPaths: [...mediaPaths],
+      quoteSourceIds: new Set(quoteSourceId ? [quoteSourceId] : []),
       cwd,
       perChatIdleMin,
       timer,
@@ -2420,28 +2549,51 @@ export class Dispatcher {
   }
 
   /**
-   * flush 当前 chat 的合并 buffer：把累计的文本拼一起，调 executeKiroTask。
+   * flush 当前 chat 的合并 buffer：拉取引用/转发原文 → 拼接文本 → 调 executeKiroTask。
+   *
+   * 引用/转发内容在这里统一拉取（而非主路径），原因见 handle() 第 4.6 步注释：
+   * 避免网络延迟破坏 200ms 合并窗口。多条消息引用同一源时只拉一次（Set 去重）。
    */
   private flushMergeBuffer(chatId: string): void {
     const buf = this.mergeBuffers.get(chatId);
     if (!buf) return;
     this.mergeBuffers.delete(chatId);
     clearTimeout(buf.timer);
-    const merged = buf.texts.filter((t) => t.length > 0).join('\n\n');
+    const userText = buf.texts.filter((t) => t.length > 0).join('\n\n');
     if (buf.texts.length > 1) {
       this.log.info(
-        { chatId, mergedCount: buf.texts.length, totalLen: merged.length },
+        { chatId, mergedCount: buf.texts.length, totalLen: userText.length },
         'flushing merged rapid-fire batch',
       );
     }
-    // 不 await：让定时器线程立即返回，submit 自己排队
-    void this.executeKiroTask(
-      buf.anchor,
-      merged,
-      buf.cwd,
-      buf.mediaPaths,
-      buf.perChatIdleMin,
-    ).catch((e) => this.log.error({ err: e, chatId }, 'flush merge buffer execute failed'));
+    const quoteIds = [...buf.quoteSourceIds].filter((id) => id);
+    // 不 await：让定时器线程立即返回，拉取 + submit 在后台排队
+    void (async () => {
+      // 拉取所有引用/转发源内容（已去重）
+      const quoteBlocks: string[] = [];
+      for (const id of quoteIds) {
+        const block = await this.fetchQuoteContent(id);
+        if (block) quoteBlocks.push(block);
+      }
+      const quoteContext = quoteBlocks.join('\n\n');
+      // 引用上下文放前面作背景。
+      // 关键：明确告诉 Kiro "以下面这段内容为准"，避免它从复用的历史会话里
+      // 捞旧记忆乱答（曾出现"这次转发不含银联，却答成上次的银联话题"）。
+      const FOCUS_HINT = '（请只针对上面这段引用/转发的内容作答，不要混入之前对话里的其他话题。）';
+      let prompt: string;
+      if (quoteContext) {
+        prompt = userText
+          ? `${quoteContext}\n\n---\n\n${userText}\n\n${FOCUS_HINT}`
+          : `${quoteContext}\n\n---\n\n（用户转发/引用了以上内容但没有附加文字，请理解其内容并作出有帮助的回应，例如解释、总结或询问用户想做什么。）\n\n${FOCUS_HINT}`;
+      } else {
+        prompt = userText;
+      }
+      if (!prompt) {
+        this.log.debug({ chatId }, 'merge buffer flushed with empty prompt, skip');
+        return;
+      }
+      await this.executeKiroTask(buf.anchor, prompt, buf.cwd, buf.mediaPaths, buf.perChatIdleMin);
+    })().catch((e) => this.log.error({ err: e, chatId }, 'flush merge buffer execute failed'));
   }
 
   /**
@@ -2577,7 +2729,14 @@ export class Dispatcher {
           }
 
           if (result.aborted) {
-            await ctrl.finalize('interrupted');
+            // 被抢占/主动中止：如果一个字都没产出，这张卡片显示"已中止"纯属噪音，
+            // 直接撤回（典型场景：转发消息触发的任务被紧跟的追问抢占）。
+            // 已经产出过内容的，仍保留"已中止"终态，让用户看到中断点。
+            if (ctrl.hasContent()) {
+              await ctrl.finalize('interrupted');
+            } else {
+              await ctrl.discard();
+            }
             return;
           }
           if (result.idleTimedOut) {

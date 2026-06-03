@@ -157,6 +157,29 @@ export class RunCardController {
     return this.closed;
   }
 
+  /** 是否已经产出过可见内容（文本/工具块）。用于判断空任务能否静默丢弃。 */
+  hasContent(): boolean {
+    return this.state.blocks.length > 0;
+  }
+
+  /**
+   * 丢弃这张卡片：撤回已发出的占位消息，不留任何终态。
+   * 用于"被抢占且零输出"的任务——显示"已中止"纯属噪音。
+   * 撤回失败则降级为 finalize('interrupted')，至少给个明确终态。
+   */
+  async discard(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.debouncer.cancel();
+    if (!this.messageId) return;
+    try {
+      await this.lark.recallMessage(this.messageId);
+      this.log.debug({ messageId: this.messageId }, 'empty task card discarded');
+    } catch (e) {
+      this.log.warn({ err: e }, 'discard failed; leaving card as-is');
+    }
+  }
+
   // ----- 内部 -----
 
   private scheduleFlush(): void {

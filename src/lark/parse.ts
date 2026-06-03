@@ -7,7 +7,7 @@
  *   - 把 chat_type 字符串归一化成 ChatType
  *   - 整理 mentions 数组
  */
-import type { IncomingMessage, ChatType } from './types.js';
+import type { IncomingMessage, ChatType, LarkMessageItem } from './types.js';
 
 interface RawSenderId {
   union_id?: string;
@@ -60,12 +60,68 @@ function normalizeChatType(s: string): ChatType {
 }
 
 /**
+ * 从飞书互动卡片（interactive，schema 2.0）正文里抽取纯文本。
+ *
+ * 前提：调用「获取指定消息内容」时带了 card_msg_content_type=user_card_content，
+ * 飞书才会返回发送时的原始卡片 JSON（否则只返回降级占位符，抽不到正文）。
+ *
+ * bridge 的回复卡片结构见 src/card/runRenderer.ts：
+ *   - 正文 = 顶层 body.elements[] 里 tag:"markdown" 的块
+ *   - 噪音 = collapsible_panel（思考过程 / 工具调用 trace）、button（终止/继续按钮）、
+ *     以及 footer 的灰字状态行
+ *
+ * 抽取策略：
+ *   - 只遍历 body.elements 顶层，不递归进 collapsible_panel（避免把工具 trace 当正文）
+ *   - 收集 markdown / lark_md / plain_text 节点的文本
+ *   - 剥离 <font> 富文本标签、过滤「等待响应…/无输出/未返回内容」等占位文案
+ *   - 过滤纯状态行（🧠 正在思考 / 🧰 正在调用工具 / ✍️ 正在输出 / ⏹ 已被中断 等）
+ */
+function extractCardText(contentJson: string): string {
+  let card: unknown;
+  try {
+    card = JSON.parse(contentJson);
+  } catch {
+    return '';
+  }
+  const root = card as { body?: { elements?: unknown[] }; elements?: unknown[] };
+  // schema 2.0 在 body.elements；个别 1.0 卡片在顶层 elements
+  const elements = root.body?.elements ?? root.elements;
+  if (!Array.isArray(elements)) return '';
+
+  const parts: string[] = [];
+  for (const el of elements) {
+    if (!el || typeof el !== 'object') continue;
+    const node = el as Record<string, unknown>;
+    // 只取顶层文本块；collapsible_panel / button / 其他容器一律跳过
+    if ((node.tag === 'markdown' || node.tag === 'lark_md') && typeof node.content === 'string') {
+      parts.push(node.content);
+    } else if (node.tag === 'plain_text' && typeof node.content === 'string') {
+      parts.push(node.content);
+    }
+  }
+
+  // 状态/占位行过滤：这些是 runRenderer 加的装饰，不是回复正文
+  const NOISE = /^(🧠|🧰|✍️|⏹|⏱|⏰|▶️|☕)/;
+  const PLACEHOLDER = /^(等待响应|无输出|未返回内容|（未返回内容）)/;
+  const cleaned = parts
+    .map((p) => p.replace(/<\/?font[^>]*>/g, '').trim())
+    .filter((p) => p && !NOISE.test(p) && !PLACEHOLDER.test(p));
+
+  return cleaned.join('\n').trim();
+}
+
+/**
  * 从 message.content（JSON 字符串）中抽取纯文本。
  * - text 类型：{ "text": "hello @_user_1 world" }
  * - post 类型：富文本，遍历段落取 text 段
+ * - interactive 类型：互动卡片，抽 body 正文（见 extractCardText）
  * - 其他类型：返回空字符串
+ *
+ * 同时被「接收消息事件」和「获取指定消息内容」两条链路复用：
+ * 后者（引用回复 / 合并转发）的子消息 body.content 结构与前者一致。
  */
-function extractText(messageType: string, contentJson: string): string {
+export function messageContentToText(messageType: string, contentJson: string): string {
+  if (messageType === 'interactive') return extractCardText(contentJson);
   if (messageType !== 'text' && messageType !== 'post') return '';
   let parsed: unknown;
   try {
@@ -99,6 +155,47 @@ function extractText(messageType: string, contentJson: string): string {
   return parts.join(' ').trim();
 }
 
+/** 内部别名，保留原调用点可读性 */
+function extractText(messageType: string, contentJson: string): string {
+  return messageContentToText(messageType, contentJson);
+}
+
+/**
+ * 把通过「获取指定消息内容」拿到的一条消息渲染成给 LLM 看的纯文本。
+ *
+ * - text/post：抽正文，并把 @_user_N 占位符替换成真实姓名（更可读）
+ * - image/file/audio 等无法转文本的类型：返回一个 [图片]/[文件] 之类的占位描述
+ * - 解析失败：返回空字符串（调用方决定要不要丢弃）
+ */
+export function larkItemToText(item: LarkMessageItem): string {
+  const raw = messageContentToText(item.msgType, item.content);
+  if (raw) {
+    // 把 @_user_N 占位符替换成真实姓名
+    let text = raw;
+    for (const mt of item.mentions) {
+      if (mt.key && mt.name) text = text.split(mt.key).join(`@${mt.name}`);
+    }
+    return text.trim();
+  }
+  // 非文本类型给个占位描述，至少让 LLM 知道这里有张图/一个文件
+  switch (item.msgType) {
+    case 'image':
+      return '[图片]';
+    case 'file':
+      return '[文件]';
+    case 'audio':
+      return '[语音]';
+    case 'media':
+      return '[视频]';
+    case 'sticker':
+      return '[表情]';
+    case 'merge_forward':
+      return '[合并转发消息]';
+    default:
+      return '';
+  }
+}
+
 export function parseIncomingMessage(ev: RawEvent): IncomingMessage {
   const m = ev.message;
   const senderOpenId = ev.sender?.sender_id?.open_id ?? '';
@@ -127,6 +224,12 @@ export function parseIncomingMessage(ev: RawEvent): IncomingMessage {
   };
   if (m.thread_id !== undefined) {
     result.threadId = m.thread_id;
+  }
+  if (m.parent_id !== undefined && m.parent_id !== '') {
+    result.parentId = m.parent_id;
+  }
+  if (m.root_id !== undefined && m.root_id !== '') {
+    result.rootId = m.root_id;
   }
   return result;
 }

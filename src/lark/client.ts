@@ -15,7 +15,7 @@ import type { Logger } from 'pino';
 import { parseIncomingMessage } from './parse.js';
 import { parseCardAction } from './cardAction.js';
 import { createSdkLoggerAdapter } from '../lib/logger.js';
-import type { IncomingMessage, CardActionEvent } from './types.js';
+import type { IncomingMessage, CardActionEvent, LarkMessageItem } from './types.js';
 
 export interface LarkClientOptions {
   appId: string;
@@ -258,6 +258,20 @@ export class LarkClient {
     });
   }
 
+  /**
+   * 撤回（删除）一条消息。机器人只能撤回自己发出、且 24h 内的消息。
+   * 用途：被抢占且零输出的任务，删掉它的占位卡片，不给用户留"已中止"噪音。
+   * 失败静默（记 warn），不影响主流程。
+   */
+  async recallMessage(messageId: string): Promise<void> {
+    try {
+      await this.api.im.v1.message.delete({ path: { message_id: messageId } });
+      this.log.debug({ messageId }, 'message recalled');
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message, messageId }, 'recallMessage failed');
+    }
+  }
+
   /** 发送纯文本消息（错误兜底用） */
   async sendText(chatId: string, text: string): Promise<string> {
     const resp = await this.api.im.v1.message.create({
@@ -273,5 +287,64 @@ export class LarkClient {
       throw new Error(`sendText failed, no message_id in response: ${JSON.stringify(resp)}`);
     }
     return messageId;
+  }
+
+  /**
+   * 获取指定消息的内容（GET /open-apis/im/v1/messages/:message_id）。
+   *
+   * 两个用途：
+   *   - 引用回复：传被引用消息的 message_id，取首项内容
+   *   - 合并转发：传 merge_forward 消息自身 id，items[0] 是父，其余是子消息（按时间序）
+   *
+   * 返回 LarkMessageItem[]（已压平 SDK 的字段）。失败返回空数组，调用方降级处理。
+   *
+   * 注意：SDK 的 message.get 类型把 data 标成单对象，但真实接口返回 data.items[]，
+   *       这里用底层 this.api.request 直发，自己控制响应结构（与 getBotOpenId 同款）。
+   *       需要应用具备 im:message:readonly（或 im:message）权限；机器人须在消息所在会话内。
+   */
+  async getMessageContent(messageId: string): Promise<LarkMessageItem[]> {
+    interface RawItem {
+      message_id?: string;
+      upper_message_id?: string;
+      msg_type?: string;
+      sender?: { sender_name?: string; sender_type?: string };
+      body?: { content?: string };
+      mentions?: Array<{ key?: string; name?: string }>;
+    }
+    try {
+      const resp = (await this.api.request({
+        method: 'GET',
+        url: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+        // 关键：默认情况下 interactive 卡片只返回降级占位符（"请升级至最新版本客户端"），
+        // 拿不到正文。带上 card_msg_content_type=user_card_content 才返回发送时的原始卡片 JSON
+        // （schema 2.0 的 body.elements），供 larkItemToText 抽取正文。
+        params: { card_msg_content_type: 'user_card_content' },
+      })) as { code?: number; msg?: string; data?: { items?: RawItem[] } };
+      if (resp?.code !== 0) {
+        this.log.warn(
+          { messageId, code: resp?.code, msg: resp?.msg },
+          'getMessageContent non-zero',
+        );
+        return [];
+      }
+      const items = resp.data?.items ?? [];
+      return items.map((it): LarkMessageItem => {
+        const out: LarkMessageItem = {
+          messageId: it.message_id ?? '',
+          msgType: it.msg_type ?? '',
+          content: it.body?.content ?? '',
+          mentions: (it.mentions ?? [])
+            .filter((m): m is { key: string; name: string } => !!m.key && !!m.name)
+            .map((m) => ({ key: m.key, name: m.name })),
+        };
+        if (it.upper_message_id) out.upperMessageId = it.upper_message_id;
+        if (it.sender?.sender_name) out.senderName = it.sender.sender_name;
+        if (it.sender?.sender_type) out.senderType = it.sender.sender_type;
+        return out;
+      });
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message, messageId }, 'getMessageContent failed');
+      return [];
+    }
   }
 }
