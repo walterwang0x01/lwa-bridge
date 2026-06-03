@@ -1,5 +1,21 @@
 # lark-kiro-bridge
 
+## 0.9.0
+
+### Minor Changes
+
+- 迁移 Kiro 集成层到 ACP（Agent Client Protocol）
+
+  把 Kiro 集成从「spawn `kiro-cli chat --no-interactive` + 正则解析 ANSI stdout」切换到基于 ACP 的 JSON-RPC 客户端（`kiro-cli acp`）：
+
+  - 新增 `src/kiro/acp/`：JSON-RPC over stdio 客户端（messages / asyncQueue / client）
+  - 工具调用改用 ACP 结构化事件（tool_call / tool_call_update）直驱卡片，不再靠文本解析——工具展示更准、更健壮
+  - 会话续接用 ACP `session/load`（带 cwd + mcpServers），多轮对话不丢上下文
+  - 删除 `runStreamParser.ts`（不再需要逆向 CLI 的人类可读输出）
+  - prompt 失败正确传播为 error 终态，不再静默吞
+
+  同时修复：引用回复 / 合并转发的上下文还原（拉取被引用消息内容，含 interactive 卡片正文），空任务卡片静默撤回。
+
 ## 0.8.0
 
 ### Minor Changes

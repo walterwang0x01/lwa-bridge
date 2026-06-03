@@ -12,7 +12,7 @@
 
 ---
 
-群里 `@bot` 或私聊机器人，消息直达本地 `kiro-cli chat`，回复以**结构化卡片 + 流式打字光标**实时刷新。每个 chat 独立 session，切目录不丢上下文。
+群里 `@bot` 或私聊机器人，消息经 **ACP（Agent Client Protocol）** 对接本地 `kiro-cli acp`，回复以**结构化卡片 + 流式打字光标**实时刷新。每个 chat 独立 session，切目录不丢上下文。
 
 **核心价值**：云端 AI 编程助手（Cursor / Copilot / Devin）碰不到你本机的项目目录，也没有飞书 API 调度能力。lark-kiro-bridge **=** 在飞书里跑本地命令 **+** 操作飞书自己，一个机器人解决两件事。
 
