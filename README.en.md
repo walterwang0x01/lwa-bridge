@@ -12,7 +12,7 @@
 
 ---
 
-`@bot` in a group chat or DM the bot directly. Your message goes straight to local `kiro-cli chat`. Replies stream back as **structured cards with native typing cursor**. Each chat keeps an isolated session, and switching directories doesn't lose context.
+`@bot` in a group chat or DM the bot directly. Your message goes to local `kiro-cli acp` over **ACP (Agent Client Protocol)**. Replies stream back as **structured cards with native typing cursor**. Each chat keeps an isolated session, and switching directories doesn't lose context.
 
 **Why this exists**: cloud AI coding assistants (Cursor / Copilot / Devin) can't touch your local project directories, and have no way to operate Feishu's own APIs. lark-kiro-bridge **=** running local commands inside Feishu **+** orchestrating Feishu APIs from chat — one bot for both.
 
@@ -53,7 +53,7 @@
 
 ## ✨ Features
 
-- 🎴 **Structured cards** — Each tool call gets its own collapsible panel; multi-call groups auto-condense; reasoning gets its own panel
+- 🎴 **Structured cards** — Rendered from ACP structured events: each tool call gets its own collapsible panel showing Kiro's real title, type-based icon, and execution result; multi-call groups auto-condense; reasoning gets its own panel
 - ⚡ **Streaming typing cursor** — Native Feishu `streaming_mode` + footer status indicator
 - 🗂️ **Workspace plan B** — `/cd` doesn't drop context: per-`(chat, cwd)` Kiro session map auto-resumes
 - 🔘 **Clickable buttons** — `/model` `/help` `/status` `/ws list` `/config` are all interactive cards, zero command memorization
@@ -63,7 +63,7 @@
 - 📅 **`/schedule new` visual form** — For non-engineers (HR / Sales / Ops): fill in hour, minute, and content. No cron syntax needed. Shares the same backing store as `/cron`.
 - 🧠 **`/steering` to manage Kiro instruction files in Feishu** — list/view/edit/new/rm, global or project scope, edit via in-Feishu form, persists permanently
 - 🎤 **Voice input** — Send a voice message in Feishu → auto-transcribed (Feishu ASR) → fed to Kiro. Requires `ffmpeg` and ASR scope.
-- 🛡️ **Process group kill** — `detached: true` + `process.kill(-pid)` reaches kiro-cli's grandchildren
+- 🛡️ **Graceful termination** — Abort/timeout sends ACP `session/cancel` first, then `SIGTERM→SIGKILL` after 2s as fallback
 - ⏱ **Idle watchdog** — Stuck process auto-killed; tunable globally and per-chat
 - 🔐 **Three-tier access control** — User / chat / admin allowlists. **DMs always bypass the chat allowlist** so you can never lock yourself out.
 - 🐧 **Cross-platform daemon** — macOS launchd / Linux systemd --user / Windows Task Scheduler. Auto-restart on crash, login auto-start.
@@ -310,6 +310,8 @@ Conventions: TypeScript strict / Biome lint / vitest tests / conventional commit
 - **v0.5** ✅ `/steering` to manage Kiro instruction files in Feishu (list/view/edit/new/rm, global/project scope)
 - **v0.6** ✅ `/cron` scheduled tasks (cron / shorthand / Chinese keywords; LLM fallback with two-step confirmation)
 - **v0.7** ✅ `/schedule new` visual form (no cron syntax for non-engineers) + `/selftest` health checks + fix Feishu form 200530 hidden bug
+- **v0.8** ✅ Quoted-reply / merge-forward context restore + empty-task card discard + task plan card
+- **v0.9** ✅ Migrated Kiro integration to ACP (Agent Client Protocol): JSON-RPC over stdio, structured tool events drive cards, no more stdout parsing
 - **v1.0** Centralized server deployment / multi-user isolation / web admin panel
 
 ## 📄 License

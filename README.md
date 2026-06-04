@@ -53,7 +53,7 @@
 
 ## ✨ 特性
 
-- 🎴 **结构化卡片** — 每次工具调用一个独立可折叠面板，多调用自动聚合，思考过程独立展示
+- 🎴 **结构化卡片** — 基于 ACP 结构化事件渲染：每次工具调用独立可折叠面板，显示 Kiro 提供的真实标题、按类型区分图标、展示工具执行结果，多调用自动聚合，思考过程独立展示
 - ⚡ **流式打字光标** — 飞书原生 `streaming_mode`，配合 footer 实时状态指示
 - 🗂️ **工作区方案 B** — 切目录不丢上下文：每个 `(chat, cwd)` 独立 Kiro session，自动续聊
 - 🔘 **按钮可点** — `/model` `/help` `/status` `/ws list` `/config` 全部可点击操作，0 命令记忆
@@ -63,7 +63,7 @@
 - 📅 **`/schedule new` 可视化定时表单** — 不会写 cron 表达式的同学（HR / 销售 / 行政等）直接填表：小时、分钟、内容三个框搞定。底层和 `/cron` 共享存储
 - 🧠 **`/steering` 飞书内管理 Kiro 指令文件** — list/view/edit/new/rm，全局或项目 scope，飞书表单直接改，永久生效
 - 🎤 **语音输入** — 飞书发语音消息 → 自动转写（飞书 ASR）→ 喂给 Kiro，需 `ffmpeg` 和 ASR 权限
-- 🛡️ **进程组 kill** — `detached: true` + `process.kill(-pid)` 杀掉 kiro-cli 全部子孙
+- 🛡️ **优雅终止** — 中止/超时先发 ACP `session/cancel`，2 秒后兜底 `SIGTERM→SIGKILL` 强杀子进程
 - ⏱ **Idle Watchdog** — 卡住自动 killTree，可全局 / per-chat 配置
 - 🔐 **三层访问控制** — 用户 / 群 / 管理员白名单，**DM 永远豁免群白名单**，不会把自己锁外面
 - 🐧 **跨平台守护** — macOS launchd / Linux systemd --user / Windows Task Scheduler，崩溃自动拉起，开机自启
@@ -308,6 +308,8 @@ node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 - **v0.5** ✅ `/steering` 飞书内管理 Kiro 指令文件（list/view/edit/new/rm，global/project scope）
 - **v0.6** ✅ `/cron` 定时任务（cron / shorthand / 中文关键词；不识别让 Kiro 翻译并二次确认）
 - **v0.7** ✅ `/schedule new` 可视化表单（小白入口，0 cron 心智）+ `/selftest` 健康检查 + 修飞书 form 200530 隐藏 bug
+- **v0.8** ✅ 引用回复 / 合并转发上下文还原 + 空任务卡片静默丢弃 + 任务计划卡片
+- **v0.9** ✅ Kiro 集成迁移到 ACP（Agent Client Protocol）：JSON-RPC over stdio，结构化工具事件直驱卡片，不再解析 stdout
 - **v1.0** 服务器集中部署 / 多用户隔离 / Web 管理面板
 
 ## 📄 License
