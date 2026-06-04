@@ -1,5 +1,14 @@
 # lark-kiro-bridge
 
+## 0.9.1
+
+### Patch Changes
+
+- 修复卡片 patch 竞态 + 工具卡片吃满 ACP 结构化字段
+
+  - 修复：流式 flush 与 finalize 的 patchCard 并发时，延迟到达的 running flush 会覆盖 finalize 的 done，导致卡片永远停在"正在输出"（合并转发场景稳定触发）。改为所有 patch 串行执行，保证 done 永远是最后一次写入。
+  - 增强：工具卡片现在显示 Kiro 通过 ACP 提供的真实标题（title）、按工具类别（kind）区分图标、展示工具执行结果（rawOutput/content，之前被丢弃）、以及调用目的（purpose）副标题。
+
 ## 0.9.0
 
 ### Minor Changes
