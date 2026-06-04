@@ -50,6 +50,11 @@ export class RunCardController {
   private messageId: string | null = null;
   private state: RunState;
   private closed = false;
+  /**
+   * patch 串行化链：所有 patchCard（流式 flush + finalize）排到这条链上顺序执行，
+   * 避免并发 patch 时「飞行中的 running flush 后到、覆盖 finalize 的 done」竞态。
+   */
+  private patchChain: Promise<void> = Promise.resolve();
 
   constructor(opts: RunCardControllerOptions) {
     this.lark = opts.lark;
@@ -119,13 +124,17 @@ export class RunCardController {
   /** tool_call / tool_call_update 统一入口：按 toolCallId 建块或更新状态。 */
   private applyToolEvent(ev: Extract<SessionEvent, { kind: 'tool' }>): void {
     const status = mapToolStatus(ev.status);
+    const raw = ev.raw as Record<string, unknown>;
     const existing = this.tools.get(ev.toolCallId);
+
     if (existing) {
+      // 更新：合并这次 update 带来的新字段（status / 结果 / 标题等可能分多条到达）。
       existing.status = status;
       if (status !== 'running') existing.finishedAt = Date.now();
+      mergeToolFields(existing, raw);
       return;
     }
-    const raw = ev.raw as Record<string, unknown>;
+
     const input = (raw['rawInput'] ?? raw['input'] ?? {}) as Record<string, unknown>;
     const tool: ToolEntry = {
       id: ev.toolCallId || `t${Date.now().toString(36)}-${this.tools.size}`,
@@ -135,6 +144,7 @@ export class RunCardController {
       startedAt: Date.now(),
     };
     if (status !== 'running') tool.finishedAt = Date.now();
+    mergeToolFields(tool, raw);
     this.tools.set(ev.toolCallId, tool);
     pushTool(this.state, tool);
   }
@@ -182,12 +192,8 @@ export class RunCardController {
       }
       return;
     }
-    const card = renderRunCard(this.state);
-    try {
-      await this.lark.patchCard(this.messageId, card);
-    } catch (e) {
-      this.log.error({ err: e }, 'finalize patchCard failed');
-    }
+    // 走串行链，排在所有已入队的流式 flush 之后，确保 done 是最后一次实际 patch
+    await this.enqueuePatch(true);
   }
 
   /** 当前是否还在跑（外部判断要不要 flush） */
@@ -228,12 +234,32 @@ export class RunCardController {
 
   private async flush(): Promise<void> {
     if (!this.messageId || this.closed) return;
-    const card = renderRunCard(this.state);
-    try {
-      await this.lark.patchCard(this.messageId, card);
-    } catch (e) {
-      this.log.warn({ err: e }, 'patchCard failed; will retry next chunk');
-    }
+    await this.enqueuePatch(false);
+  }
+
+  /**
+   * 把一次 patchCard 排到串行链上，保证顺序执行（不并发）。
+   * @param isFinal finalize 调用时为 true：它是终态写入，链上它之后不应再有 patch 覆盖。
+   *   非 final 的 flush 在真正执行前再查一次 closed——若已 finalize 就跳过，
+   *   避免延迟的 running flush 覆盖已写入的 done。
+   */
+  private enqueuePatch(isFinal: boolean): Promise<void> {
+    this.patchChain = this.patchChain.then(async () => {
+      if (!this.messageId) return;
+      // 非终态 patch：轮到自己执行时若已 finalize，跳过（终态优先）
+      if (!isFinal && this.closed) return;
+      const card = renderRunCard(this.state);
+      try {
+        await this.lark.patchCard(this.messageId, card);
+      } catch (e) {
+        if (isFinal) {
+          this.log.error({ err: e }, 'finalize patchCard failed');
+        } else {
+          this.log.warn({ err: e }, 'patchCard failed; will retry next chunk');
+        }
+      }
+    });
+    return this.patchChain;
   }
 
   /** finalize 但 messageId 没发出来时的兜底纯文本 */
@@ -285,4 +311,80 @@ function prettifyToolName(name: string): string {
         .map((s) => (s ? s[0]!.toUpperCase() + s.slice(1) : ''))
         .join('');
   }
+}
+
+/**
+ * 把 ACP 工具事件 raw 里的可用字段合并进 ToolEntry。
+ * 这些字段可能分散在 tool_call 和后续的 tool_call_update 里（多条到达），
+ * 因此每次都尝试补齐：已有值不被空值覆盖。
+ */
+function mergeToolFields(tool: ToolEntry, raw: Record<string, unknown>): void {
+  // Kiro 自带的人类可读标题（"Running: echo done" / "Reading sample.txt:1"）
+  const title = raw['title'];
+  if (typeof title === 'string' && title) tool.title = title;
+
+  // 工具类别（read / execute / edit ...），用于选图标
+  const kind = raw['kind'];
+  if (typeof kind === 'string' && kind) tool.kind = kind;
+
+  // 调用目的（Kiro 在 rawInput.__tool_use_purpose 里给）
+  const input = raw['rawInput'];
+  if (input && typeof input === 'object') {
+    const purpose = (input as Record<string, unknown>)['__tool_use_purpose'];
+    if (typeof purpose === 'string' && purpose) tool.purpose = purpose;
+  }
+
+  // 工具执行结果：rawOutput.items[] 或 content[]，归一成展示文本
+  const out = extractToolOutput(raw);
+  if (out) tool.output = out;
+}
+
+/**
+ * 从 ACP 工具事件提取执行结果文本。
+ * 见过的形态：
+ *   - rawOutput.items[].Json = { stdout, stderr, exit_status }   （shell）
+ *   - rawOutput.items[].Text = "文件内容"                         （读文件）
+ *   - content[].content.text = "..."                            （通用文本块）
+ * 提取失败返回空字符串。
+ */
+function extractToolOutput(raw: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  const rawOutput = raw['rawOutput'];
+  if (rawOutput && typeof rawOutput === 'object') {
+    const items = (rawOutput as Record<string, unknown>)['items'];
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        if (!it || typeof it !== 'object') continue;
+        const rec = it as Record<string, unknown>;
+        if (typeof rec['Text'] === 'string') {
+          parts.push(rec['Text'] as string);
+        } else if (rec['Json'] && typeof rec['Json'] === 'object') {
+          const j = rec['Json'] as Record<string, unknown>;
+          // shell 结果：优先 stdout，附带非空 stderr
+          const stdout = typeof j['stdout'] === 'string' ? (j['stdout'] as string) : '';
+          const stderr = typeof j['stderr'] === 'string' ? (j['stderr'] as string) : '';
+          if (stdout) parts.push(stdout);
+          if (stderr.trim()) parts.push(`[stderr] ${stderr}`);
+          if (!stdout && !stderr.trim()) parts.push(JSON.stringify(j));
+        }
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    const content = raw['content'];
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const inner = (block as Record<string, unknown>)['content'];
+        if (inner && typeof inner === 'object') {
+          const text = (inner as Record<string, unknown>)['text'];
+          if (typeof text === 'string') parts.push(text);
+        }
+      }
+    }
+  }
+
+  return parts.join('\n').trim();
 }

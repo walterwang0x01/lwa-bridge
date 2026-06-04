@@ -24,6 +24,18 @@ export interface ToolEntry {
    * 我们规范化成更易读的名字（Read / Bash / Grep / WebFetch 等）。
    */
   name: string;
+  /**
+   * Kiro 通过 ACP 提供的人类可读标题（如 "Running: echo done"、"Reading sample.txt:1"）。
+   * 比自己拼的 name+input 摘要更准、更通用（MCP 工具也有）；渲染 header 时优先用它。
+   */
+  title?: string;
+  /**
+   * 工具类别（ACP 的 kind：read / execute / edit / search / fetch 等）。
+   * 用于选更贴切的状态图标。
+   */
+  kind?: string;
+  /** Kiro 说明本次调用目的（ACP rawInput.__tool_use_purpose），作为副标题展示。 */
+  purpose?: string;
   /** 工具输入参数（结构因工具而异） */
   input: Record<string, unknown>;
   /** 工具的输出（命令 stdout 或文件内容片段；可选） */

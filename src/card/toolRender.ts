@@ -20,19 +20,39 @@ const BODY_FIELD_MAX = 600;
 const OUTPUT_MAX = 1200;
 const BODY_TOTAL_MAX = 2500;
 
-/** 状态图标 */
-function statusIcon(status: ToolEntry['status']): string {
-  if (status === 'done') return '✅';
-  if (status === 'error') return '❌';
-  return '⏳';
+/** 状态图标。优先按工具类别（kind）选更贴切的图标，否则回退到通用状态图标。 */
+function statusIcon(tool: ToolEntry): string {
+  if (tool.status === 'error') return '❌';
+  if (tool.status === 'running') return '⏳';
+  // done：按 kind 选更有辨识度的图标
+  switch (tool.kind) {
+    case 'read':
+      return '📖';
+    case 'edit':
+    case 'write':
+      return '✏️';
+    case 'execute':
+      return '⚙️';
+    case 'search':
+      return '🔍';
+    case 'fetch':
+      return '🌐';
+    default:
+      return '✅';
+  }
 }
 
 /**
  * 工具调用的 header 文本（折叠面板的标题）。
- * 形如：✅ **Read** — ~/lark-kiro-bridge/SKILL.md
+ * 优先用 Kiro 通过 ACP 提供的 title（更准、对 MCP 工具也通用）；
+ * 没有 title 才回退到自己拼的 name + input 摘要。
+ * 形如：✅ **Read** — ~/lark-kiro-bridge/SKILL.md   或   📖 Reading sample.txt:1
  */
 export function toolHeaderText(tool: ToolEntry): string {
-  const icon = statusIcon(tool.status);
+  const icon = statusIcon(tool);
+  if (tool.title) {
+    return `${icon} ${tool.title}`;
+  }
   const summary = summarizeInput(tool.name, tool.input);
   return summary ? `${icon} **${tool.name}** — ${summary}` : `${icon} **${tool.name}**`;
 }
@@ -42,6 +62,8 @@ export function toolHeaderText(tool: ToolEntry): string {
  */
 export function toolBodyMd(tool: ToolEntry): string {
   const parts: string[] = [];
+  // Kiro 给的调用目的，作为副标题让用户知道"为什么"调这个工具
+  if (tool.purpose) parts.push(`<font color='grey'>${tool.purpose}</font>`);
   const inputMd = renderInput(tool);
   if (inputMd) parts.push(inputMd);
 
