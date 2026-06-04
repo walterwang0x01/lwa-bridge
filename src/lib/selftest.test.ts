@@ -148,7 +148,7 @@ describe('check 8 - trustedTools', () => {
     expect(find(r, 8).level).toBe('ok');
   });
 
-  it('warn — 为空', async () => {
+  it('ok — 为空（ACP 模式权限自动放行，不再 warn）', async () => {
     const cfg = mkConfig({
       kiro: {
         binPath: 'kiro-cli',
@@ -158,10 +158,10 @@ describe('check 8 - trustedTools', () => {
       },
     });
     const r = await runSelfChecks(mkCtx({ config: cfg }));
-    expect(find(r, 8).level).toBe('warn');
+    expect(find(r, 8).level).toBe('ok');
   });
 
-  it('warn — 不含 execute_bash', async () => {
+  it('ok — 不含 execute_bash（ACP 模式不再因此挂死）', async () => {
     const cfg = mkConfig({
       kiro: {
         binPath: 'kiro-cli',
@@ -171,9 +171,7 @@ describe('check 8 - trustedTools', () => {
       },
     });
     const r = await runSelfChecks(mkCtx({ config: cfg }));
-    const c8 = find(r, 8);
-    expect(c8.level).toBe('warn');
-    expect(c8.detail).toContain('execute_bash');
+    expect(find(r, 8).level).toBe('ok');
   });
 });
 

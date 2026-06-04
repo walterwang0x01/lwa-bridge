@@ -228,7 +228,11 @@ function checkAllowedRoots(ctx: SelftestCtx): CheckResult {
 /**
  * 8. trustedTools 配置
  *
- * 检查 execute_bash 是否在列表里——这是之前飞书 fetch 卡死的根因之一。
+ * 历史背景：旧 stdout 模式用 `--trust-tools=` 传给 kiro-cli，不在列表的工具会卡在等审批
+ * （飞书 fetch 卡死的根因之一）。
+ *
+ * ACP 模式（v0.9+）：权限由 AcpClient 的 permissionPolicy（默认 allow_once）自动放行，
+ * 不再依赖 trustedTools 列表，因此为空也不会卡。这条检查保留为信息提示。
  */
 function checkTrustedTools(ctx: SelftestCtx): CheckResult {
   const tools = ctx.config.kiro.trustedTools;
@@ -236,20 +240,16 @@ function checkTrustedTools(ctx: SelftestCtx): CheckResult {
     return mk(
       8,
       '信任工具',
-      'warn',
-      'trustedTools 为空，Kiro 跑任何工具都会卡在等审批（--no-interactive 下永远等不到）',
+      'ok',
+      'trustedTools 为空；ACP 模式下权限由 permissionPolicy 自动放行，不影响工具执行',
     );
   }
-  const hasBash = tools.includes('execute_bash');
-  if (!hasBash) {
-    return mk(
-      8,
-      '信任工具',
-      'warn',
-      `当前 ${tools.length} 个工具但**不含 execute_bash**——Kiro 想跑 shell（如 lark-cli）会挂死`,
-    );
-  }
-  return mk(8, '信任工具', 'ok', `${tools.length} 个，包含 execute_bash`);
+  return mk(
+    8,
+    '信任工具',
+    'ok',
+    `${tools.length} 个工具（ACP 模式下权限自动放行，列表仅旧模式生效）`,
+  );
 }
 
 /**

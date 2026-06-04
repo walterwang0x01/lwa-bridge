@@ -7,9 +7,9 @@
 ```
 ┌──────────┐                        ┌─────────┐                    ┌───────────┐
 │   飞书   │  ① WebSocket 长连接    │ bridge  │  ③ spawn 子进程    │ kiro-cli  │
-│ (Lark)   │ ─────────────────────► │ daemon  │ ─────────────────► │  chat     │
-│          │ ◄───────────────────── │         │ ◄───────────────── │           │
-└──────────┘  ⑤ 流式 patchCard      └─────────┘  ④ stdout 流       └───────────┘
+│ (Lark)   │ ─────────────────────► │ daemon  │ ═══ JSON-RPC ════► │  acp      │
+│          │ ◄───────────────────── │         │ ◄═══ (ACP) ═══════ │           │
+└──────────┘  ⑤ 流式 patchCard      └─────────┘  ④ session/update  └───────────┘
                                          │
                               ② OpenAPI HTTPS │
                                          ▼
@@ -21,9 +21,9 @@
 
 1. **入站事件**：飞书 → WebSocket 长连接（`im.message.receive_v1` + `card.action.trigger`）→ bridge `dispatcher`
 2. **OpenAPI**：bridge → 飞书 HTTPS（发卡片、patch 卡片、下载图片资源、查机器人 open_id）
-3. **spawn kiro-cli**：bridge 用 execa spawn 子进程，参数有 `--no-interactive --resume-id <sid> --trust-tools=...`
-4. **stdout 流**：kiro-cli 输出（trace + 真正回复 + 工具裸输出）→ bridge 解析成 RunState
-5. **流式 patchCard**：每次 RunState 变更 → 节流（800ms 默认）→ patch 飞书卡片
+3. **spawn kiro-cli acp**：bridge 用 execa spawn `kiro-cli acp` 子进程，通过 stdin/stdout 跑 **ACP（Agent Client Protocol，JSON-RPC 2.0）**。每 turn 一个子进程：`initialize` → `session/load`（续接）或 `session/new` → `session/prompt`
+4. **session/update 事件流**：kiro-cli 通过 ACP 通知推送结构化事件（`agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update`）→ bridge 映射成 RunState；`session/prompt` 响应的 `stopReason` 表示 turn 结束
+5. **流式 patchCard**：每次 RunState 变更 → 节流（800ms 默认）→ patch 飞书卡片（所有 patch 串行执行，保证终态不被覆盖）
 
 ## 卡片渲染体系
 
@@ -35,48 +35,41 @@
 interface RunState {
   blocks: Block[];        // 时序排列的 [文本块 | 工具调用块]
   reasoning: { content: string; active: boolean };
-  terminal: 'running' | 'done' | 'error' | 'interrupted' | 'idle_timeout';
+  terminal: 'running' | 'done' | 'error' | 'interrupted' | 'idle_timeout' | 'timeout';
   errorMsg?: string;
   footer: 'thinking' | 'tool_running' | 'streaming' | null;
+  plan?: Plan;            // 任务计划（可选，渲染在卡片顶部）
 }
 
 interface ToolEntry {
-  id: string;             // 稳定 id（用于飞书 panel key）
+  id: string;             // 稳定 id（用 ACP toolCallId）
   name: string;           // 'Read' / 'Bash' / 'Grep' / ...
+  title?: string;         // Kiro 经 ACP 提供的真实标题（"Reading sample.txt:1"）
+  kind?: string;          // ACP 工具类别（read/execute/edit），用于选图标
+  purpose?: string;       // 调用目的（ACP rawInput.__tool_use_purpose）
   input: Record<string, unknown>;
-  output?: string;
+  output?: string;        // 工具执行结果（ACP rawOutput/content 提取）
   status: 'running' | 'done' | 'error';
   startedAt: number;
   finishedAt?: number;
 }
 ```
 
-### stdout 状态机解析
+### ACP 事件映射
 
-`src/kiro/runStreamParser.ts` 用两态机：`normal` ↔ `in-tool`。
+`src/kiro/acp/client.ts` 把 `kiro-cli acp` 的 JSON-RPC 通知解析成结构化 `SessionEvent`，`src/card/runCardController.ts` 的 `applyEvent` 再映射到 RunState：
 
-kiro-cli stdout 形如：
-```
-Reading file: /path/x.md, all lines (using tool: read)
-✓ Successfully read 6519 bytes from /path/x.md
-- Completed in 0.0s
+| ACP 事件（`session/update` 的 `sessionUpdate`） | 映射 |
+|---|---|
+| `agent_message_chunk` | 追加到 text block（LLM 正文） |
+| `agent_thought_chunk` | 写 reasoning（思考过程） |
+| `tool_call` | 新建 ToolEntry（按 toolCallId）；提取 title/kind/purpose |
+| `tool_call_update` | 按 toolCallId 更新状态 + 提取执行结果（rawOutput/content） |
+| `session/prompt` 响应的 `stopReason` | turn 结束 |
 
-I will run the following command: lark-cli ... (using tool: shell)
-Purpose: ...
-<命令的裸 stdout，可能是大段 JSON>
-- Completed in 0.6s
+相比旧的 stdout 解析，工具的名称、参数、状态、执行结果都来自 ACP 的**结构化字段**，不再靠正则猜人类可读文本——更准、更健壮，且对 MCP 工具同样适用。
 
-> 真正的 LLM 回复
-
- ▸ Credits: 0.12 • Time: 9s
-```
-
-解析规则：
-- `Reading file: …` `I will run …` 等行 → 创建 ToolEntry，进 `in-tool` 状态
-- `in-tool` 状态下所有行 → 累积到当前 tool 的 `output`
-- `- Completed in …` → 当前 tool 标记为 done，回 `normal`
-- `> ...` → 去前缀加到 text block
-- `✓ Successfully` `Purpose:` `▸ Credits` → 静默丢弃
+> 历史：v0.9 之前用 `kiro-cli chat --no-interactive`，靠 `runStreamParser.ts` 正则解析 ANSI stdout（识别 `Reading file:` / `I will run …` / `- Completed in …` 等行）。该方式脆弱、信息有损，v0.9 迁移到 ACP 后已删除。
 
 ### 渲染策略
 
@@ -136,7 +129,7 @@ Purpose: ...
 
 ### 行为
 
-1. **切目录不丢上下文**：你 `/cd ~/Projects/agenzo` 后，portfolio 那条 Kiro session 还在；切回去自动续聊（`--resume-id kiro-sess-aaa`）
+1. **切目录不丢上下文**：你 `/cd ~/Projects/agenzo` 后，portfolio 那条 Kiro session 还在；切回去自动续聊（ACP `session/load` 那条 cwd 对应的 sid）
 2. **每个 (chat, cwd) 独立 session**：不同群、不同目录之间不会串话
 3. **命名工作区只是别名**：`/ws save brand → /Users/.../personal-brand-agent`，之后 `/ws use brand` 等同于 `/cd /Users/.../personal-brand-agent`
 4. **per-chat watchdog 覆盖**：`/timeout 10` 只影响当前 chat
@@ -147,25 +140,22 @@ Purpose: ...
 
 ## 进程管理
 
-### 进程组 kill
+### 子进程终止
 
-kiro-cli 实际是个壳，会 fork 出 `kiro-cli-chat → bun tui.js → acp` 多层子孙进程。普通 `child.kill()` 只杀直接子进程，孙子进程会变孤儿。
+ACP 模式下每 turn spawn 一个 `kiro-cli acp` 子进程(长连接,跑完即 close)。中止/超时的终止流程见 `src/kiro/runner.ts`:
 
-`src/kiro/runner.ts` 的解法：
 ```ts
-execa(binPath, args, {
-  detached: true,  // 让 kiro-cli 自成独立 process group
-  ...
-});
-
-// kill 时给整个 group 发信号
-process.kill(-pid, 'SIGTERM');
-setTimeout(() => process.kill(-pid, 'SIGKILL'), 2000);
+// 1) 优雅:先发 ACP session/cancel
+client.cancel(sessionId);
+// 2) 兜底:2 秒后 close() → SIGTERM,再 5 秒后 SIGKILL
+setTimeout(() => client.close(), 2000);  // close 内部 SIGTERM → 5s 后 SIGKILL
 ```
+
+相比旧 stdout 模式(`detached` 进程组 + `process.kill(-pid)` 杀子孙),ACP 子进程是单一长连接进程,直接 `proc.kill` 即可,不再需要进程组。
 
 ### Idle Watchdog
 
-每 30 秒检查 `Date.now() - lastChunkAt`，超过阈值则 killTree。
+每 30 秒检查 `Date.now() - lastEventAt`(最后一个 SessionEvent 到达时间),超过阈值则 cancel + 兜底强杀。
 
 阈值优先级：per-chat 覆盖（`/timeout 10`） > 全局 `kiro.idleTimeoutMinutes` > 0（关闭）
 
@@ -219,10 +209,13 @@ src/
 │   ├── media.ts               # 图片/文件下载 + 24h 清理
 │   ├── parse.ts               # 消息事件解析
 │   └── types.ts               # 业务层类型
-├── kiro/                      # spawn kiro-cli + 流解析 + 模型
-│   ├── runner.ts              # 子进程封装（detached + killTree + watchdog）
+├── kiro/                      # ACP 客户端 + runner + 模型
+│   ├── acp/
+│   │   ├── messages.ts        # ACP 协议类型（JSON-RPC / SessionEvent / 常量）
+│   │   ├── asyncQueue.ts      # 最小异步队列（事件流 backpressure）
+│   │   └── client.ts          # AcpClient：kiro-cli acp 子进程 + JSON-RPC over stdio
+│   ├── runner.ts              # 每 turn 跑一次 ACP（initialize→load/new→prompt + watchdog）
 │   ├── runState.ts            # 结构化运行状态（blocks/tools/reasoning）
-│   ├── runStreamParser.ts     # stdout 状态机解析器
 │   └── models.ts              # /model 列表查询 + 5 分钟缓存
 ├── card/                      # 飞书卡片 v2 渲染
 │   ├── runRenderer.ts         # RunState → 卡片 JSON
@@ -249,7 +242,7 @@ src/
 
 ### 为啥 cwd 不存到 kiro-cli 的 session 里
 
-kiro-cli 自己的 session 是按 cwd 启动的（`kiro-cli chat --resume-id` 必须在原 cwd 跑）。我们额外在 sessions.json 维护 `(chatId, cwd) → sid` 映射，**目的是让用户在飞书里 `/cd` 切目录时不丢上下文**——切回原目录能直接 resume，不需要再次设置 prompt。
+kiro-cli 自己的 session 是按 cwd 启动的（ACP `session/new` 的 `cwd` 决定工作目录，`session/load` 续接时也要传同一 cwd）。我们额外在 sessions.json 维护 `(chatId, cwd) → sid` 映射，**目的是让用户在飞书里 `/cd` 切目录时不丢上下文**——切回原目录能直接 `session/load` resume，不需要再次设置 prompt。
 
 ### 为啥不用 webhook 模式
 

@@ -610,7 +610,7 @@ export class Dispatcher {
         }
         case 'kiro-internal': {
           const body = [
-            `❓ \`/${cmd.name}\` 是 kiro-cli 的**交互式 TUI** 命令，桥接器跑的是非交互模式（\`--no-interactive\`），无法执行。`,
+            `❓ \`/${cmd.name}\` 是 kiro-cli 的**交互式 TUI** 命令，桥接器通过 ACP 程序化驱动 kiro-cli，无法执行交互式命令。`,
             '',
             '**怎么办**',
             cmd.name === 'model' || cmd.name === 'agent'

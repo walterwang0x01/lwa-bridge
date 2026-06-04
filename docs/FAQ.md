@@ -113,6 +113,8 @@ kiro-cli chat --no-interactive --trust-all-tools "hi"
 ```
 应当 5–10 秒内返回。如果终端跑也卡，是 kiro-cli 自己的问题（可能没登录、网络挂了）。
 
+> bridge 实际用 `kiro-cli acp`（ACP 协议）跟 kiro-cli 通信，但上面这条 `chat` 命令更适合手动自查——它能快速验证 kiro-cli 本身是否正常（登录态、网络）。两者依赖同一个 kiro-cli 安装与登录态。
+
 **立即恢复**：
 - 卡片上点 `⏹ 终止` 按钮
 - 或飞书发 `/stop`

@@ -67,7 +67,7 @@ export type ParsedCommand =
 
 /**
  * kiro-cli 内置命令名（不含开头的 /）。
- * 这些在 --no-interactive 模式下不会被 kiro-cli 识别，需要桥接器主动拦截。
+ * 这些在非交互模式（bridge 用 ACP 程序化驱动）下不会被 kiro-cli 识别，需要桥接器主动拦截。
  * 注意：/model 已升级成桥接器自己的命令，不在这里。
  */
 const KIRO_INTERNAL_COMMANDS = new Set([
