@@ -39,6 +39,12 @@ vi.mock('./acp/client.js', () => {
     close() {
       return h.close();
     }
+    get availableSkills() {
+      return [];
+    }
+    get availableTools() {
+      return [];
+    }
   }
   return { AcpClient: FakeAcpClient };
 });

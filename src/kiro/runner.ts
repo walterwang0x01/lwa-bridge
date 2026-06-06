@@ -65,6 +65,8 @@ export interface RunResult {
   timedOut: boolean;
   /** 是否因 idle watchdog 被终止 */
   idleTimedOut: boolean;
+  /** Kiro 当前 agent 可用的 skill 列表（来自 _kiro.dev/commands/available） */
+  availableSkills?: Array<{ name: string; description: string }>;
 }
 
 /**
@@ -195,5 +197,6 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     aborted,
     timedOut,
     idleTimedOut,
+    availableSkills: client.availableSkills.length > 0 ? client.availableSkills : undefined,
   };
 }

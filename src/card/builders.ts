@@ -320,7 +320,9 @@ function groupModels(models: ModelInfo[]): {
  *   - 「工作目录」和「运维」放进折叠面板，需要时再展开
  *   - 顶部一句简短介绍
  */
-export function buildHelpCard(): object {
+export function buildHelpCard(opts?: {
+  skills?: Array<{ name: string; description: string }>;
+}): object {
   const sec = (items: Array<[string, string]>): object[] =>
     items.map(([cmd, desc]) =>
       columnSet({
@@ -384,6 +386,19 @@ export function buildHelpCard(): object {
       ['/doctor [描述]', '看日志自诊断'],
       ['/selftest', '健康检查报告（一键看 9 项配置/运行时状态）'],
     ]),
+  ];
+
+  // 动态 skill 列表（来自 ACP _kiro.dev/commands/available，session 建好后才有）
+  const skills = opts?.skills;
+  if (skills && skills.length > 0) {
+    const skillItems: Array<[string, string]> = skills.map((s) => [
+      s.name,
+      s.description.slice(0, 60) || '—',
+    ]);
+    elements.push(collapsed('展开：当前 Agent 可用的 Skills', skillItems));
+  }
+
+  elements.push(
     hr(),
     columnSet({
       flexMode: 'flow',
@@ -439,7 +454,7 @@ export function buildHelpCard(): object {
         }),
       ],
     }),
-  ];
+  );
   return {
     schema: '2.0',
     header: buildHeader({ title: '📖 命令帮助', template: 'blue' }),

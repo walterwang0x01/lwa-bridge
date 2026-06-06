@@ -111,6 +111,34 @@ function extractCredits(meteringUsage: unknown): number | undefined {
   return found ? total : undefined;
 }
 
+/** 从 _kiro.dev/commands/available 的 skills 数组提取 name + description。 */
+function parseSkills(raw: unknown): Array<{ name: string; description: string }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ name: string; description: string }> = [];
+  for (const item of raw) {
+    if (item && typeof item === 'object') {
+      const r = item as Record<string, unknown>;
+      const name = typeof r.name === 'string' ? r.name : '';
+      const desc = typeof r.description === 'string' ? r.description : '';
+      if (name) out.push({ name, description: desc });
+    }
+  }
+  return out;
+}
+
+/** 从 _kiro.dev/commands/available 的 tools 数组提取工具名。 */
+function parseToolNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (item && typeof item === 'object') {
+      const name = (item as Record<string, unknown>).name;
+      if (typeof name === 'string') out.push(name);
+    }
+  }
+  return out;
+}
+
 export class AcpClient {
   private readonly proc: ResultPromise;
   private readonly responseTimeoutMs: number;
@@ -120,6 +148,21 @@ export class AcpClient {
   private readonly sessionQueues = new Map<string, AsyncQueue<SessionEvent>>();
   private buffer = '';
   private closed = false;
+
+  /** Kiro 推送的当前 agent 可用 skill 列表（name + description）。 */
+  private _availableSkills: Array<{ name: string; description: string }> = [];
+  /** Kiro 推送的当前 agent 可用工具名列表。 */
+  private _availableTools: string[] = [];
+
+  /** 获取最近一次 session 建好后 Kiro 推送的可用 skill 列表。 */
+  get availableSkills(): Array<{ name: string; description: string }> {
+    return this._availableSkills;
+  }
+
+  /** 获取最近一次 session 建好后 Kiro 推送的可用工具名列表。 */
+  get availableTools(): string[] {
+    return this._availableTools;
+  }
 
   private constructor(proc: ResultPromise, config: AcpClientConfig) {
     this.proc = proc;
@@ -411,6 +454,16 @@ export class AcpClient {
         if (typeof params.turnDurationMs === 'number') ev.turnDurationMs = params.turnDurationMs;
         queue.push(ev);
       }
+      return;
+    }
+    if (method === '_kiro.dev/commands/available') {
+      // Kiro 推送当前 agent 可用的 skills + tools 列表。存到实例属性，外部可读。
+      this._availableSkills = parseSkills(params.skills);
+      this._availableTools = parseToolNames(params.tools);
+      log().debug(
+        { skills: this._availableSkills.length, tools: this._availableTools.length },
+        'commands/available received',
+      );
       return;
     }
     // 其他通知（含 _kiro.dev/*）安全忽略

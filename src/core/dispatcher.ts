@@ -96,6 +96,8 @@ export class Dispatcher {
   private readonly pipelines = new Map<string, ChatPipeline>();
   private readonly onReconnect?: () => Promise<void>;
   private readonly memory = new MemoryStore();
+  /** Kiro 当前 agent 可用 skill 缓存（per chatId，每次 turn 成功后更新）。 */
+  private readonly chatSkills = new Map<string, Array<{ name: string; description: string }>>();
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
   private readonly activeCards?: ActiveCardsStore;
@@ -409,7 +411,10 @@ export class Dispatcher {
     if (cmd) {
       switch (cmd.kind) {
         case 'help':
-          await this.sendInteractiveCard(msg, buildHelpCard());
+          await this.sendInteractiveCard(
+            msg,
+            buildHelpCard({ skills: this.chatSkills.get(msg.chatId) }),
+          );
           return;
         case 'pwd': {
           const wsName = await this.workspaceNameOf(session.currentCwd);
@@ -2756,6 +2761,10 @@ export class Dispatcher {
           // 成功：保存新 sessionId 用于续接
           if (result.newSessionId && result.newSessionId !== resumeId) {
             await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
+          }
+          // 缓存 Kiro 推送的当前 agent 可用 skills（供 /help 动态展示）
+          if (result.availableSkills && result.availableSkills.length > 0) {
+            this.chatSkills.set(msg.chatId, result.availableSkills);
           }
           await ctrl.finalize('done');
         } finally {
