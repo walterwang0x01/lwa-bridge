@@ -1,5 +1,16 @@
 # lark-kiro-bridge
 
+## 0.9.2
+
+### Patch Changes
+
+- 成本/用量可见化 + 上下文将满提醒
+
+  - 卡片完成后底部显示本次消耗(💰 credits)、上下文使用率(🧠 %)、耗时(⏱ s)
+  - 上下文超过 80% 时橙色提醒建议 /new 开新会话
+  - 修复 session/load 历史重播噪音：消除大量 "event for unknown session" 日志告警
+  - selftest 第 8 项调整为 ACP 下准确的提示（不再误报 trustedTools 为空会卡死）
+
 ## 0.9.1
 
 ### Patch Changes
