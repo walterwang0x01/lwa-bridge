@@ -26,6 +26,7 @@ import type { ActiveCardsStore } from '../store/activeCards.js';
 import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
+import { AcpPool } from '../kiro/acpPool.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
 import { RunCardController } from '../card/runCardController.js';
@@ -98,6 +99,8 @@ export class Dispatcher {
   private readonly memory = new MemoryStore();
   /** Kiro 当前 agent 可用 skill 缓存（per chatId，每次 turn 成功后更新）。 */
   private readonly chatSkills = new Map<string, Array<{ name: string; description: string }>>();
+  /** ACP 进程池：per-chat 常驻 AcpClient，多轮对话复用同一子进程。 */
+  private readonly acpPool: AcpPool;
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
   private readonly activeCards?: ActiveCardsStore;
@@ -112,6 +115,13 @@ export class Dispatcher {
     if (opts.cronStore) this.cronStore = opts.cronStore;
     if (opts.cronScheduler) this.cronScheduler = opts.cronScheduler;
     if (opts.activeCards) this.activeCards = opts.activeCards;
+    this.acpPool = new AcpPool({
+      clientConfig: {
+        binPath: this.config.kiro.binPath,
+        model: this.config.kiro.model,
+      },
+      idleMs: 10 * 60 * 1000,
+    });
   }
 
   private getPipeline(chatId: string): ChatPipeline {
@@ -444,6 +454,7 @@ export class Dispatcher {
         }
         case 'new': {
           await this.sessions.clearKiroSession(msg.chatId, session.currentCwd);
+          await this.acpPool.evict(msg.chatId);
           await this.sendInteractiveCard(
             msg,
             buildAckCard({
@@ -2704,6 +2715,9 @@ export class Dispatcher {
         try {
           const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
 
+          // 从 per-chat 常驻进程池获取就绪的 client + sessionId（复用 = 0 开销）
+          const pooled = await this.acpPool.acquire(msg.chatId, { cwd, resumeId });
+
           const runOpts: Parameters<typeof runKiro>[0] = {
             prompt: finalPrompt,
             cwd,
@@ -2713,14 +2727,13 @@ export class Dispatcher {
             idleTimeoutMs,
             signal,
             onEvent: (ev) => ctrl.applyEvent(ev),
-            // 把飞书上下文注入子进程，让 kiro-cli 用 lark-cli 时不用反向搜 chat_id
             extraEnv: {
               LARK_KIRO_CHAT_ID: msg.chatId,
               LARK_KIRO_CHAT_TYPE: msg.chatType,
               LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
             },
+            pooled,
           };
-          if (resumeId !== undefined) runOpts.resumeId = resumeId;
           if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
           if (this.config.kiro.agent !== undefined) runOpts.agent = this.config.kiro.agent;
 
@@ -2730,6 +2743,9 @@ export class Dispatcher {
           } catch (e) {
             await ctrl.finalize('error', (e as Error).message);
             return;
+          } finally {
+            // turn 结束归还进程池（重置空闲计时器）
+            this.acpPool.release(msg.chatId);
           }
 
           if (result.aborted) {

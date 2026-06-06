@@ -50,6 +50,12 @@ export interface RunOptions {
    * 用途：把飞书侧上下文（chatId / chatType / senderOpenId）注入子进程。
    */
   extraEnv?: Record<string, string>;
+  /**
+   * 池化模式：外部（AcpPool）已 spawn + initialize + load/new 好的 client + sessionId。
+   * 有则跳过 spawn/initialize/load 直接 prompt（0 开销复用常驻进程）；
+   * 无则走自管模式（每 turn spawn 一进程，turn 结束 close）。
+   */
+  pooled?: { client: AcpClient; sessionId: string };
 }
 
 export interface RunResult {
@@ -86,7 +92,10 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     extraEnv,
   } = opts;
 
-  log().info({ cwd, resumeId, timeoutMs, idleTimeoutMs }, 'starting ACP turn');
+  log().info(
+    { cwd, resumeId, timeoutMs, idleTimeoutMs, pooled: !!opts.pooled },
+    'starting ACP turn',
+  );
 
   let timedOut = false;
   let aborted = false;
@@ -94,12 +103,23 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
   let text = '';
   let lastEventAt = Date.now();
 
-  const spawnCfg: AcpClientConfig = { binPath, cwd };
-  if (model) spawnCfg.model = model;
-  if (extraEnv) spawnCfg.env = extraEnv;
-  const client = AcpClient.spawn(spawnCfg);
-
+  // 池化模式 vs 自管模式
+  const isPooled = !!opts.pooled;
+  let client: AcpClient;
   let sessionId: string | undefined;
+
+  if (isPooled) {
+    // 池化：外部已 spawn + initialize + load/new，直接复用（0 开销）
+    client = opts.pooled!.client;
+    sessionId = opts.pooled!.sessionId;
+  } else {
+    // 自管：自己 spawn + initialize + load/new（每 turn 一进程）
+    const spawnCfg: AcpClientConfig = { binPath, cwd };
+    if (model) spawnCfg.model = model;
+    if (extraEnv) spawnCfg.env = extraEnv;
+    client = AcpClient.spawn(spawnCfg);
+  }
+
   let closeTimer: NodeJS.Timeout | null = null;
 
   /** 先 cancel（优雅），2 秒后兜底 close（SIGTERM→SIGKILL）强制收尾。 */
@@ -151,21 +171,23 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
 
   let exitCode: number | null = 0;
   try {
-    await client.initialize();
-
-    if (resumeId) {
-      try {
-        await client.loadSession(resumeId, cwd);
-        sessionId = resumeId;
-      } catch (e) {
-        log().warn({ err: e, resumeId }, 'loadSession failed; falling back to newSession');
+    if (!isPooled) {
+      // 自管模式：自己初始化 + 建/续接 session
+      await client.initialize();
+      if (resumeId) {
+        try {
+          await client.loadSession(resumeId, cwd);
+          sessionId = resumeId;
+        } catch (e) {
+          log().warn({ err: e, resumeId }, 'loadSession failed; falling back to newSession');
+        }
+      }
+      if (!sessionId) {
+        sessionId = await client.newSession(cwd);
       }
     }
-    if (!sessionId) {
-      sessionId = await client.newSession(cwd);
-    }
 
-    for await (const ev of client.prompt(sessionId, prompt)) {
+    for await (const ev of client.prompt(sessionId!, prompt)) {
       lastEventAt = Date.now();
       if (ev.kind === 'message') text += ev.text;
       try {
@@ -182,7 +204,8 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     if (idleHandle) clearInterval(idleHandle);
     if (closeTimer) clearTimeout(closeTimer);
     if (signal) signal.removeEventListener('abort', onAbort);
-    await client.close();
+    // 池化模式不 close（由 pool 管生命周期）；自管模式自己收尾
+    if (!isPooled) await client.close();
   }
 
   log().info(
