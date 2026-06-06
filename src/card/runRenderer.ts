@@ -77,6 +77,18 @@ export function renderRunCard(state: RunState): object {
     elements.push(noteMd("<font color='grey'>（未返回内容）</font>"));
   }
 
+  // 用量/成本行 + 上下文将满提醒（仅终态展示，此时 metadata 已完整）
+  if (state.terminal !== 'running') {
+    const usageLine = formatUsage(state.usage);
+    if (usageLine) elements.push(noteMd(`<font color='grey'>${usageLine}</font>`));
+    const pct = state.usage?.contextPercent;
+    if (typeof pct === 'number' && pct >= 80) {
+      elements.push(
+        noteMd(`<font color='orange'>⚠️ 上下文已用 ${Math.round(pct)}%，建议 /new 开新会话</font>`),
+      );
+    }
+  }
+
   // 进行中：底部状态 + 终止按钮
   if (state.terminal === 'running') {
     if (state.footer) elements.push(footerStatus(state.footer));
@@ -297,4 +309,22 @@ function truncate(s: string, max: number): string {
 
 function escapeMd(s: string): string {
   return s.replace(/([*_`\\])/g, '\\$1');
+}
+
+/**
+ * 把 usage（来自 ACP metadata）拼成一行简短摘要，如：
+ *   💰 0.37 credits · 🧠 上下文 12% · ⏱ 9.3s
+ * 三项都可能缺；全缺返回空串（不渲染）。
+ */
+function formatUsage(usage: RunState['usage']): string {
+  if (!usage) return '';
+  const parts: string[] = [];
+  if (typeof usage.credits === 'number') parts.push(`💰 ${usage.credits.toFixed(2)} credits`);
+  if (typeof usage.contextPercent === 'number') {
+    parts.push(`🧠 上下文 ${Math.round(usage.contextPercent)}%`);
+  }
+  if (typeof usage.turnDurationMs === 'number') {
+    parts.push(`⏱ ${(usage.turnDurationMs / 1000).toFixed(1)}s`);
+  }
+  return parts.join(' · ');
 }

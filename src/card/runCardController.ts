@@ -115,6 +115,15 @@ export class RunCardController {
       case 'tool':
         this.applyToolEvent(ev);
         break;
+      case 'metadata': {
+        // 累积用量/成本（contextPercent 取最新值，credits/耗时取最后一次带的）
+        const u = this.state.usage ?? {};
+        if (ev.contextUsagePercentage !== undefined) u.contextPercent = ev.contextUsagePercentage;
+        if (ev.credits !== undefined) u.credits = ev.credits;
+        if (ev.turnDurationMs !== undefined) u.turnDurationMs = ev.turnDurationMs;
+        this.state.usage = u;
+        break;
+      }
       case 'turn_end':
         break;
     }

@@ -86,8 +86,23 @@ export interface TurnEndEvent {
   stopReason?: string;
 }
 
+/**
+ * Kiro 扩展的用量/成本元数据（`_kiro.dev/metadata`）。
+ * 每个 turn 会推若干次，最后一次带 meteringUsage（credit）和 turnDurationMs。
+ */
+export interface MetadataEvent {
+  kind: 'metadata';
+  sessionId: string;
+  /** 上下文使用率百分比（0–100） */
+  contextUsagePercentage?: number;
+  /** 本次计费用量（credit 等） */
+  credits?: number;
+  /** 本轮耗时毫秒 */
+  turnDurationMs?: number;
+}
+
 /** 解析后的高层 session 事件联合。 */
-export type SessionEvent = MessageEvent | ToolEvent | TurnEndEvent;
+export type SessionEvent = MessageEvent | ToolEvent | TurnEndEvent | MetadataEvent;
 
 /** ACP 调用返回了 error 对象时抛出的异常。 */
 export class AcpError extends Error {

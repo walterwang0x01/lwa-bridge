@@ -76,4 +76,32 @@ describe('renderRunCard', () => {
     expect(json).toContain('session.stop');
     expect(json).not.toContain('session.continue');
   });
+
+  it('done state: 渲染 usage 行（credits / 上下文 / 耗时）', () => {
+    const card = renderRunCard({
+      ...stateOf('done', [{ kind: 'text', content: 'hi' }]),
+      usage: { credits: 0.37, contextPercent: 12, turnDurationMs: 8054 },
+    });
+    const json = JSON.stringify(card);
+    expect(json).toContain('credits');
+    expect(json).toContain('上下文 12%');
+    expect(json).toContain('8.1s');
+  });
+
+  it('上下文 >= 80% 时显示 /new 提醒', () => {
+    const card = renderRunCard({
+      ...stateOf('done', [{ kind: 'text', content: 'hi' }]),
+      usage: { contextPercent: 85 },
+    });
+    expect(JSON.stringify(card)).toContain('/new');
+  });
+
+  it('running 态不渲染 usage 行（metadata 未完整）', () => {
+    const card = renderRunCard({
+      ...stateOf('running'),
+      footer: 'streaming',
+      usage: { credits: 0.1, contextPercent: 5 },
+    });
+    expect(JSON.stringify(card)).not.toContain('credits');
+  });
 });

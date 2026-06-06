@@ -104,6 +104,18 @@ export interface RunState {
    * 数据来源由 PlanSource 提供（当前是 FilePlanSource，将来 ACP）。
    */
   plan?: import('../plan/types.js').Plan;
+  /**
+   * Kiro 用量/成本元数据（来自 ACP `_kiro.dev/metadata`）。
+   * 用于在 done 卡片底部展示「本次 X credits · 上下文 Y% · 耗时 Zs」+ 上下文将满提醒。
+   */
+  usage?: {
+    /** 上下文使用率百分比（0–100） */
+    contextPercent?: number;
+    /** 本轮 credit 消耗 */
+    credits?: number;
+    /** 本轮耗时毫秒 */
+    turnDurationMs?: number;
+  };
 }
 
 /** 创建一个初始 RunState */

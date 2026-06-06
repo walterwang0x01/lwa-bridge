@@ -183,6 +183,24 @@ describe('RunCardController.applyEvent', () => {
     expect(st.blocks[0]).toEqual({ kind: 'text', content: 'done' });
   });
 
+  it('metadata → 累积到 state.usage（contextPercent 取最新，credits/耗时取最后带的）', () => {
+    const ctrl = makeController();
+    // 第一条只有 context（turn 开始）
+    ctrl.applyEvent({ kind: 'metadata', sessionId: 's', contextUsagePercentage: 6.7 });
+    // 最后一条带 credits + 耗时 + 更新的 context（turn 结束）
+    ctrl.applyEvent({
+      kind: 'metadata',
+      sessionId: 's',
+      contextUsagePercentage: 12.0,
+      credits: 0.37,
+      turnDurationMs: 8054,
+    });
+    const u = stateOf(ctrl).usage;
+    expect(u?.contextPercent).toBe(12.0);
+    expect(u?.credits).toBe(0.37);
+    expect(u?.turnDurationMs).toBe(8054);
+  });
+
   it('提取 ACP title / kind / purpose / rawOutput.Text', () => {
     const ctrl = makeController();
     ctrl.applyEvent({

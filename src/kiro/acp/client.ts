@@ -22,6 +22,7 @@ import {
   AcpError,
   type JsonRpcErrorObject,
   JSONRPC_VERSION,
+  type MetadataEvent,
   Method,
   type SessionEvent,
   SessionUpdate,
@@ -87,6 +88,27 @@ function textOf(update: Record<string, any>): string {
   const content = update.content;
   if (content && typeof content === 'object') return String(content.text ?? '');
   return '';
+}
+
+/**
+ * 从 `_kiro.dev/metadata` 的 meteringUsage 数组里累加 credit 用量。
+ * 形如 [{ value: 0.37, unit: 'credit', unitPlural: 'credits' }]；无则返回 undefined。
+ */
+function extractCredits(meteringUsage: unknown): number | undefined {
+  if (!Array.isArray(meteringUsage)) return undefined;
+  let total = 0;
+  let found = false;
+  for (const item of meteringUsage) {
+    if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>;
+      const unit = String(rec.unit ?? '');
+      if (unit.startsWith('credit') && typeof rec.value === 'number') {
+        total += rec.value;
+        found = true;
+      }
+    }
+  }
+  return found ? total : undefined;
 }
 
 export class AcpClient {
@@ -158,10 +180,13 @@ export class AcpClient {
     if (!isAbsolute(cwd)) {
       throw new Error(`session/load cwd must be absolute, got ${cwd}`);
     }
-    await this.call(Method.SESSION_LOAD, { sessionId, cwd, mcpServers: [] });
+    // 在发请求前就建 queue：Kiro 收到 session/load 后会立刻重播该 session 的历史事件，
+    // 如果等响应后才建 queue，重播事件全部被当成 "event for unknown session" 丢弃。
+    // 提前建 queue 让这些事件有地方着落（runner 的 for-await 会自然跳过历史，只消费新 turn）。
     if (!this.sessionQueues.has(sessionId)) {
       this.sessionQueues.set(sessionId, new AsyncQueue<SessionEvent>());
     }
+    await this.call(Method.SESSION_LOAD, { sessionId, cwd, mcpServers: [] });
   }
 
   /**
@@ -365,14 +390,27 @@ export class AcpClient {
       return;
     }
     if (method === '_kiro.dev/metadata') {
+      const credits = extractCredits(params.meteringUsage);
       log().debug(
         {
           contextUsagePercentage: params.contextUsagePercentage,
-          meteringUsage: params.meteringUsage,
+          credits,
           turnDurationMs: params.turnDurationMs,
         },
         'kiro metadata',
       );
+      // 投递到 session 队列，让卡片能展示用量/成本（最后一次带 credits/耗时）
+      const sessionId = String(params.sessionId ?? params.session_id ?? '');
+      const queue = this.sessionQueues.get(sessionId);
+      if (queue) {
+        const ev: MetadataEvent = { kind: 'metadata', sessionId };
+        if (typeof params.contextUsagePercentage === 'number') {
+          ev.contextUsagePercentage = params.contextUsagePercentage;
+        }
+        if (typeof credits === 'number') ev.credits = credits;
+        if (typeof params.turnDurationMs === 'number') ev.turnDurationMs = params.turnDurationMs;
+        queue.push(ev);
+      }
       return;
     }
     // 其他通知（含 _kiro.dev/*）安全忽略
