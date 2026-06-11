@@ -245,10 +245,16 @@ export class AcpClient {
     // iterate 在队列结束时据此抛出，让上层（runner）走 error 终态，
     // 而不是静默结束被误判为"成功完成"。
     let promptError: Error | null = null;
-    this.call(Method.SESSION_PROMPT, {
-      sessionId,
-      prompt: [{ type: 'text', text: content }],
-    }).then(
+    // prompt 调用不设内部超时（或设为极大值），由 runner 的外部 timeout/idle 机制管理。
+    // 默认的 responseTimeoutMs (60s) 对一个可能跑几分钟的 turn 来说太短。
+    this.call(
+      Method.SESSION_PROMPT,
+      {
+        sessionId,
+        prompt: [{ type: 'text', text: content }],
+      },
+      30 * 60 * 1000,
+    ).then(
       (result) => {
         const stopReason = (result as Record<string, any> | undefined)?.stopReason;
         queue.push({
@@ -315,7 +321,11 @@ export class AcpClient {
     }
   }
 
-  private call(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private call(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     if (this.closed) {
       return Promise.reject(new Error('ACP client is closed'));
     }
@@ -324,7 +334,7 @@ export class AcpClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`ACP request timed out: ${method}`));
-      }, this.responseTimeoutMs);
+      }, timeoutMs ?? this.responseTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.send({ jsonrpc: JSONRPC_VERSION, id, method, params });
     });

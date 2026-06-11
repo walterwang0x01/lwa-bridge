@@ -46,6 +46,12 @@ export const ConfigSchema = z.object({
        * 设为空字符串则不注入。
        */
       systemPromptPrefix: z.string().default(''),
+      /**
+       * Session 自动过期时间（小时）。
+       * 超过此时长没有活动的 session 会被自动丢弃，下次消息开新 session。
+       * 避免旧对话上下文串台到新话题。默认 4 小时。设为 0 = 永不过期。
+       */
+      sessionTtlHours: z.number().nonnegative().default(4),
     })
     .default({}),
   workspace: z

@@ -154,11 +154,53 @@ export class SessionStore {
 
   /**
    * 获取当前 (chatId, cwd) 对应的 kiroSessionId（可能不存在）。
+   *
+   * @param maxAgeMs 超过此毫秒数未活动则视为过期，返回 undefined（自动开新 session）。
+   *   传 0 = 永不过期。undefined = 不做检查（兼容旧调用）。
    */
-  async getKiroSession(chatId: string, cwd: string): Promise<string | undefined> {
+  async getKiroSession(
+    chatId: string,
+    cwd: string,
+    maxAgeMs?: number,
+  ): Promise<string | undefined> {
     return withLock(() => {
       const data = readFile();
-      return data.chats[chatId]?.sessionsByCwd[cwd];
+      const session = data.chats[chatId];
+      if (!session) return undefined;
+
+      // 过期检查：lastActiveAt 距今超过 maxAgeMs 则丢弃 session
+      if (maxAgeMs && maxAgeMs > 0 && session.lastActiveAt > 0) {
+        const age = Date.now() - session.lastActiveAt;
+        if (age > maxAgeMs) {
+          log().info(
+            {
+              chatId,
+              cwd,
+              ageMin: Math.round(age / 60_000),
+              maxAgeMin: Math.round(maxAgeMs / 60_000),
+            },
+            'session expired by TTL; will start fresh',
+          );
+          delete session.sessionsByCwd[cwd];
+          writeFile(data);
+          return undefined;
+        }
+      }
+
+      return session.sessionsByCwd[cwd];
+    });
+  }
+
+  /**
+   * 更新 chat 的 lastActiveAt 时间戳（每次成功 turn 后调用）。
+   */
+  async touch(chatId: string): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session = data.chats[chatId];
+      if (!session) return;
+      session.lastActiveAt = Date.now();
+      writeFile(data);
     });
   }
 

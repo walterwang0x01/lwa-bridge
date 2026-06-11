@@ -2713,7 +2713,9 @@ export class Dispatcher {
         });
 
         try {
-          const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd);
+          const sessionTtlMs =
+            this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
+          const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd, sessionTtlMs);
 
           // 从 per-chat 常驻进程池获取就绪的 client + sessionId（复用 = 0 开销）
           const pooled = await this.acpPool.acquire(msg.chatId, { cwd, resumeId });
@@ -2778,6 +2780,8 @@ export class Dispatcher {
           if (result.newSessionId && result.newSessionId !== resumeId) {
             await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
           }
+          // 刷新 lastActiveAt，防止 TTL 误过期
+          await this.sessions.touch(msg.chatId);
           // 缓存 Kiro 推送的当前 agent 可用 skills（供 /help 动态展示）
           if (result.availableSkills && result.availableSkills.length > 0) {
             this.chatSkills.set(msg.chatId, result.availableSkills);
