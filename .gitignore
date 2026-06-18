@@ -21,3 +21,9 @@ coverage/
 
 # CodeGraph
 .codegraph/
+
+# GitNexus / AI 生成物（可由 gitnexus analyze 再生，不入库）
+.gitnexus/
+.claude/
+CLAUDE.md
+AGENTS.md
