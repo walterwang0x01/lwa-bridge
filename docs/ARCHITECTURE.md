@@ -190,6 +190,109 @@ setTimeout(() => client.close(), 2000);  // close 内部 SIGTERM → 5s 后 SIGK
 | `ws.list` | 否 | 重发 ws-list 卡片 |
 | `ws.use` | **是** | 切换工作区 |
 
+## Web Dashboard
+
+只读状态面板，`bootstrap.ts` 里 `startDashboard()` 跟 event loop 一起起，独立于飞书连接，飞书断线不影响它。
+
+### 为啥是 Node 内置 http，不是 express/fastify
+
+只有一个 GET JSON 端点 + 静态文件托管，引入 web 框架换不来什么，多一层依赖和攻击面。`node:http` 的 `createServer` 够用。
+
+### 为啥前端是独立的 Vue + Vite 子项目，不是内嵌字符串 HTML
+
+最早版本（v0.10 之前的一个中间版本）确实试过内嵌 HTML 字符串（vanilla JS + fetch，零构建），能跑但排版和交互都简陋——vanilla 版本没有组件化、状态管理靠手写 DOM 操作，加一个可搜索的技能列表就得手写过滤逻辑。改成独立 Vue 子项目后：
+
+- 复用作者在其他项目（agenzo 系）已经用熟的 Vue 3 + Tailwind 组合
+- 构建产物是静态文件（JS 27KB / CSS 3KB，gzip 后），随 npm 包分发，**终端用户不需要装 Vue/Vite**——`npm install -g lark-kiro-bridge` 后 `dist/dashboard-ui/` 已经是编译好的静态资源
+- 组件化让"技能搜索框""日志流""定时任务开关点"这类交互写起来自然，不用手搭一套响应式框架
+
+代价：多一套构建链（`dashboard-ui/` 有自己的 `package.json` / `vite.config.ts`），`pnpm build` 要先构建前端再 tsup 打包主包再拷贝产物（见 `scripts/copy-dashboard-ui.mjs`）。对一个只读小面板这个代价可接受；如果只是想看一眼数据不追求交互体验，这个决策可以重新评估。
+
+### 运行时路径解析的坑：tsup 单文件 bundle
+
+tsup 把整个包打成单文件（`dist/cli.js` / `dist/index.js`），**不保留 `src/` 的目录结构**。这意味着 `server.ts` 运行时 `import.meta.url` 指向的是 `dist/cli.js`，不是"看起来应该"的 `dist/dashboard/server.js`。
+
+```ts
+// src/dashboard/server.ts
+const HERE = dirname(fileURLToPath(import.meta.url));
+const UI_DIST_CANDIDATES = [
+  join(HERE, 'dashboard-ui'),                       // 生产：dist/ → dist/dashboard-ui/
+  join(HERE, '..', '..', 'dashboard-ui', 'dist'),    // 开发：src/dashboard/ → dashboard-ui/dist/
+];
+```
+
+两个候选路径都探测一下，谁先命中用谁——这不是防御性编程的过度设计，是**真的踩过坑**：第一版按"独立编译文件"的直觉写的路径，构建后能跑但页面加载的是源码目录里指向 `/src/main.ts` 的开发版 HTML（因为路径算错，意外命中了项目根的 `dashboard-ui/` 源码目录）。只有真实重启 daemon + curl 验证才发现，类型检查和单元测试都测不出这类"运行时路径算错但两条分支都语法合法"的 bug。
+
+### API 契约
+
+`GET /api/overview` 返回一份快照（不是流式/WS），前端 5 秒轮询：
+
+```ts
+interface Overview {
+  bridge: { pid; appId; startedAt; uptimeSec; now };
+  sessions: SessionSummary[];   // 复用 SessionStore.listAll()
+  cron: CronSummary[];           // 复用 CronStore.list()
+  processes: ProcessSummary[];   // 复用 daemon/registry.ts 的 listProcesses()
+  skills: SkillSummary[];        // 新增：解析 ~/.kiro/skills/*/SKILL.md
+  logs: string[];                // 复用 readRecentLogLines(120)
+}
+```
+
+契约没有共享类型定义——`dashboard-ui/src/types.ts` 是手写的前端侧副本，改后端字段时要记得同步。两个项目用不同的 tsc 配置（`vue-tsc` vs `tsc`），当前规模（一个接口、五个字段）没必要为此引入 monorepo 级别的类型共享方案。
+
+### 技能解析的一个真实坑：YAML 块语法
+
+`~/.kiro/skills/*/SKILL.md` 的 frontmatter 里 `description` 字段有两种写法：
+
+```yaml
+description: "单行或带转义换行的引号字符串"
+```
+```yaml
+description: >-
+  YAML 折叠块语法，后续缩进行拼成一段，
+  换行会被折叠成空格。
+```
+
+第一版解析只处理了引号字符串，用真实数据跑（`~/.kiro/skills/fireworks-tech-graph/`）才发现有 skill 用的是块语法，解析结果是乱码 `>-`。`src/dashboard/skills.ts` 的 `parseFrontmatter()` 现在两种都处理，不引入 YAML 解析库（就两个字段，够用的正则/逐行处理成本更低）。
+
+### 安全边界
+
+见 [SECURITY.md](../SECURITY.md#web-dashboard-local-http-server)：绑定 `127.0.0.1`、纯只读、不返回 secret、静态文件路径穿越防护。
+
+## `/conduit`：串联 kiro-conduit
+
+[kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) 是同作者的另一个项目——多 agent DAG 并行编排器（把大 spec 拆成任务图，多个 worktree 并行跑 Kiro，CIV 三角色 + 4 层验证，串行 merge）。lark-kiro-bridge 不重新实现这套编排逻辑，只是把它接进飞书交互。
+
+### 串联方式：spawn 子进程，不是库依赖
+
+`src/conduit/runner.ts` 的 `runConduit()` 用 execa spawn `kiro-conduit`（PATH 上的可执行文件，可用 `KIRO_CONDUIT_BIN` 环境变量覆盖成绝对路径），跟 bridge 调 `kiro-cli` / `lark-cli` 是同一个模式——**统一走"外部工具子进程"**，不引入 Python 互操作或者把 conduit 的逻辑搬进 bridge。
+
+前提：`kiro-conduit` 命令要在 PATH 上（`uv tool install` 或 `pipx install` 装一次）。bridge 不负责装它，只负责调。
+
+### 为啥不直接 npm 依赖
+
+kiro-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 TypeScript/Node 项目——两个不同的运行时，没有"直接 import"这个选项，子进程是唯一合理的集成方式。这也符合 bridge 一贯的设计：不做 LLM/agent 编排本身（那是 kiro-cli 和 kiro-conduit 的工作），bridge 只做"消息转发 + 卡片渲染 + 外部工具调度"。
+
+### 三个安全设计
+
+1. **`run` 默认不 `--merge`**：只产出分支供 review，绝不自动改用户的 base branch。要合并必须显式 `/conduit run --merge`。
+2. **`--merge` 强制二次确认**：合并是不可逆操作（会改 base branch），`handleConduitCmd` 弹一张橙色警告卡片（`buildConduitMergeConfirmCard`），用户点「确认」才真正执行，按钮 value 走 `conduit.confirmMerge` action，跟 `/schedule new`、`/cron translate` 的二次确认模式一致。
+3. **走 ChatPipeline，可被打断**：conduit 是分钟级长任务，不能让它把 chat 卡死。`run`/`run --merge` 都通过 `pipeline.submit()` 提交，跟普通 Kiro 任务一样——新消息或 `/stop` 会触发 `AbortSignal`，`runConduit` 把它转成 execa 的 `cancelSignal`（SIGTERM，5s 后兜底 SIGKILL）。
+
+### 一个真实修过的 bug：SIGTERM 不会传播清理
+
+第一版只是把 `AbortSignal` 传给 execa，测试时发现：**卡片显示"⏹ 已中止"，但 conduit 进程和它已经 spawn 的 kiro-cli 子进程还在跑**。
+
+根因在 kiro-conduit 那一侧：它从未注册过信号处理器。Python 收到 SIGTERM 默认直接终止进程，正在跑的 `async with await AcpClient.spawn(...)` 块的 `__aexit__`（负责 terminate 子进程）根本来不及执行。
+
+修法是在 kiro-conduit 的 `cli.py` 加 `_run_with_signal_handling()`：把 SIGTERM/SIGINT 转换成对 asyncio 主 task 的 `cancel()`。取消会像异常一样沿 await 链传播，途经的每个 `async with AcpClient` 块的 `__aexit__` 正常触发。**没有改动 orchestrator / AcpClient 本身**——它们的清理路径本来就是对的，只是从来没被信号真正触发过。
+
+过程中还顺手改坏又修好了一件事：手动 `loop.create_task()` 替代 `asyncio.run()` 后，`main()` 对外一贯的 `raise SystemExit`（既有测试依赖这个契约）被意外吞成了 int 返回值，得显式 `except SystemExit: raise` 才恢复。这是"改一处基础设施代码，牵连到看似无关的错误处理路径"的典型例子——只跑类型检查看不出来，得跑既有测试套件才抓到。
+
+### 流式进度
+
+`runConduit` 支持 `onProgress` 回调，边跑边把 stdout/stderr 合并后的尾部（截断到 2500 字符）喂给调用方。`handleConduitCmd` 用它节流（2 秒一次）刷新占位卡片，避免飞书 `patchCard` 频率限制。这不是真正的结构化进度（kiro-conduit 内部有 EventBus 记录 wave/worker 状态，但 CLI 层只吐文本日志），只是"看得到它还活着、大概在干什么"，够用但不精确。
+
 ## 项目目录
 
 ```
@@ -234,8 +337,21 @@ src/
 ├── daemon/                    # macOS launchd
 │   ├── launchd.ts             # plist 安装 / start / stop
 │   └── registry.ts            # 进程注册表
+├── conduit/                   # kiro-conduit 子进程封装
+│   └── runner.ts              # spawn + signal 转发 + 流式输出回调
+├── dashboard/                 # 只读 Web Dashboard 后端
+│   ├── server.ts              # HTTP server：静态托管 + /api/overview
+│   └── skills.ts              # 解析 ~/.kiro/skills/*/SKILL.md frontmatter
 ├── cli.ts                     # commander CLI 入口
 └── index.ts                   # 库导出（程序化嵌入用）
+
+dashboard-ui/                  # 独立 Vue 3 + Vite 子项目（见下文「Web Dashboard」一节）
+├── src/
+│   ├── App.vue
+│   ├── components/            # Panel 外壳 + 各数据面板（Sessions/Cron/Processes/Skills/Logs）
+│   ├── composables/useOverview.ts  # 5s 轮询 /api/overview
+│   └── types.ts               # 前端侧的 API 契约副本（手动跟后端保持一致）
+└── vite.config.ts
 ```
 
 ## 设计取舍记录
@@ -268,3 +384,4 @@ webhook 适合云上部署多实例集群——这不是 lark-kiro-bridge 的目
 
 - [飞书卡片 JSON 2.0](https://open.feishu.cn/document/feishu-cards/feishu-card-overview)
 - [飞书卡片回传交互](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks)
+- [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) —— `/conduit` 串联的多 agent 并行编排器，架构细节见其自己的 `docs/ARCHITECTURE.md`

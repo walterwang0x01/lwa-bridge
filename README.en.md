@@ -69,6 +69,8 @@
 - 🐧 **Cross-platform daemon** — macOS launchd / Linux systemd --user / Windows Task Scheduler. Auto-restart on crash, login auto-start.
 - 🖥️ **`/ps` `/exit` process management** — List host bridge processes from Feishu, stop with one button
 - 📊 **`/doctor` self-diagnosis** — Feed logs back to Kiro to analyze its own failures
+- 🖥️ **Web Dashboard** — Read-only local console at `http://127.0.0.1:5180` (sessions/cron/processes/skills/logs), built with Vue 3, ships pre-built — open in a browser, no setup. Pair with Tailscale for phone access.
+- 🚦 **`/conduit`** — Bridges to [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit), a multi-agent parallel orchestrator: run a big spec from Feishu in one line (`plan` to decompose, `run` to execute, `--merge` with confirmation)
 
 ## 🚀 Quick Start
 
@@ -130,6 +132,26 @@ Platform mapping:
 > Linux: to keep the daemon running after logout (servers), run once:
 > `loginctl enable-linger $USER`
 
+### 📊 Web Dashboard
+
+The bridge starts a read-only local console when it runs. Open it in any browser:
+
+```
+http://127.0.0.1:5180
+```
+
+Shows: session state for every Feishu chat, scheduled tasks, host bridge processes, your `~/.kiro/skills` catalog, and recent logs (auto-refreshes every 5s). Read-only — no write operations exposed.
+
+Enabled by default; change the port via `dashboard.port` in `config.json`, or set `dashboard.enabled: false` to turn it off.
+
+**Access from your phone**:
+
+```bash
+tailscale serve 5180
+```
+
+Install [Tailscale](https://tailscale.com/) and open the URL it gives you from your phone's browser — still only visible to your own devices.
+
 ## 📖 Slash Commands
 
 ### Daily commands (everyone)
@@ -164,6 +186,8 @@ Platform mapping:
 | `/schedule new` | Open a form card to create a scheduled task without cron syntax (covers "every day H:M") |
 | `/exit <id\|#>` | Stop a bridge process (self / others) |
 | `/reconnect` | Force reconnect Feishu WebSocket |
+| `/conduit run [--merge]` | Run [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) (current directory needs a `dag.yaml`); `--merge` triggers a confirmation card |
+| `/conduit plan <spec.md>` | Have Kiro decompose a markdown spec into a `dag.yaml` workspace |
 
 > By default everyone is admin (`access.admins` empty). Tighten before sharing with a team.
 
@@ -294,13 +318,13 @@ PRs and issues welcome. Dev flow:
 ```bash
 git clone https://github.com/walterwang0x01/lark-kiro-bridge.git
 cd lark-kiro-bridge
-pnpm install
+pnpm install                                # pnpm workspace, installs dashboard-ui deps too
 pnpm typecheck && pnpm lint && pnpm test    # required before commit
-pnpm build
+pnpm build                                  # builds dashboard-ui first, then tsup
 node bin/lark-kiro-bridge.mjs run           # local run (stop daemon first)
 ```
 
-Conventions: TypeScript strict / Biome lint / vitest tests / conventional commits.
+Conventions: TypeScript strict / Biome lint / vitest tests / conventional commits. `dashboard-ui/` (the Web Dashboard frontend) is an independent Vue 3 + Vite subproject; its `.vue` files are type-checked via `vue-tsc` (already chained into `pnpm typecheck`), while biome only covers its `.ts` files.
 
 ## Roadmap
 
@@ -312,7 +336,8 @@ Conventions: TypeScript strict / Biome lint / vitest tests / conventional commit
 - **v0.7** ✅ `/schedule new` visual form (no cron syntax for non-engineers) + `/selftest` health checks + fix Feishu form 200530 hidden bug
 - **v0.8** ✅ Quoted-reply / merge-forward context restore + empty-task card discard + task plan card
 - **v0.9** ✅ Migrated Kiro integration to ACP (Agent Client Protocol): JSON-RPC over stdio, structured tool events drive cards, no more stdout parsing
-- **v1.0** Centralized server deployment / multi-user isolation / web admin panel
+- **v0.10** ✅ Read-only Web Dashboard (Vue 3; sessions/cron/processes/skills/logs) + `/conduit` bridging to kiro-conduit's multi-agent parallel orchestration
+- **v1.0** Centralized server deployment / multi-user isolation / actionable dashboard (trigger tasks from the browser)
 
 ## 📄 License
 

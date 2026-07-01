@@ -69,6 +69,8 @@
 - 🐧 **跨平台守护** — macOS launchd / Linux systemd --user / Windows Task Scheduler，崩溃自动拉起，开机自启
 - 🖥️ **`/ps` `/exit` 进程管理** — 飞书内列出本机所有 bridge 进程，按按钮停止
 - 📊 **`/doctor` 自诊断** — 让 Kiro 看日志自己分析故障
+- 🖥️ **Web Dashboard** — 本机 `http://127.0.0.1:5180` 只读控制台（会话/定时任务/进程/技能/日志），Vue 3 构建，浏览器打开即用，可配合 Tailscale 手机访问
+- 🚦 **`/conduit`** — 串联 [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) 多 agent 并行编排器，飞书里一句话跑大 spec（plan 拆分 / run 执行 / --merge 二次确认）
 
 ## 🚀 快速上手
 
@@ -130,6 +132,26 @@ lark-kiro-bridge restart        # 重启
 > Linux 想让 daemon 在用户登出后还跑（比如服务器场景），跑一次：
 > `loginctl enable-linger $USER`
 
+### 📊 Web Dashboard
+
+bridge 跑起来后自动在本机起一个只读控制台，浏览器直接打开：
+
+```
+http://127.0.0.1:5180
+```
+
+看得到：当前所有飞书 chat 的会话状态、定时任务列表、本机 bridge 进程、`~/.kiro/skills` 技能清单、最近日志（5 秒自动刷新）。纯只读，不暴露任何写操作。
+
+默认开启，端口可在 `config.json` 的 `dashboard.port` 改；`dashboard.enabled: false` 可关闭。
+
+**手机访问**（比如用 Telegram 那种远程盘一样看状态）：
+
+```bash
+tailscale serve 5180
+```
+
+装了 [Tailscale](https://tailscale.com/) 后用它给的地址在手机浏览器打开即可，仍然只在你自己的设备间可见。
+
 ## 📖 飞书内的命令
 
 ### 日常命令（所有人）
@@ -164,6 +186,8 @@ lark-kiro-bridge restart        # 重启
 | `/schedule new` | 弹一张表单卡片，0 cron 表达式建任务（小白入口；当前覆盖「每天 H:M」频率） |
 | `/exit <id\|#>` | 停止指定 bridge 进程（自己 / 他人） |
 | `/reconnect` | 强制重连飞书 WebSocket |
+| `/conduit run [--merge]` | 跑 [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片 |
+| `/conduit plan <spec.md>` | 让 Kiro 把 markdown spec 拆成 `dag.yaml` 工作区 |
 
 > 默认所有人都是管理员（`access.admins` 为空）。团队推广前请收紧。
 
@@ -292,13 +316,13 @@ PR / Issue 都欢迎。开发流程：
 ```bash
 git clone https://github.com/walterwang0x01/lark-kiro-bridge.git
 cd lark-kiro-bridge
-pnpm install
+pnpm install                                # pnpm workspace，会顺带装 dashboard-ui 依赖
 pnpm typecheck && pnpm lint && pnpm test    # 提交前必跑
-pnpm build
+pnpm build                                  # 先构建 dashboard-ui 再 tsup 主包
 node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 ```
 
-代码规范：TypeScript strict / Biome lint / vitest 测试 / commit 用 conventional commits。
+代码规范：TypeScript strict / Biome lint / vitest 测试 / commit 用 conventional commits。`dashboard-ui/`（Web Dashboard 前端）是独立的 Vue 3 + Vite 子项目，`.vue` 文件的类型检查走 `vue-tsc`（`pnpm typecheck` 里已级联），biome 只覆盖它的 `.ts` 文件。
 
 ## 路线图
 
@@ -310,7 +334,8 @@ node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
 - **v0.7** ✅ `/schedule new` 可视化表单（小白入口，0 cron 心智）+ `/selftest` 健康检查 + 修飞书 form 200530 隐藏 bug
 - **v0.8** ✅ 引用回复 / 合并转发上下文还原 + 空任务卡片静默丢弃 + 任务计划卡片
 - **v0.9** ✅ Kiro 集成迁移到 ACP（Agent Client Protocol）：JSON-RPC over stdio，结构化工具事件直驱卡片，不再解析 stdout
-- **v1.0** 服务器集中部署 / 多用户隔离 / Web 管理面板
+- **v0.10** ✅ 只读 Web Dashboard（Vue 3，会话/定时任务/进程/技能/日志）+ `/conduit` 串联 kiro-conduit 多 agent 并行编排
+- **v1.0** 服务器集中部署 / 多用户隔离 / Dashboard 可操作（网页触发任务）
 
 ## 📄 License
 

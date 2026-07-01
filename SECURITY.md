@@ -44,6 +44,41 @@ Issues that fall **out** of scope:
 - Bugs in upstream `kiro-cli`, the Lark Open Platform SDK, or pino — please
   report those to the respective projects.
 
+## Web Dashboard (local HTTP server)
+
+Since v0.10, the bridge starts a local, read-only HTTP server (default
+`http://127.0.0.1:5180`) that serves a Vue-based status dashboard: session
+list, cron tasks, running processes, `~/.kiro/skills` names/descriptions, and
+recent log lines.
+
+Threat model / what's already mitigated:
+
+- **Bind address**: the server binds to `127.0.0.1` only, never `0.0.0.0`. It
+  is not reachable from your LAN or the internet by default.
+- **No write operations**: every route is `GET`-only; there is no way to
+  trigger a Kiro task, mutate config, or run `/conduit` from the dashboard
+  itself (that capability is a stated non-goal for now — see README roadmap).
+- **No secrets in the API response**: `/api/overview` never includes
+  `appSecret`, tokens, or the full `config.json`.
+- **Static file serving is path-traversal-guarded**: requests are resolved
+  against the dashboard build directory and rejected if they resolve outside
+  it.
+
+What's in scope for reports:
+
+- Any way to reach the dashboard from outside `127.0.0.1` without the user
+  explicitly proxying it (e.g. via `tailscale serve`, an SSH tunnel, or
+  manually rebinding the port).
+- Any endpoint that returns `appSecret`, cron prompts belonging to another
+  user's chat that shouldn't be visible, or file contents outside
+  `~/.kiro/skills`.
+- Path traversal in the static file server (e.g. `/../../etc/passwd`).
+
+If you expose the dashboard beyond localhost (Tailscale, reverse proxy, port
+forwarding), you are responsible for adding your own authentication in front
+of it — the dashboard itself has none, by design, because it assumes
+single-machine trust.
+
 ## Hardening guidance
 
 Even without an active vulnerability, you can reduce blast radius:
@@ -58,6 +93,10 @@ Even without an active vulnerability, you can reduce blast radius:
   this on init, but verify if you edit by hand).
 - Rotate `appSecret` if it has ever been logged in plaintext, screenshotted, or
   shared in a chat.
+- Set `dashboard.enabled: false` if you don't use it — one less local surface.
+- If you expose the dashboard beyond `127.0.0.1`, put an authenticating proxy
+  in front of it (Tailscale ACLs, an SSH tunnel, or a reverse proxy with
+  basic auth); do not rebind it to `0.0.0.0` directly.
 
 ## Supported versions
 
