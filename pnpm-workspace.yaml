@@ -1,8 +1,11 @@
-# Single-package project; declare the root package explicitly so both
-# pnpm 11+ and changesets find it. Empty list ('packages: []') makes
-# changesets fail with "No packages found".
+# 根包（发布单元）+ dashboard-ui 子项目（只读 Web Dashboard 的 Vue 前端，
+# 构建产物被根包的 tsup 打包时拷进 dist/dashboard-ui/，不会被发布成独立包，
+# 只是借 pnpm workspace 管理它自己的依赖）。
+# 空列表（'packages: []'）会让 changesets 报 "No packages found"，所以根包
+# 显式声明。
 packages:
   - '.'
+  - 'dashboard-ui'
 
 allowBuilds:
   esbuild: set this to true or false

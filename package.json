@@ -9,25 +9,27 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "dist/dashboard-ui/**/*",
     "bin",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "dev": "tsup --watch",
-    "build": "tsup",
-    "typecheck": "tsc --noEmit",
+    "build": "pnpm build:ui && tsup && node scripts/copy-dashboard-ui.mjs",
+    "build:ui": "pnpm --dir dashboard-ui build",
+    "typecheck": "tsc --noEmit && pnpm --dir dashboard-ui typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "biome check src",
-    "lint:fix": "biome check src --write",
-    "format": "biome format src --write",
+    "lint": "biome check src dashboard-ui/src",
+    "lint:fix": "biome check src dashboard-ui/src --write",
+    "format": "biome format src dashboard-ui/src --write",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish",
     "start": "node bin/lark-kiro-bridge.mjs run",
-    "prepublishOnly": "npx tsc --noEmit && npx biome check src && npx vitest run && npx tsup",
+    "prepublishOnly": "npx tsc --noEmit && npx biome check src && npx vitest run && pnpm build",
     "prepare": "husky"
   },
   "lint-staged": {

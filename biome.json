@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/.kiro", "!**/coverage"]
+    "includes": ["**", "!**/dist", "!**/node_modules", "!**/.kiro", "!**/coverage", "!**/*.vue"]
   },
   "formatter": {
     "enabled": true,
