@@ -35,6 +35,19 @@ export interface SkillSummary {
   description: string;
 }
 
+export interface AgentSummary {
+  name: string;
+  promptPreview: string;
+}
+
+export interface AssetInstallRecord {
+  assetKind: 'skill' | 'agent';
+  assetId: string;
+  sourceName: string;
+  sourceGitUrl: string;
+  installedAt: number;
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -49,5 +62,7 @@ export interface Overview {
   cron: CronSummary[];
   processes: ProcessSummary[];
   skills: SkillSummary[];
+  agents: AgentSummary[];
+  assetInstalls: AssetInstallRecord[];
   logs: string[];
 }

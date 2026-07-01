@@ -551,6 +551,7 @@ export function buildStatusCard(opts: {
   hasActiveTask: boolean;
   idleMinutes: number;
   isPerChatOverride: boolean;
+  currentAgent?: string;
 }): object {
   const elements: object[] = [];
   const row = (label: string, val: string): object =>
@@ -577,6 +578,7 @@ export function buildStatusCard(opts: {
     ),
   );
   elements.push(row('任务状态', opts.hasActiveTask ? '🟢 进行中' : '⚪ 空闲'));
+  elements.push(row('当前角色', opts.currentAgent ? `🎭 \`${opts.currentAgent}\`` : '_Kiro 默认_'));
   elements.push(
     row(
       'Idle watchdog',

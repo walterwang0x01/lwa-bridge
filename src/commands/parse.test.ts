@@ -463,8 +463,8 @@ describe('parseCommand', () => {
   });
 
   describe('kiro-internal 拦截', () => {
-    it('/agent 拦截', () => {
-      expect(parseCommand('/agent')).toEqual({ kind: 'kiro-internal', name: 'agent' });
+    it('/agent 已升级为桥接器命令', () => {
+      expect(parseCommand('/agent')).toEqual({ kind: 'agent', mode: 'show' });
     });
 
     it('/tools 拦截', () => {
@@ -690,5 +690,108 @@ describe('/conduit', () => {
 
   it('/conduit 未知子命令 → unknown', () => {
     expect(parseCommand('/conduit foo')).toEqual({ kind: 'unknown', raw: '/conduit foo' });
+  });
+});
+
+describe('/skill', () => {
+  it('/skill → list', () => {
+    expect(parseCommand('/skill')).toEqual({ kind: 'skill', mode: 'list' });
+  });
+  it('/skill list → list', () => {
+    expect(parseCommand('/skill list')).toEqual({ kind: 'skill', mode: 'list' });
+  });
+  it('/skill source list → source-list', () => {
+    expect(parseCommand('/skill source list')).toEqual({ kind: 'skill', mode: 'source-list' });
+  });
+  it('/skill source → source-list（无子命令）', () => {
+    expect(parseCommand('/skill source')).toEqual({ kind: 'skill', mode: 'source-list' });
+  });
+  it('/skill source add <name> <url> → source-add', () => {
+    expect(parseCommand('/skill source add team https://github.com/x/y.git')).toEqual({
+      kind: 'skill',
+      mode: 'source-add',
+      name: 'team',
+      url: 'https://github.com/x/y.git',
+    });
+  });
+  it('/skill source add 缺 url → unknown', () => {
+    expect(parseCommand('/skill source add team').kind).toBe('unknown');
+  });
+  it('/skill source rm <name> → source-remove', () => {
+    expect(parseCommand('/skill source rm team')).toEqual({
+      kind: 'skill',
+      mode: 'source-remove',
+      name: 'team',
+    });
+  });
+  it('/skill sync <name> → sync', () => {
+    expect(parseCommand('/skill sync team')).toEqual({ kind: 'skill', mode: 'sync', name: 'team' });
+  });
+  it('/skill sync 缺 name → unknown', () => {
+    expect(parseCommand('/skill sync').kind).toBe('unknown');
+  });
+  it('/skill install <name> <assetId> → install', () => {
+    expect(parseCommand('/skill install team demo-skill')).toEqual({
+      kind: 'skill',
+      mode: 'install',
+      name: 'team',
+      assetId: 'demo-skill',
+    });
+  });
+  it('/skill install 缺 assetId → unknown', () => {
+    expect(parseCommand('/skill install team').kind).toBe('unknown');
+  });
+});
+
+describe('/agent', () => {
+  it('/agent → show', () => {
+    expect(parseCommand('/agent')).toEqual({ kind: 'agent', mode: 'show' });
+  });
+  it('/agent list → show', () => {
+    expect(parseCommand('/agent list')).toEqual({ kind: 'agent', mode: 'show' });
+  });
+  it('/agent reset → reset', () => {
+    expect(parseCommand('/agent reset')).toEqual({ kind: 'agent', mode: 'reset' });
+  });
+  it('/agent <name> → set', () => {
+    expect(parseCommand('/agent code-reviewer')).toEqual({
+      kind: 'agent',
+      mode: 'set',
+      name: 'code-reviewer',
+    });
+  });
+  it('/agent create <name> → create', () => {
+    expect(parseCommand('/agent create my-persona')).toEqual({
+      kind: 'agent',
+      mode: 'create',
+      name: 'my-persona',
+    });
+  });
+  it('/agent create 缺 name → unknown', () => {
+    expect(parseCommand('/agent create').kind).toBe('unknown');
+  });
+  it('/agent sync <source> → sync', () => {
+    expect(parseCommand('/agent sync team')).toEqual({
+      kind: 'agent',
+      mode: 'sync',
+      source: 'team',
+    });
+  });
+  it('/agent install <source> <assetId> → install', () => {
+    expect(parseCommand('/agent install team code-reviewer')).toEqual({
+      kind: 'agent',
+      mode: 'install',
+      source: 'team',
+      assetId: 'code-reviewer',
+    });
+  });
+  it('/agent install-defaults → install-defaults', () => {
+    expect(parseCommand('/agent install-defaults')).toEqual({
+      kind: 'agent',
+      mode: 'install-defaults',
+    });
+  });
+  it('/agent 含非法字符的名称 → unknown', () => {
+    expect(parseCommand('/agent bad name').kind).toBe('unknown');
   });
 });

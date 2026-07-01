@@ -293,6 +293,38 @@ kiro-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 T
 
 `runConduit` 支持 `onProgress` 回调，边跑边把 stdout/stderr 合并后的尾部（截断到 2500 字符）喂给调用方。`handleConduitCmd` 用它节流（2 秒一次）刷新占位卡片，避免飞书 `patchCard` 频率限制。这不是真正的结构化进度（kiro-conduit 内部有 EventBus 记录 wave/worker 状态，但 CLI 层只吐文本日志），只是"看得到它还活着、大概在干什么"，够用但不精确。
 
+## `/skill` 与 `/agent`：Skill 市场与 Persona 系统
+
+这两块都建立在 Kiro CLI 的原生机制上，bridge 只做"发现 / 分发 / 切换"的交互层，不重新发明配置格式。
+
+### 共享底层：GitAssetSource
+
+Skill 和 Persona 的团队分发共用 `src/assets/gitSource.ts`——两者本质上是同一个流程（clone/pull 一个 Git 仓库 → 发现候选资产 → 确认后安装到 Kiro 标准目录 → 记录来源），只在两点上有差异：
+
+| | Skill | Persona（Agent_Config） |
+|---|---|---|
+| 候选识别 | 含 `SKILL.md` 的子目录 | `*.json` 文件 |
+| 安装目标 | `~/.kiro/skills/<name>/` | `~/.kiro/agents/<name>.json` |
+
+其余（git 操作、确认流程、`asset-installs.json` 记录）完全共享。来源注册和安装记录持久化在 `src/assets/store.ts`（zod schema + `proper-lockfile`，模式同 `store/workspaces.ts`），文件落在 `~/.lark-kiro-bridge/asset-sources.json` 和 `asset-installs.json`，clone 缓存在 `~/.lark-kiro-bridge/asset-sources/<name>/`。
+
+### 安全设计
+
+- **技术路径选"复用 Git 生态"而非自建 Registry**：Skill_Source / Persona_Source 就是 Git 仓库地址，`git clone`/`pull` 到本机，私有仓库的鉴权完全委托给用户机器已配好的 git credential / SSH key，bridge 不做账号体系。这避免了自建中心化索引服务的托管、审核、运维成本（不符合单人维护项目的现实）。
+- **未确认不写入**：`syncSource()` 只 clone/pull + 列候选，绝不安装；安装必须由 `installAsset()` 显式触发（命令 / 卡片按钮）。
+- **不覆盖已存在资产**：`installAsset()` 目标已存在同名资产时返回 `{ installed: false }`，绝不覆盖用户已有的自定义内容。Persona_Library 的默认角色安装走同一条保护逻辑。
+- **供应链风险提示**：安装第三方资产前，卡片固定展示来源地址 + "内容未经审核"标注 + 风险提示（Agent_Config 额外提示 `prompt` 可能诱导模型偏离职责、`tools`/`mcpServers` 可能授予超预期的工具权限）。这是对 ClawHub 已发生过的恶意 Skill 事件的直接防御。
+
+### Persona 切换机制：接线已有的死字段
+
+核实代码发现 `config.kiro.agent` 和 `RunOptions.agent` 早就声明了但从未接线——`runKiro()` 没把 `agent` 拼进 ACP 启动参数。本次三处最小改动接通：`AcpClientConfig` 加 `agent` 字段、`spawn()` 拼 `--agent`、Dispatcher 构造 AcpPool 时传入 `config.kiro.agent`。`/agent` 命令复用 `/model` 已验证的模式（全局配置覆盖 + 下一条消息生效）。
+
+一个关键修正：`/agent set`/`reset` 会主动 `acpPool.evict(chatId)`。因为 AcpPool 是常驻进程池，切换配置后若不 evict，已存活的 chat 进程仍用旧 agent——`/model` 命令目前就有这个未修的时机问题，`/agent` 通过 evict 规避了它。
+
+### Persona_Library：随包分发的默认角色
+
+`src/kiro/personaLibrary/` 提供两个默认角色（客服问答 `customer-service`、代码审查 `code-reviewer`），JSON 内容用静态 `import` 内联进 tsup bundle（避免打包后运行时按路径找不到文件）。`/agent install-defaults` 命令按"已存在则跳过"逻辑写入 `~/.kiro/agents/`，不在启动时自动写用户目录（未经同意不动用户文件系统）。
+
 ## 项目目录
 
 ```

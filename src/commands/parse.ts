@@ -62,6 +62,19 @@ export type ParsedCommand =
   | { kind: 'conduit'; mode: 'run-merge' }
   | { kind: 'conduit'; mode: 'plan'; spec: string }
   | { kind: 'conduit'; mode: 'help' }
+  | { kind: 'skill'; mode: 'list' }
+  | { kind: 'skill'; mode: 'source-add'; name: string; url: string }
+  | { kind: 'skill'; mode: 'source-list' }
+  | { kind: 'skill'; mode: 'source-remove'; name: string }
+  | { kind: 'skill'; mode: 'sync'; name: string }
+  | { kind: 'skill'; mode: 'install'; name: string; assetId: string }
+  | { kind: 'agent'; mode: 'show' }
+  | { kind: 'agent'; mode: 'set'; name: string }
+  | { kind: 'agent'; mode: 'create'; name: string }
+  | { kind: 'agent'; mode: 'reset' }
+  | { kind: 'agent'; mode: 'sync'; source: string }
+  | { kind: 'agent'; mode: 'install'; source: string; assetId: string }
+  | { kind: 'agent'; mode: 'install-defaults' }
   | { kind: 'model'; mode: 'show' }
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
@@ -75,7 +88,6 @@ export type ParsedCommand =
  * 注意：/model 已升级成桥接器自己的命令，不在这里。
  */
 const KIRO_INTERNAL_COMMANDS = new Set([
-  'agent',
   'tools',
   'compact',
   'login',
@@ -315,6 +327,92 @@ export function parseCommand(text: string): ParsedCommand | null {
         default:
           return { kind: 'unknown', raw: trimmed };
       }
+    }
+    case 'skill': {
+      // /skill                    → list
+      // /skill source add <name> <url>
+      // /skill source list
+      // /skill source rm <name>
+      // /skill sync <name>
+      if (!tail) return { kind: 'skill', mode: 'list' };
+      const tokens = tail.split(/\s+/);
+      const sub = (tokens[0] ?? '').toLowerCase();
+      if (sub === 'source') {
+        const action = (tokens[1] ?? '').toLowerCase();
+        if (action === 'list' || action === 'ls' || action === '') {
+          return { kind: 'skill', mode: 'source-list' };
+        }
+        if (action === 'add' || action === 'new') {
+          const name = tokens[2] ?? '';
+          const url = tokens[3] ?? '';
+          if (!name || !url) return { kind: 'unknown', raw: trimmed };
+          return { kind: 'skill', mode: 'source-add', name, url };
+        }
+        if (action === 'rm' || action === 'remove' || action === 'delete') {
+          const name = tokens[2] ?? '';
+          if (!name) return { kind: 'unknown', raw: trimmed };
+          return { kind: 'skill', mode: 'source-remove', name };
+        }
+        return { kind: 'unknown', raw: trimmed };
+      }
+      if (sub === 'sync') {
+        const name = tokens[1] ?? '';
+        if (!name) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'skill', mode: 'sync', name };
+      }
+      if (sub === 'install') {
+        const name = tokens[1] ?? '';
+        const assetId = tokens[2] ?? '';
+        if (!name || !assetId) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'skill', mode: 'install', name, assetId };
+      }
+      if (sub === 'list' || sub === 'ls') {
+        return { kind: 'skill', mode: 'list' };
+      }
+      return { kind: 'unknown', raw: trimmed };
+    }
+    case 'agent': {
+      // /agent                    → show
+      // /agent <name>             → set
+      // /agent create <name>      → create
+      // /agent reset              → reset
+      // /agent sync <source>      → sync
+      // /agent install-defaults   → install-defaults
+      if (!tail) return { kind: 'agent', mode: 'show' };
+      const lower = tail.toLowerCase();
+      if (lower === 'reset' || lower === 'default' || lower === 'clear') {
+        return { kind: 'agent', mode: 'reset' };
+      }
+      if (lower === 'install-defaults' || lower === 'defaults') {
+        return { kind: 'agent', mode: 'install-defaults' };
+      }
+      const tokens = tail.split(/\s+/);
+      const sub = (tokens[0] ?? '').toLowerCase();
+      if (sub === 'create' || sub === 'new') {
+        const name = tokens.slice(1).join(' ').trim();
+        if (!name) return { kind: 'unknown', raw: trimmed };
+        // agent 名只允许字母数字 + - + _ + .
+        if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'agent', mode: 'create', name };
+      }
+      if (sub === 'sync') {
+        const source = tokens[1] ?? '';
+        if (!source) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'agent', mode: 'sync', source };
+      }
+      if (sub === 'install') {
+        const source = tokens[1] ?? '';
+        const assetId = tokens[2] ?? '';
+        if (!source || !assetId) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'agent', mode: 'install', source, assetId };
+      }
+      if (sub === 'show' || sub === 'list' || sub === 'ls') {
+        return { kind: 'agent', mode: 'show' };
+      }
+      // 剩余情况：/agent <name> → set
+      const name = tail.trim();
+      if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'agent', mode: 'set', name };
     }
     case 'model': {
       if (!tail) return { kind: 'model', mode: 'show' };

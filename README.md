@@ -169,6 +169,8 @@ tailscale serve 5180
 | `/ps` | — | 列出本机所有 bridge 进程 |
 | `/steering` | `/memory` `/mem` | 列出当前项目的 Kiro 指令文件（卡片+按钮） |
 | `/cron` | `/schedule` | 列出当前 chat 的定时任务（卡片+按钮） |
+| `/skill` | — | 列出全局 Skill（`~/.kiro/skills`） |
+| `/agent` | — | 列出可用角色（`~/.kiro/agents`）+ 当前生效 |
 | `/doctor [描述]` | — | 让 Kiro 看日志自诊断 |
 
 ### 管理员命令
@@ -188,6 +190,14 @@ tailscale serve 5180
 | `/reconnect` | 强制重连飞书 WebSocket |
 | `/conduit run [--merge]` | 跑 [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片 |
 | `/conduit plan <spec.md>` | 让 Kiro 把 markdown spec 拆成 `dag.yaml` 工作区 |
+| `/skill source add <name> <git-url>` | 注册一个 Skill 来源（Git 仓库） |
+| `/skill sync <name>` | clone/pull 来源，列出可安装的 Skill（含供应链风险提示） |
+| `/skill install <name> <skill>` | 安装某个 Skill 到 `~/.kiro/skills`（不覆盖已存在） |
+| `/agent <name>` | 切换当前会话的角色（Agent_Config，下一条消息生效） |
+| `/agent create <name>` | 创建一个角色配置模板到 `~/.kiro/agents` |
+| `/agent reset` | 清除角色覆盖，回归 Kiro 默认 |
+| `/agent install-defaults` | 安装内置默认角色库（客服问答 / 代码审查） |
+| `/agent sync <source>` | 从 Git 来源同步团队自定义角色（含供应链风险提示） |
 
 > 默认所有人都是管理员（`access.admins` 为空）。团队推广前请收紧。
 

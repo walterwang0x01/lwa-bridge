@@ -74,6 +74,10 @@ import {
   validateAccessChange,
   SecurityError,
 } from '../lib/security.js';
+import { listGlobalAgents } from '../kiro/agents.js';
+import { addSource, listSources, removeSource, getSource } from '../assets/store.js';
+import { syncSource, installAsset } from '../assets/gitSource.js';
+import { listPersonaLibrary } from '../kiro/personaLibrary/index.js';
 
 export interface DispatcherOptions {
   config: Config;
@@ -121,6 +125,7 @@ export class Dispatcher {
       clientConfig: {
         binPath: this.config.kiro.binPath,
         model: this.config.kiro.model,
+        agent: this.config.kiro.agent,
       },
       idleMs: 10 * 60 * 1000,
     });
@@ -406,6 +411,12 @@ export class Dispatcher {
         case 'conduit':
           // run/plan 会建 worktree、跑 git、调多个 Kiro，要 admin；help 只读
           return cmd.mode !== 'help';
+        case 'skill':
+          // list / source-list 只读不要 admin；source-add/remove/sync 写操作要
+          return cmd.mode !== 'list' && cmd.mode !== 'source-list';
+        case 'agent':
+          // show 只读不要 admin；其他全要
+          return cmd.mode !== 'show';
         default:
           return false;
       }
@@ -454,6 +465,7 @@ export class Dispatcher {
           };
           if (wsName !== undefined) cardOpts.workspaceName = wsName;
           if (kiroSid !== undefined) cardOpts.kiroSessionId = kiroSid;
+          if (this.config.kiro.agent !== undefined) cardOpts.currentAgent = this.config.kiro.agent;
           await this.sendInteractiveCard(msg, buildStatusCard(cardOpts));
           return;
         }
@@ -631,6 +643,14 @@ export class Dispatcher {
         }
         case 'conduit': {
           await this.handleConduitCmd(msg, cmd, session.currentCwd);
+          return;
+        }
+        case 'skill': {
+          await this.handleSkillCmd(msg, cmd);
+          return;
+        }
+        case 'agent': {
+          await this.handleAgentCmd(msg, cmd);
           return;
         }
         case 'kiro-internal': {
@@ -3017,5 +3037,343 @@ export class Dispatcher {
         }
       },
     });
+  }
+
+  // ─── Skill_Marketplace ─────────────────────────────────────────
+
+  private async handleSkillCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'skill' }>,
+  ): Promise<void> {
+    switch (cmd.mode) {
+      case 'list': {
+        const { listGlobalSkills } = await import('../dashboard/skills.js');
+        const skills = listGlobalSkills();
+        const body =
+          skills.length === 0
+            ? '未发现全局 Skill。\n目录：`~/.kiro/skills/`'
+            : skills.map((s) => `• **${s.name}**：${s.description}`).join('\n');
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({ state: 'done', title: `🧩 Skills (${skills.length})`, body }),
+        );
+        return;
+      }
+      case 'source-list': {
+        const sources = await listSources('skill');
+        if (sources.length === 0) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'done',
+              title: '🧩 Skill Sources',
+              body: '未注册任何 Skill Source。\n用 `/skill source add <name> <git-url>` 添加。',
+            }),
+          );
+          return;
+        }
+        const body = sources.map((s) => `• **${s.name}**\n  ${s.gitUrl}`).join('\n');
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({ state: 'done', title: `🧩 Skill Sources (${sources.length})`, body }),
+        );
+        return;
+      }
+      case 'source-add': {
+        await addSource({ name: cmd.name, gitUrl: cmd.url, kind: 'skill' });
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '✅ Source 已添加',
+            body: `\`${cmd.name}\` → ${cmd.url}\n\n用 \`/skill sync ${cmd.name}\` 同步并查看可安装的 Skill。`,
+          }),
+        );
+        return;
+      }
+      case 'source-remove': {
+        const ok = await removeSource(cmd.name);
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: ok ? 'done' : 'error',
+            title: ok ? '🗑️ Source 已移除' : '❌ Source 不存在',
+            body: ok ? `已移除 \`${cmd.name}\`` : `没有名为 \`${cmd.name}\` 的 source`,
+          }),
+        );
+        return;
+      }
+      case 'sync': {
+        try {
+          const candidates = await syncSource(cmd.name);
+          if (candidates.length === 0) {
+            await this.sendInteractiveCard(
+              msg,
+              buildAckCard({
+                state: 'done',
+                title: '🧩 同步完成',
+                body: `\`${cmd.name}\` 中未发现可安装的 Skill。`,
+              }),
+            );
+            return;
+          }
+          const source = await getSource(cmd.name);
+          const lines = [
+            `来源：\`${source?.gitUrl ?? cmd.name}\``,
+            '⚠️ **内容未经 Bridge_Maintainer 审核**',
+            '⚠️ 第三方 Skill 可能包含试图诱导执行危险操作的指令',
+            '',
+            `发现 ${candidates.length} 个候选 Skill：`,
+            '',
+            ...candidates.map((c) => `• **${c.id}**${c.isNew ? ' 🆕' : ''}\n  ${c.summary}`),
+            '',
+            '要安装某个 Skill，请发送：`/skill install ' + cmd.name + ' <name>`',
+          ];
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({ state: 'done', title: '🧩 同步完成', body: lines.join('\n') }),
+          );
+        } catch (e) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'error',
+              title: '❌ 同步失败',
+              body: (e as Error).message.slice(0, 500),
+            }),
+          );
+        }
+        return;
+      }
+      case 'install': {
+        const r = await installAsset(cmd.name, cmd.assetId);
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: r.installed ? 'done' : 'error',
+            title: r.installed ? '✅ Skill 已安装' : '⚠️ 未安装',
+            body: r.installed
+              ? `\`${cmd.assetId}\` 已安装到 \`~/.kiro/skills/\``
+              : (r.reason ?? '安装失败'),
+          }),
+        );
+        return;
+      }
+    }
+  }
+
+  // ─── Persona_System ────────────────────────────────────────────
+
+  private async handleAgentCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'agent' }>,
+  ): Promise<void> {
+    switch (cmd.mode) {
+      case 'show': {
+        const agents = listGlobalAgents();
+        if (agents.length === 0) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'done',
+              title: '🎭 Agents',
+              body: '未发现任何 Agent_Config。\n\n• 手动创建：编辑 `~/.kiro/agents/<name>.json`\n• 安装默认角色库：`/agent install-defaults`',
+            }),
+          );
+          return;
+        }
+        const current = this.config.kiro.agent ?? '（未设置，使用 Kiro 默认）';
+        const lines = [
+          `当前生效：**${current}**`,
+          '',
+          ...agents.map((a) => `• **${a.name}**：${a.promptPreview}`),
+          '',
+          '切换：`/agent <name>`｜重置：`/agent reset`',
+        ];
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: `🎭 Agents (${agents.length})`,
+            body: lines.join('\n'),
+          }),
+        );
+        return;
+      }
+      case 'set': {
+        const agents = listGlobalAgents();
+        const found = agents.find((a) => a.name === cmd.name);
+        if (!found) {
+          const valid = agents.map((a) => `\`${a.name}\``).join('、') || '（无可用 agent）';
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'error',
+              title: '❌ Agent 不存在',
+              body: `没有名为 \`${cmd.name}\` 的 Agent_Config。\n\n可用：${valid}`,
+            }),
+          );
+          return;
+        }
+        this.config = patchAndSaveConfig(this.config, (draft) => {
+          draft.kiro.agent = cmd.name;
+        });
+        // 确保下一条消息用新 agent：evict 当前 chat 的池化进程
+        await this.acpPool.evict(msg.chatId);
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '✅ Agent 已切换',
+            body: `已切换到 \`${cmd.name}\`（下一条消息生效）`,
+          }),
+        );
+        return;
+      }
+      case 'reset': {
+        this.config = patchAndSaveConfig(this.config, (draft) => {
+          delete draft.kiro.agent;
+        });
+        await this.acpPool.evict(msg.chatId);
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '✅ Agent 已恢复默认',
+            body: '已清除 agent 覆盖，回归 Kiro 默认',
+          }),
+        );
+        return;
+      }
+      case 'create': {
+        // 简单实现：写入一个只含 prompt 占位的 JSON，提示用户编辑
+        const { existsSync, writeFileSync, mkdirSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const { homedir } = await import('node:os');
+        const agentsDir = join(homedir(), '.kiro', 'agents');
+        const filePath = join(agentsDir, `${cmd.name}.json`);
+        if (existsSync(filePath)) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'error',
+              title: '❌ 已存在',
+              body: `\`${cmd.name}.json\` 已存在，请直接编辑该文件或用其他名称。`,
+            }),
+          );
+          return;
+        }
+        mkdirSync(agentsDir, { recursive: true });
+        const template = {
+          prompt: `你是${cmd.name}。请编辑此文件，填入具体的角色定义。`,
+          tools: [],
+        };
+        writeFileSync(filePath, JSON.stringify(template, null, 2) + '\n', 'utf-8');
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '✅ Agent 已创建',
+            body: `已写入 \`~/.kiro/agents/${cmd.name}.json\`\n\n请编辑文件填入你的角色 prompt 和 tools，然后用 \`/agent ${cmd.name}\` 切换。`,
+          }),
+        );
+        return;
+      }
+      case 'sync': {
+        try {
+          const candidates = await syncSource(cmd.source);
+          if (candidates.length === 0) {
+            await this.sendInteractiveCard(
+              msg,
+              buildAckCard({
+                state: 'done',
+                title: '🎭 同步完成',
+                body: `\`${cmd.source}\` 中未发现可安装的 Agent_Config。`,
+              }),
+            );
+            return;
+          }
+          const source = await getSource(cmd.source);
+          const lines = [
+            `来源：\`${source?.gitUrl ?? cmd.source}\``,
+            '⚠️ **内容未经 Bridge_Maintainer 审核**',
+            '⚠️ `prompt` 可能包含试图诱导模型偏离预期职责的指令，`tools`/`mcpServers` 可能授予超出预期范围的工具访问权限',
+            '',
+            `发现 ${candidates.length} 个候选 Agent_Config：`,
+            '',
+            ...candidates.map((c) => `• **${c.id}**${c.isNew ? ' 🆕' : ''}\n  ${c.summary}`),
+            '',
+            '要安装某个 Agent，请发送：`/agent install ' + cmd.source + ' <name>`',
+          ];
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({ state: 'done', title: '🎭 同步完成', body: lines.join('\n') }),
+          );
+        } catch (e) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'error',
+              title: '❌ 同步失败',
+              body: (e as Error).message.slice(0, 500),
+            }),
+          );
+        }
+        return;
+      }
+      case 'install': {
+        const r = await installAsset(cmd.source, cmd.assetId);
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: r.installed ? 'done' : 'error',
+            title: r.installed ? '✅ Agent 已安装' : '⚠️ 未安装',
+            body: r.installed
+              ? `\`${cmd.assetId}\` 已安装到 \`~/.kiro/agents/\`\n用 \`/agent ${cmd.assetId}\` 切换`
+              : (r.reason ?? '安装失败'),
+          }),
+        );
+        return;
+      }
+      case 'install-defaults': {
+        const library = listPersonaLibrary();
+        if (library.length === 0) {
+          await this.sendInteractiveCard(
+            msg,
+            buildAckCard({
+              state: 'error',
+              title: '❌ 默认角色库为空',
+              body: '未找到内置角色文件。',
+            }),
+          );
+          return;
+        }
+        const { existsSync, writeFileSync, mkdirSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const { homedir } = await import('node:os');
+        const agentsDir = join(homedir(), '.kiro', 'agents');
+        mkdirSync(agentsDir, { recursive: true });
+        let installed = 0;
+        let skipped = 0;
+        for (const entry of library) {
+          const filePath = join(agentsDir, `${entry.name}.json`);
+          if (existsSync(filePath)) {
+            skipped++;
+          } else {
+            writeFileSync(filePath, JSON.stringify(entry.config, null, 2) + '\n', 'utf-8');
+            installed++;
+          }
+        }
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '✅ 默认角色库已安装',
+            body: `已安装 ${installed} 个，跳过 ${skipped} 个已存在的。\n\n用 \`/agent\` 查看全部可用角色。`,
+          }),
+        );
+        return;
+      }
+    }
   }
 }

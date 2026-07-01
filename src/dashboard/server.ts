@@ -26,6 +26,8 @@ import type { CronStore } from '../cron/store.js';
 import { listProcesses } from '../daemon/registry.js';
 import { readRecentLogLines } from '../lib/logger.js';
 import { listGlobalSkills } from './skills.js';
+import { listGlobalAgents } from '../kiro/agents.js';
+import { listInstalls } from '../assets/gitSource.js';
 
 // tsup 把整个包打成单文件 bundle（dist/cli.js / dist/index.js），不保留 src/
 // 的目录结构——所以运行时 import.meta.url 指向的是 dist/cli.js，HERE 算出来
@@ -90,6 +92,8 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
 
   const logs = readRecentLogLines(120);
   const skills = listGlobalSkills();
+  const agents = listGlobalAgents();
+  const assetInstalls = await listInstalls();
 
   return {
     bridge: {
@@ -103,6 +107,8 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     cron,
     processes,
     skills,
+    agents,
+    assetInstalls,
     logs,
   };
 }

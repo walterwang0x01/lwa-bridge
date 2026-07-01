@@ -7,6 +7,7 @@ import SessionsPanel from './components/SessionsPanel.vue';
 import CronPanel from './components/CronPanel.vue';
 import ProcessesPanel from './components/ProcessesPanel.vue';
 import SkillsPanel from './components/SkillsPanel.vue';
+import AgentsPanel from './components/AgentsPanel.vue';
 import LogsPanel from './components/LogsPanel.vue';
 
 const { data, error, lastUpdated } = useOverview();
@@ -25,6 +26,7 @@ const connected = computed(() => data.value !== null && error.value === null);
       <CronPanel :cron="data?.cron ?? []" />
       <ProcessesPanel :processes="data?.processes ?? []" />
       <SkillsPanel :skills="data?.skills ?? []" />
+      <AgentsPanel :agents="data?.agents ?? []" />
       <div class="lg:col-span-2">
         <LogsPanel :logs="data?.logs ?? []" />
       </div>
