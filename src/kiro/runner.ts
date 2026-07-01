@@ -85,6 +85,7 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     resumeId,
     binPath = 'kiro-cli',
     model,
+    agent,
     timeoutMs = 10 * 60 * 1000,
     idleTimeoutMs = 0,
     onEvent,
@@ -116,6 +117,7 @@ export async function runKiro(opts: RunOptions): Promise<RunResult> {
     // 自管：自己 spawn + initialize + load/new（每 turn 一进程）
     const spawnCfg: AcpClientConfig = { binPath, cwd };
     if (model) spawnCfg.model = model;
+    if (agent) spawnCfg.agent = agent;
     if (extraEnv) spawnCfg.env = extraEnv;
     client = AcpClient.spawn(spawnCfg);
   }

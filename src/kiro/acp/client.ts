@@ -45,6 +45,8 @@ export interface AcpClientConfig {
   permissionPolicy?: string;
   /** 启动时通过 --model 指定模型（不传用 Kiro 默认）。 */
   model?: string;
+  /** 启动时通过 --agent 指定 agent（不传用 Kiro 默认）。 */
+  agent?: string;
 }
 
 interface Pending {
@@ -176,6 +178,7 @@ export class AcpClient {
     const bin = config.binPath ?? 'kiro-cli';
     const args = [...(config.args ?? ['acp'])];
     if (config.model) args.push('--model', config.model);
+    if (config.agent) args.push('--agent', config.agent);
     log().debug({ bin, args, cwd: config.cwd }, 'spawning ACP subprocess');
     const proc = execa(bin, args, {
       cwd: config.cwd,

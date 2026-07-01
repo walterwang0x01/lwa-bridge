@@ -12,11 +12,13 @@ const h = vi.hoisted(() => ({
   newSession: vi.fn<(cwd: string) => Promise<string>>(),
   cancel: vi.fn<() => Promise<void>>(),
   close: vi.fn<() => Promise<void>>(),
+  spawn: vi.fn<(config: unknown) => void>(),
 }));
 
 vi.mock('./acp/client.js', () => {
   class FakeAcpClient {
-    static spawn() {
+    static spawn(config: unknown) {
+      h.spawn(config);
       return new FakeAcpClient();
     }
     async initialize() {
@@ -103,5 +105,24 @@ describe('runKiro session 续接降级', () => {
     expect(h.loadSession).not.toHaveBeenCalled();
     expect(h.newSession).toHaveBeenCalledWith('/tmp/proj');
     expect(result.newSessionId).toBe('sess_fresh');
+  });
+
+  it('传入 agent 时透传给 AcpClient.spawn 的 config', async () => {
+    h.newSession.mockResolvedValueOnce('sess_agent');
+
+    await runKiro({ prompt: 'hi', cwd: '/tmp/proj', agent: 'code-reviewer' });
+
+    expect(h.spawn).toHaveBeenCalled();
+    const cfg = h.spawn.mock.calls[0]?.[0] as { agent?: string };
+    expect(cfg.agent).toBe('code-reviewer');
+  });
+
+  it('不传 agent 时 spawn config 不含 agent', async () => {
+    h.newSession.mockResolvedValueOnce('sess_noagent');
+
+    await runKiro({ prompt: 'hi', cwd: '/tmp/proj' });
+
+    const cfg = h.spawn.mock.calls[0]?.[0] as { agent?: string };
+    expect(cfg.agent).toBeUndefined();
   });
 });
