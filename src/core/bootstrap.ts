@@ -16,6 +16,7 @@ import { Dispatcher } from './dispatcher.js';
 import { registerSelf, unregisterSelf, listProcesses } from '../daemon/registry.js';
 import { CronStore } from '../cron/store.js';
 import { CronScheduler } from '../cron/scheduler.js';
+import { startDashboard, type DashboardHandle } from '../dashboard/server.js';
 import { buildAckCard } from '../card/builders.js';
 
 export interface RunBridgeHandle {
@@ -128,6 +129,23 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   // 加载持久化的 cron 任务，注册到调度器
   await cronScheduler.start();
 
+  // 启动只读 Web Dashboard（默认开，绑 127.0.0.1）。失败不阻塞主流程。
+  let dashboard: DashboardHandle | undefined;
+  if (config.dashboard.enabled) {
+    try {
+      dashboard = startDashboard({
+        port: config.dashboard.port,
+        appId: config.lark.appId,
+        startedAt: Date.now(),
+        sessions,
+        cronStore,
+        logger: log,
+      });
+    } catch (e) {
+      log.warn({ err: e }, 'dashboard failed to start (non-fatal)');
+    }
+  }
+
   await startEventLoop();
 
   let stopped = false;
@@ -139,6 +157,9 @@ export async function runBridge(): Promise<RunBridgeHandle> {
       cronScheduler.stop();
     } catch {
       // ignore
+    }
+    if (dashboard) {
+      await dashboard.close().catch(() => undefined);
     }
     try {
       larkRef.close();

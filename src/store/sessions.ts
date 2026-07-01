@@ -86,6 +86,13 @@ async function withLock<T>(fn: () => T): Promise<T> {
 
 export class SessionStore {
   /**
+   * 列出所有 chat 的会话状态（只读，给 dashboard 总览用）。
+   */
+  async listAll(): Promise<Record<string, ChatSession>> {
+    return withLock(() => readFile().chats);
+  }
+
+  /**
    * 获取一个 chat 的会话状态；不存在则用 defaultCwd 初始化。
    */
   async get(chatId: string, defaultCwd: string): Promise<ChatSession> {

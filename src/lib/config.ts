@@ -75,6 +75,16 @@ export const ConfigSchema = z.object({
       logRetentionDays: z.number().int().positive().default(7),
     })
     .default({}),
+  /**
+   * 只读 Web Dashboard：在本机起一个 HTTP server，浏览器看会话/任务/日志。
+   * 绑定 127.0.0.1（仅本机）；手机访问用 Tailscale serve 代理该端口。
+   */
+  dashboard: z
+    .object({
+      enabled: z.boolean().default(true),
+      port: z.number().int().positive().default(5180),
+    })
+    .default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
