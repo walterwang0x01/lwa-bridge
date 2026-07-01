@@ -380,6 +380,7 @@ export function buildHelpCard(opts?: {
       ['/config', '查看 / 编辑访问控制 + 偏好（管理员）'],
       ['/steering', '管理 Kiro steering（指令文件）'],
       ['/cron', '管理定时任务'],
+      ['/conduit', '多 agent 并行编排（run / plan，管理员）'],
       ['/ps', '列出本机所有 bridge 进程'],
       ['/exit <id>', '停止指定进程（管理员）'],
       ['/reconnect', '重连飞书 WebSocket'],
@@ -1677,6 +1678,61 @@ export function buildCronTranslateConfirmCard(opts: { raw: string; prompt: strin
                   type: 'default',
                   size: 'small',
                   value: { action: 'cron.list' },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    },
+  };
+}
+
+/**
+ * /conduit run --merge 的二次确认卡片。
+ *
+ * 合并会修改 base branch（不可逆），必须显式确认。点「确认」走
+ * conduit.confirmMerge action，点「取消」走 conduit.cancel。
+ */
+export function buildConduitMergeConfirmCard(opts: { cwd: string }): object {
+  return {
+    schema: '2.0',
+    header: buildHeader({ title: '⚠️ 确认合并', template: 'orange' }),
+    body: {
+      elements: [
+        md(
+          [
+            '`/conduit run --merge` 会在编排完成后**自动合并**通过的分支到 base branch。',
+            '',
+            `目录：\`${opts.cwd}\``,
+            '',
+            '**这是不可逆操作**——合并后 base branch 会被修改。确定继续吗？',
+          ].join('\n'),
+        ),
+        hr(),
+        columnSet({
+          flexMode: 'flow',
+          horizontalSpacing: 'small',
+          columns: [
+            column({
+              width: 'auto',
+              elements: [
+                btn({
+                  text: '✅ 确认，跑编排并合并',
+                  type: 'primary',
+                  size: 'small',
+                  value: { action: 'conduit.confirmMerge', cwd: opts.cwd },
+                }),
+              ],
+            }),
+            column({
+              width: 'auto',
+              elements: [
+                btn({
+                  text: '取消',
+                  type: 'default',
+                  size: 'small',
+                  value: { action: 'conduit.cancel' },
                 }),
               ],
             }),

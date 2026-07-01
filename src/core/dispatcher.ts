@@ -47,8 +47,10 @@ import {
   buildCronListCard,
   buildCronTranslateConfirmCard,
   buildCronTranslatedConfirmCard,
+  buildConduitMergeConfirmCard,
 } from '../card/builders.js';
 import { ChatPipeline } from './pipeline.js';
+import { runConduit, type ConduitResult } from '../conduit/runner.js';
 import { listProcesses, findProcess } from '../daemon/registry.js';
 import {
   MemoryStore,
@@ -401,6 +403,9 @@ export class Dispatcher {
         case 'cron':
           // list 只读，不要 admin；其他全要
           return cmd.mode !== 'list' && cmd.mode !== 'next';
+        case 'conduit':
+          // run/plan 会建 worktree、跑 git、调多个 Kiro，要 admin；help 只读
+          return cmd.mode !== 'help';
         default:
           return false;
       }
@@ -622,6 +627,10 @@ export class Dispatcher {
         }
         case 'schedule': {
           await this.handleScheduleCmd(msg);
+          return;
+        }
+        case 'conduit': {
+          await this.handleConduitCmd(msg, cmd, session.currentCwd);
           return;
         }
         case 'kiro-internal': {
@@ -1436,6 +1445,48 @@ export class Dispatcher {
         await this.handleScheduleCancel(evt);
         return;
       }
+      case 'conduit.confirmMerge': {
+        const cwd = String(evt.value['cwd'] ?? session.currentCwd);
+        // 替换确认卡片为"运行中"，然后走 pipeline 异步跑
+        const runningCard = buildLoadingCard(
+          `编排 + 合并运行中：\`${cwd}\` …\n分钟级任务，完成后自动合并到 base branch`,
+          '🚦 conduit run --merge',
+        );
+        try {
+          await this.lark.patchCard(evt.messageId, runningCard);
+        } catch {
+          await this.sendCardToChat(evt.chatId, runningCard);
+        }
+        const pipeline = this.getPipeline(evt.chatId);
+        await pipeline.submit({
+          id: `conduit-merge-${Date.now()}`,
+          run: async (signal) => {
+            const r = await this.runConduitStreaming(
+              ['run', '--workspace', cwd, '--merge'],
+              cwd,
+              signal,
+              evt.messageId,
+              '🚦 conduit run --merge',
+            );
+            const card = this.conduitRunCard(r, true);
+            try {
+              await this.lark.patchCard(evt.messageId, card);
+            } catch {
+              await this.sendCardToChat(evt.chatId, card);
+            }
+          },
+        });
+        return;
+      }
+      case 'conduit.cancel': {
+        const card = buildAckCard({ state: 'aborted', title: '已取消', body: '不执行合并。' });
+        try {
+          await this.lark.patchCard(evt.messageId, card);
+        } catch {
+          await this.sendCardToChat(evt.chatId, card);
+        }
+        return;
+      }
       default:
         // 用 warn 级别（默认日志可见），方便排查"按钮点了没反应"这类问题
         this.log.warn(
@@ -1465,7 +1516,8 @@ export class Dispatcher {
       action === 'cron.rm' ||
       action === 'cron.translateConfirm' ||
       action === 'cron.createConfirmed' ||
-      action === 'schedule.submit'
+      action === 'schedule.submit' ||
+      action === 'conduit.confirmMerge'
     );
   }
 
@@ -2276,6 +2328,173 @@ export class Dispatcher {
       minute: 0,
     };
     await this.sendInteractiveCard(msg, buildScheduleFormCard({ state: initial }));
+  }
+
+  /**
+   * /conduit — 串联 kiro-conduit（多 agent 并行编排器）
+   *
+   *   /conduit            → 帮助
+   *   /conduit run        → 在当前 cwd 跑 `kiro-conduit run --workspace <cwd>`
+   *                         默认不 merge（产出分支供 review），安全
+   *   /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
+   *
+   * 设计取舍：
+   *   - conduit 是分钟级长任务，用 sendInteractiveCardAsync 占位→结果，不做流式（MVP）
+   *   - run 默认不加 --merge：绝不自动改用户分支，只产出 review 分支（安全优先）
+   *   - 串联靠 spawn `kiro-conduit` 子进程（同 kiro-cli/lark-cli 模式），需先装上 PATH
+   */
+  private async handleConduitCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'conduit' }>,
+    cwd: string,
+  ): Promise<void> {
+    if (cmd.mode === 'help') {
+      const body = [
+        '**kiro-conduit** — 多 agent 并行编排器（把大 spec 拆成 DAG 并行跑）。',
+        '',
+        '`/conduit run` — 在当前目录跑编排（需要目录下有 `dag.yaml`）',
+        '　默认**不合并**，只产出分支供 review；不会动你的工作区',
+        '`/conduit plan <spec.md>` — 让 Kiro 把一份 markdown spec 拆成 `dag.yaml`',
+        '',
+        `当前目录：\`${cwd}\``,
+        '',
+        "<font color='grey'>前提：本机已 `uv tool install` / `pipx install` kiro-conduit</font>",
+      ].join('\n');
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({ state: 'done', title: '🚦 /conduit 帮助', body }),
+      );
+      return;
+    }
+
+    if (cmd.mode === 'run-merge') {
+      // 二次确认卡片：合并是不可逆的（改了 base branch），必须确认
+      await this.sendInteractiveCard(msg, buildConduitMergeConfirmCard({ cwd }));
+      return;
+    }
+
+    if (cmd.mode === 'plan') {
+      const outDir = `${cwd}/.conduit-plan`;
+      await this.sendInteractiveCardAsync(
+        msg,
+        buildLoadingCard(`拆分 spec：\`${cmd.spec}\` …（可能几分钟）`, '🗺️ conduit plan'),
+        async () => {
+          const r = await runConduit(['plan', '--spec', cmd.spec, '--out', outDir], { cwd });
+          return buildAckCard({
+            state: r.ok ? 'done' : 'error',
+            title: r.ok ? '🗺️ 拆分完成' : r.notFound ? '❌ kiro-conduit 未安装' : '❌ 拆分失败',
+            body: [
+              r.ok
+                ? `已生成 \`${outDir}/dag.yaml\`。review 后用 \`/conduit run\` 执行。`
+                : r.notFound
+                  ? ''
+                  : r.timedOut
+                    ? '超时（>30min）。大 spec 拆分较慢，建议本机直接跑 `kiro-conduit plan`。'
+                    : `退出码 ${r.exitCode}。`,
+              '',
+              '```',
+              r.output || '（无输出）',
+              '```',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          });
+        },
+      );
+      return;
+    }
+
+    // mode === 'run'
+    const pipeline = this.getPipeline(msg.chatId);
+    await pipeline.submit({
+      id: `conduit-run-${Date.now()}`,
+      run: async (signal) => {
+        const placeholderCard = buildLoadingCard(
+          `编排运行中：\`${cwd}\` …\n分钟级任务，会建 worktree 并行跑 Kiro，请耐心等`,
+          '🚦 conduit run',
+        );
+        let placeholderMessageId: string | undefined;
+        try {
+          placeholderMessageId = await this.lark.replyCard(msg.messageId, placeholderCard);
+        } catch (e) {
+          this.log.error({ err: e }, 'conduit placeholder send failed');
+        }
+        const r = await this.runConduitStreaming(
+          ['run', '--workspace', cwd],
+          cwd,
+          signal,
+          placeholderMessageId,
+          '🚦 conduit run',
+        );
+        await this.patchConduitFinal(placeholderMessageId, msg, this.conduitRunCard(r, false));
+      },
+    });
+  }
+
+  /**
+   * 跑 conduit 并把流式输出节流刷到占位卡片。返回最终结果，由调用方渲染终态卡。
+   * 节流 2s：飞书 patchCard 有频率限制，太频繁会被限流。
+   */
+  private async runConduitStreaming(
+    args: string[],
+    cwd: string,
+    signal: AbortSignal,
+    messageId: string | undefined,
+    runningTitle: string,
+  ): Promise<ConduitResult> {
+    let lastPatch = 0;
+    const onProgress = (tailStr: string): void => {
+      const now = Date.now();
+      if (now - lastPatch < 2000 || !messageId) return;
+      lastPatch = now;
+      const card = buildLoadingCard(`\`\`\`\n${tailStr}\n\`\`\``, runningTitle);
+      void this.lark.patchCard(messageId, card).catch(() => {});
+    };
+    return runConduit(args, { cwd, signal, onProgress });
+  }
+
+  /** 把终态卡片 patch 到占位卡片；占位没发出去就新发一张。 */
+  private async patchConduitFinal(
+    messageId: string | undefined,
+    msg: IncomingMessage,
+    card: object,
+  ): Promise<void> {
+    if (messageId) {
+      await this.lark.patchCard(messageId, card).catch(() => this.sendInteractiveCard(msg, card));
+    } else {
+      await this.sendInteractiveCard(msg, card);
+    }
+  }
+
+  /** 根据 conduit 运行结果渲染终态卡片。merged=true 表示带了 --merge。 */
+  private conduitRunCard(r: ConduitResult, merged: boolean): object {
+    const title = r.notFound
+      ? '❌ kiro-conduit 未安装'
+      : r.aborted
+        ? '⏹ 编排已中止'
+        : r.ok
+          ? merged
+            ? '✅ 编排+合并完成'
+            : '✅ 编排完成'
+          : r.timedOut
+            ? '⏱ 编排超时'
+            : '⚠️ 编排结束（有失败项）';
+    const head = r.notFound
+      ? ''
+      : r.aborted
+        ? '已发出终止信号，子进程正在收尾。'
+        : r.timedOut
+          ? '超时（>30min）被终止。可在本机直接跑 `kiro-conduit run` 看完整过程。'
+          : r.ok
+            ? merged
+              ? '通过的分支已合并到 base branch。'
+              : '默认未合并，产出分支已供 review（见下方输出）。'
+            : `退出码 ${r.exitCode}。部分任务可能失败（已通过的仍会合进 integration 分支）。`;
+    return buildAckCard({
+      state: r.ok && !r.aborted ? 'done' : r.aborted ? 'aborted' : 'error',
+      title,
+      body: [head, '', '```', r.output || '（无输出）', '```'].filter(Boolean).join('\n'),
+    });
   }
 
   /**

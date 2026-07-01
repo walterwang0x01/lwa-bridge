@@ -58,6 +58,10 @@ export type ParsedCommand =
   | { kind: 'cron'; mode: 'next'; id: string }
   | { kind: 'cron'; mode: 'translate'; raw: string }
   | { kind: 'schedule'; mode: 'new' }
+  | { kind: 'conduit'; mode: 'run' }
+  | { kind: 'conduit'; mode: 'run-merge' }
+  | { kind: 'conduit'; mode: 'plan'; spec: string }
+  | { kind: 'conduit'; mode: 'help' }
   | { kind: 'model'; mode: 'show' }
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
@@ -337,6 +341,28 @@ export function parseCommand(text: string): ParsedCommand | null {
     }
     case 'help':
       return { kind: 'help' };
+    case 'conduit': {
+      // /conduit            → 帮助
+      // /conduit run        → 在当前 cwd 跑 kiro-conduit run（默认不 merge）
+      // /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
+      if (!tail) return { kind: 'conduit', mode: 'help' };
+      const tokens = tail.split(/\s+/);
+      const sub = (tokens[0] ?? '').toLowerCase();
+      if (sub === 'run') {
+        const rest = tokens.slice(1).join(' ').trim().toLowerCase();
+        if (rest === '--merge' || rest === '-m' || rest === 'merge') {
+          return { kind: 'conduit', mode: 'run-merge' };
+        }
+        return { kind: 'conduit', mode: 'run' };
+      }
+      if (sub === 'plan') {
+        const spec = tokens.slice(1).join(' ').trim();
+        if (!spec) return { kind: 'unknown', raw: trimmed };
+        return { kind: 'conduit', mode: 'plan', spec };
+      }
+      if (sub === 'help' || sub === '?') return { kind: 'conduit', mode: 'help' };
+      return { kind: 'unknown', raw: trimmed };
+    }
     case 'ws': {
       const [sub, ...nameParts] = tail.split(/\s+/);
       const name = nameParts.join(' ').trim();

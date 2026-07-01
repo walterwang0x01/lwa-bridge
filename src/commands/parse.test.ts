@@ -638,3 +638,57 @@ describe('parseCommand', () => {
     });
   });
 });
+
+describe('/conduit', () => {
+  it('/conduit → help', () => {
+    expect(parseCommand('/conduit')).toEqual({ kind: 'conduit', mode: 'help' });
+  });
+
+  it('/conduit help → help', () => {
+    expect(parseCommand('/conduit help')).toEqual({ kind: 'conduit', mode: 'help' });
+  });
+
+  it('/conduit ? → help', () => {
+    expect(parseCommand('/conduit ?')).toEqual({ kind: 'conduit', mode: 'help' });
+  });
+
+  it('/conduit run → run', () => {
+    expect(parseCommand('/conduit run')).toEqual({ kind: 'conduit', mode: 'run' });
+  });
+
+  it('/conduit run --merge → run-merge', () => {
+    expect(parseCommand('/conduit run --merge')).toEqual({ kind: 'conduit', mode: 'run-merge' });
+  });
+
+  it('/conduit run -m → run-merge', () => {
+    expect(parseCommand('/conduit run -m')).toEqual({ kind: 'conduit', mode: 'run-merge' });
+  });
+
+  it('/conduit run merge → run-merge', () => {
+    expect(parseCommand('/conduit run merge')).toEqual({ kind: 'conduit', mode: 'run-merge' });
+  });
+
+  it('/conduit plan specs/my-feature.md → plan', () => {
+    expect(parseCommand('/conduit plan specs/my-feature.md')).toEqual({
+      kind: 'conduit',
+      mode: 'plan',
+      spec: 'specs/my-feature.md',
+    });
+  });
+
+  it('/conduit plan（无 spec）→ unknown', () => {
+    expect(parseCommand('/conduit plan')).toEqual({ kind: 'unknown', raw: '/conduit plan' });
+  });
+
+  it('/conduit plan 带空格的路径', () => {
+    expect(parseCommand('/conduit plan docs/big feature spec.md')).toEqual({
+      kind: 'conduit',
+      mode: 'plan',
+      spec: 'docs/big feature spec.md',
+    });
+  });
+
+  it('/conduit 未知子命令 → unknown', () => {
+    expect(parseCommand('/conduit foo')).toEqual({ kind: 'unknown', raw: '/conduit foo' });
+  });
+});
