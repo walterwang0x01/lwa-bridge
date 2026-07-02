@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import type { Logger } from 'pino';
 import type { SessionStore } from '../store/sessions.js';
 import type { CronStore } from '../cron/store.js';
+import type { TaskHistoryStore } from '../store/taskHistory.js';
 import { listProcesses } from '../daemon/registry.js';
 import { readRecentLogLines } from '../lib/logger.js';
 import { listGlobalSkills } from './skills.js';
@@ -55,6 +56,7 @@ export interface DashboardDeps {
   startedAt: number;
   sessions: SessionStore;
   cronStore?: CronStore;
+  taskHistory?: TaskHistoryStore;
   logger: Logger;
 }
 
@@ -94,6 +96,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
   const skills = listGlobalSkills();
   const agents = listGlobalAgents();
   const assetInstalls = await listInstalls();
+  const taskHistory = deps.taskHistory ? await deps.taskHistory.listRecent(50) : [];
 
   return {
     bridge: {
@@ -109,6 +112,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     skills,
     agents,
     assetInstalls,
+    taskHistory,
     logs,
   };
 }

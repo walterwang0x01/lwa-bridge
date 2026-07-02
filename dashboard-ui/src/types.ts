@@ -48,6 +48,19 @@ export interface AssetInstallRecord {
   installedAt: number;
 }
 
+export interface TaskHistoryRecord {
+  taskId: string;
+  chatId: string;
+  cwd: string;
+  startedAt: number;
+  finishedAt: number;
+  terminal: string;
+  promptPreview: string;
+  toolCallCount: number;
+  artifacts: string[];
+  errorMsg?: string;
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -64,5 +77,6 @@ export interface Overview {
   skills: SkillSummary[];
   agents: AgentSummary[];
   assetInstalls: AssetInstallRecord[];
+  taskHistory: TaskHistoryRecord[];
   logs: string[];
 }

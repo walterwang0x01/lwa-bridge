@@ -215,6 +215,34 @@ export class RunCardController {
     return this.state.blocks.length > 0;
   }
 
+  /** 当前终态（finalize 调用后有效）。供 TaskHistoryStore 记录用。 */
+  getTerminal(): TerminalState {
+    return this.state.terminal;
+  }
+
+  /** 错误信息（terminal === 'error' 时有值）。供 TaskHistoryStore 记录用。 */
+  getErrorMsg(): string | undefined {
+    return this.state.errorMsg;
+  }
+
+  /**
+   * 任务历史摘要：工具调用总数 + 涉及的文件路径（去重）。
+   * 供 executeKiroTask finalize 后写入 TaskHistoryStore。
+   * 文件路径从常见写文件工具的 input.path/input.file_path 字段提取，
+   * 提取不到不算错误（不是所有工具都操作文件）。
+   */
+  summarizeForHistory(): { toolCallCount: number; artifacts: string[] } {
+    const artifacts = new Set<string>();
+    let toolCallCount = 0;
+    for (const b of this.state.blocks) {
+      if (b.kind !== 'tool') continue;
+      toolCallCount++;
+      const p = b.tool.input['path'] ?? b.tool.input['file_path'] ?? b.tool.input['targetFile'];
+      if (typeof p === 'string' && p) artifacts.add(p);
+    }
+    return { toolCallCount, artifacts: [...artifacts] };
+  }
+
   /**
    * 丢弃这张卡片：撤回已发出的占位消息，不留任何终态。
    * 用于"被抢占且零输出"的任务——显示"已中止"纯属噪音。

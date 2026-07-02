@@ -27,3 +27,6 @@ coverage/
 .claude/
 CLAUDE.md
 AGENTS.md
+
+# Swift Package Manager 构建产物
+.build/

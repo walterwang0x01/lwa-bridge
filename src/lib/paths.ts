@@ -20,6 +20,7 @@ export const CRON_FILE = join(DATA_DIR, 'cron.json');
 export const ACTIVE_CARDS_FILE = join(DATA_DIR, 'active-cards.json');
 export const ASSET_SOURCES_FILE = join(DATA_DIR, 'asset-sources.json');
 export const ASSET_INSTALLS_FILE = join(DATA_DIR, 'asset-installs.json');
+export const TASK_HISTORY_FILE = join(DATA_DIR, 'task-history.json');
 
 /**
  * 确保数据目录存在；权限 0700（只有当前用户可访问，因为里面有 App Secret）。

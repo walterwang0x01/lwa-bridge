@@ -23,6 +23,7 @@ import { readRecentLogLines } from '../lib/logger.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
 import type { ActiveCardsStore } from '../store/activeCards.js';
+import type { TaskHistoryStore } from '../store/taskHistory.js';
 import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
@@ -92,6 +93,8 @@ export interface DispatcherOptions {
   cronScheduler?: CronScheduler;
   /** 进行中卡片注册表；由 bootstrap 注入。不传时所有 add/remove 都是 no-op（兼容老调用方）*/
   activeCards?: ActiveCardsStore;
+  /** 任务历史记录；由 bootstrap 注入。不传时不记录历史（兼容老调用方）*/
+  taskHistory?: TaskHistoryStore;
 }
 
 export class Dispatcher {
@@ -110,6 +113,7 @@ export class Dispatcher {
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
   private readonly activeCards?: ActiveCardsStore;
+  private readonly taskHistory?: TaskHistoryStore;
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config;
@@ -121,6 +125,7 @@ export class Dispatcher {
     if (opts.cronStore) this.cronStore = opts.cronStore;
     if (opts.cronScheduler) this.cronScheduler = opts.cronScheduler;
     if (opts.activeCards) this.activeCards = opts.activeCards;
+    if (opts.taskHistory) this.taskHistory = opts.taskHistory;
     this.acpPool = new AcpPool({
       clientConfig: {
         binPath: this.config.kiro.binPath,
@@ -2866,6 +2871,7 @@ export class Dispatcher {
   ): Promise<void> {
     const pipeline = this.getPipeline(msg.chatId);
     const taskId = `${msg.eventId || msg.messageId}-${Date.now().toString(36)}`;
+    const taskStartedAt = Date.now();
 
     // 任务开始前：清理该 chat 上次任务遗留的 plan 文件，准备新目录
     const planDir = planDirFor(msg.chatId);
@@ -3032,6 +3038,26 @@ export class Dispatcher {
           if (this.activeCards && cardMessageId) {
             await this.activeCards.remove(msg.chatId, cardMessageId).catch((e) => {
               this.log.warn({ err: e, taskId }, 'active-cards remove failed (non-fatal)');
+            });
+          }
+          // 记录任务历史（discard 掉的空任务 terminal 仍是 'running'，不记录，没有展示价值）
+          if (this.taskHistory && ctrl.getTerminal() !== 'running') {
+            const { toolCallCount, artifacts } = ctrl.summarizeForHistory();
+            const record: Parameters<TaskHistoryStore['add']>[0] = {
+              taskId,
+              chatId: msg.chatId,
+              cwd,
+              startedAt: taskStartedAt,
+              finishedAt: Date.now(),
+              terminal: ctrl.getTerminal(),
+              promptPreview: prompt.slice(0, 100),
+              toolCallCount,
+              artifacts,
+            };
+            const errMsg = ctrl.getErrorMsg();
+            if (errMsg !== undefined) record.errorMsg = errMsg;
+            await this.taskHistory.add(record).catch((e) => {
+              this.log.warn({ err: e, taskId }, 'task-history add failed (non-fatal)');
             });
           }
         }

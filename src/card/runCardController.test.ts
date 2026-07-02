@@ -303,3 +303,45 @@ describe('RunCardController patch 竞态', () => {
     expect(last?.template).toBe('green');
   });
 });
+
+describe('summarizeForHistory', () => {
+  it('统计工具调用总数并去重提取文件路径', () => {
+    const ctrl = makeController();
+    ctrl.applyEvent({
+      kind: 'tool',
+      sessionId: 's',
+      toolCallId: 't1',
+      name: 'fs_write',
+      status: 'completed',
+      raw: { rawInput: { path: '/tmp/proj/a.ts' } },
+    });
+    ctrl.applyEvent({
+      kind: 'tool',
+      sessionId: 's',
+      toolCallId: 't2',
+      name: 'execute_bash',
+      status: 'completed',
+      raw: { rawInput: { command: 'ls' } },
+    });
+    ctrl.applyEvent({
+      kind: 'tool',
+      sessionId: 's',
+      toolCallId: 't3',
+      name: 'fs_write',
+      status: 'completed',
+      raw: { rawInput: { path: '/tmp/proj/a.ts' } },
+    });
+
+    const summary = ctrl.summarizeForHistory();
+    expect(summary.toolCallCount).toBe(3);
+    expect(summary.artifacts).toEqual(['/tmp/proj/a.ts']);
+  });
+
+  it('没有工具调用时返回空摘要', () => {
+    const ctrl = makeController();
+    ctrl.applyEvent({ kind: 'message', sessionId: 's', text: 'hi' });
+    const summary = ctrl.summarizeForHistory();
+    expect(summary.toolCallCount).toBe(0);
+    expect(summary.artifacts).toEqual([]);
+  });
+});

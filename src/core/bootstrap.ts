@@ -12,6 +12,7 @@ import { pruneOldMedia } from '../lark/media.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
 import { ActiveCardsStore, type ActiveCard } from '../store/activeCards.js';
+import { TaskHistoryStore } from '../store/taskHistory.js';
 import { Dispatcher } from './dispatcher.js';
 import { registerSelf, unregisterSelf, listProcesses } from '../daemon/registry.js';
 import { CronStore } from '../cron/store.js';
@@ -71,6 +72,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   const workspaces = new WorkspaceStore();
   const cronStore = new CronStore();
   const activeCards = new ActiveCardsStore();
+  const taskHistory = new TaskHistoryStore();
 
   // 启动时扫描遗留的"进行中卡片"——上次 bridge 被杀时还没 finalize 的任务。
   // 把它们 patch 成"已中断"卡片，避免飞书侧永远显示 loading。
@@ -112,6 +114,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     cronStore,
     cronScheduler,
     activeCards,
+    taskHistory,
     onReconnect: async () => {
       log.info('reconnect requested via /reconnect');
       try {
@@ -139,6 +142,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
         startedAt: Date.now(),
         sessions,
         cronStore,
+        taskHistory,
         logger: log,
       });
     } catch (e) {
