@@ -50,7 +50,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
+    "@biomejs/biome": "2.5.2",
     "@changesets/cli": "^2.31.0",
     "@types/node": "^22.10.0",
     "@types/proper-lockfile": "^4.1.4",
