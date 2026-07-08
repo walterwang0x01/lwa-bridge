@@ -50,6 +50,9 @@ export interface ModelRouteDecision {
   mode: 'fixed' | 'smart';
   selectedModel?: string;
   reason: string;
+  complexityScore?: number;
+  tier?: 'simple' | 'medium' | 'hard';
+  availableModelCount?: number;
 }
 
 export interface AgentTurnOptions {

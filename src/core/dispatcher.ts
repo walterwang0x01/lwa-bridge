@@ -179,7 +179,13 @@ export class Dispatcher {
     prompt: string,
     mediaCount: number,
     commandName?: string,
-  ): Promise<{ profileName: string; profile: RuntimeProfile; reason: string }> {
+  ): Promise<{
+    profileName: string;
+    profile: RuntimeProfile;
+    reason: string;
+    complexityScore?: number;
+    modelDecision?: Awaited<ReturnType<typeof chooseModelForProfile>>;
+  }> {
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
     const picked = chooseRuntimeProfile(
       this.config,
@@ -199,6 +205,8 @@ export class Dispatcher {
       profileName: picked.profileName,
       profile,
       reason: `${picked.reason};${modelDecision.reason}`,
+      complexityScore: picked.complexityScore ?? modelDecision.complexityScore,
+      modelDecision,
     };
   }
 
@@ -3095,11 +3103,8 @@ export class Dispatcher {
         try {
           const sessionTtlMs =
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
-          const { profileName, profile, reason } = await this.selectRuntimeForTask(
-            msg.chatId,
-            finalPrompt,
-            mediaPaths.length,
-          );
+          const { profileName, profile, reason, complexityScore, modelDecision } =
+            await this.selectRuntimeForTask(msg.chatId, finalPrompt, mediaPaths.length);
           const storedSid = await this.sessions.getAgentSession(msg.chatId, cwd, sessionTtlMs);
           const resumeId = storedSid
             ? decodeSessionId(storedSid, profile.kind)
@@ -3107,7 +3112,17 @@ export class Dispatcher {
               : undefined
             : undefined;
           this.log.info(
-            { chatId: msg.chatId, profileName, runtimeKind: profile.kind, reason },
+            {
+              chatId: msg.chatId,
+              profileName,
+              runtimeKind: profile.kind,
+              model: profile.model,
+              reason,
+              complexityScore,
+              modelRouteMode: modelDecision?.mode,
+              modelRouteTier: modelDecision?.tier,
+              availableModelCount: modelDecision?.availableModelCount,
+            },
             'runtime selected for task',
           );
 
@@ -3134,6 +3149,9 @@ export class Dispatcher {
               LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
               LARK_AGENT_RUNTIME: profileName,
               LARK_AGENT_RUNTIME_REASON: reason,
+              LARK_AGENT_COMPLEXITY_SCORE: String(complexityScore ?? ''),
+              LARK_AGENT_MODEL: profile.model ?? '',
+              LARK_AGENT_MODEL_REASON: modelDecision?.reason ?? '',
             },
             pooled,
           };

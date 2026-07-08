@@ -17,7 +17,7 @@ export interface RuntimeDecision {
   profileName: string;
   profile: RuntimeProfile;
   reason: string;
-  modelDecision?: ModelRouteDecision;
+  complexityScore?: number;
 }
 
 function isBinAvailable(bin: string): boolean {
@@ -32,7 +32,7 @@ function availableProfiles(cfg: Config): Array<{ name: string; profile: RuntimeP
     .filter(({ profile }) => isBinAvailable(profile.bin));
 }
 
-function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {
+export function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {
   const prompt = ctx.prompt.trim();
   const lower = prompt.toLowerCase();
   const rules = cfg.runtime?.router?.rules;
@@ -61,6 +61,7 @@ export function chooseRuntimeProfile(
       profileName: explicitProfileName,
       profile: resolveRuntimeProfile(cfg, explicitProfileName),
       reason: 'explicit-profile',
+      complexityScore: complexityScore(cfg, ctx),
     };
   }
 
@@ -68,15 +69,22 @@ export function chooseRuntimeProfile(
   const available = availableProfiles(cfg);
   if (available.length === 1) {
     const only = available[0]!;
-    return { profileName: only.name, profile: only.profile, reason: 'single-available-runtime' };
+    return {
+      profileName: only.name,
+      profile: only.profile,
+      reason: 'single-available-runtime',
+      complexityScore: complexityScore(cfg, ctx),
+    };
   }
 
   const defaultName = cfg.runtime?.default ?? 'kiro';
   if (mode !== 'smart' || defaultName !== 'auto') {
+    const score = complexityScore(cfg, ctx);
     return {
       profileName: defaultName === 'auto' ? 'kiro' : defaultName,
       profile: resolveRuntimeProfile(cfg, defaultName === 'auto' ? 'kiro' : defaultName),
       reason: mode === 'smart' ? 'auto-fallback-default' : 'manual-default',
+      complexityScore: score,
     };
   }
 
@@ -100,6 +108,7 @@ export function chooseRuntimeProfile(
         profile: hit.profile,
         reason:
           score >= threshold ? `smart-complex(score=${score})` : `smart-simple(score=${score})`,
+        complexityScore: score,
       };
     }
   }
@@ -108,6 +117,7 @@ export function chooseRuntimeProfile(
     profileName: 'kiro',
     profile: resolveRuntimeProfile(cfg, 'kiro'),
     reason: 'smart-hard-fallback',
+    complexityScore: score,
   };
 }
 
@@ -128,24 +138,28 @@ export async function chooseModelForProfile(
       mode: 'fixed',
       selectedModel: cfg.modelRouting.cursor.model ?? profile.model ?? 'Auto',
       reason: 'cursor-fixed-auto',
+      complexityScore: complexityScore(cfg, ctx),
+      availableModelCount: 1,
     };
   }
 
+  const score = complexityScore(cfg, ctx);
   if (cfg.modelRouting.kiro.mode === 'fixed') {
     return {
       mode: 'fixed',
       selectedModel: profile.model,
       reason: profile.model ? 'kiro-fixed-profile' : 'kiro-fixed-default',
+      complexityScore: score,
     };
   }
 
-  const score = complexityScore(cfg, ctx);
   const list = await listModels(profile.bin);
   if (!list || list.models.length === 0) {
     return {
       mode: 'smart',
       selectedModel: profile.model,
       reason: `kiro-smart-no-list(score=${score})`,
+      complexityScore: score,
     };
   }
 
@@ -184,5 +198,8 @@ export async function chooseModelForProfile(
     mode: 'smart',
     selectedModel: selected,
     reason: `kiro-smart-${tier}(score=${score})`,
+    complexityScore: score,
+    tier,
+    availableModelCount: names.length,
   };
 }

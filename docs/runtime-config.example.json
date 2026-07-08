@@ -1,0 +1,54 @@
+{
+  "lark": {
+    "appId": "your-app-id",
+    "appSecret": "your-app-secret"
+  },
+  "kiro": {
+    "binPath": "kiro-cli",
+    "timeoutMs": 600000,
+    "idleTimeoutMinutes": 5
+  },
+  "runtime": {
+    "default": "auto",
+    "profiles": {
+      "kiro": {
+        "kind": "kiro-cli-acp",
+        "bin": "kiro-cli"
+      },
+      "cursor": {
+        "kind": "cursor-agent-cli",
+        "bin": "agent",
+        "force": true,
+        "model": "Auto"
+      }
+    },
+    "router": {
+      "mode": "smart",
+      "fallbackProfiles": ["kiro", "cursor"],
+      "lark": {
+        "simpleProfile": "cursor",
+        "complexProfile": "kiro",
+        "conduitProfile": "kiro"
+      },
+      "rules": {
+        "maxPromptCharsForCursor": 800,
+        "complexityThreshold": 4,
+        "complexKeywords": ["review", "monorepo", "重构", "架构", "多文件"]
+      }
+    }
+  },
+  "modelRouting": {
+    "cursor": {
+      "mode": "fixed",
+      "model": "Auto"
+    },
+    "kiro": {
+      "mode": "smart",
+      "simpleTier": "balanced",
+      "mediumTier": "strong",
+      "hardTier": "max",
+      "mediumThreshold": 4,
+      "hardThreshold": 7
+    }
+  }
+}
