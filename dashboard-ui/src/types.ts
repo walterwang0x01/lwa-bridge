@@ -58,7 +58,21 @@ export interface TaskHistoryRecord {
   promptPreview: string;
   toolCallCount: number;
   artifacts: string[];
+  runtimeProfile?: string;
+  runtimeKind?: string;
+  model?: string;
+  complexityScore?: number;
   errorMsg?: string;
+}
+
+export interface RuntimeMetricsRow {
+  runtimeKind: string;
+  model: string;
+  total: number;
+  success: number;
+  failed: number;
+  successRate: number;
+  avgDurationMs: number;
 }
 
 export interface BridgeInfo {
@@ -78,5 +92,6 @@ export interface Overview {
   agents: AgentSummary[];
   assetInstalls: AssetInstallRecord[];
   taskHistory: TaskHistoryRecord[];
+  runtimeMetrics: RuntimeMetricsRow[];
   logs: string[];
 }
