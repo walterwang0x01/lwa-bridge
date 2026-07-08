@@ -270,6 +270,22 @@ describe('parseCommand', () => {
     });
   });
 
+  describe('/runtime', () => {
+    it('/runtime', () => {
+      expect(parseCommand('/runtime')).toEqual({ kind: 'runtime', mode: 'show' });
+    });
+    it('/runtime cursor', () => {
+      expect(parseCommand('/runtime cursor')).toEqual({
+        kind: 'runtime',
+        mode: 'set',
+        name: 'cursor',
+      });
+    });
+    it('/rt kiro', () => {
+      expect(parseCommand('/rt kiro')).toEqual({ kind: 'runtime', mode: 'set', name: 'kiro' });
+    });
+  });
+
   describe('/model', () => {
     it('/model 不带参数 → show', () => {
       expect(parseCommand('/model')).toEqual({ kind: 'model', mode: 'show' });

@@ -27,6 +27,10 @@ import type { TaskHistoryStore } from '../store/taskHistory.js';
 import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
+import { runAgentTurn } from '../runtime/runner.js';
+import { listRuntimeProfileNames, resolveRuntimeProfile } from '../runtime/config.js';
+import { decodeSessionId } from '../runtime/sessionId.js';
+import type { RuntimeProfile } from '../runtime/types.js';
 import { AcpPool } from '../kiro/acpPool.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
@@ -108,8 +112,8 @@ export class Dispatcher {
   private readonly memory = new MemoryStore();
   /** Kiro 当前 agent 可用 skill 缓存（per chatId，每次 turn 成功后更新）。 */
   private readonly chatSkills = new Map<string, Array<{ name: string; description: string }>>();
-  /** ACP 进程池：per-chat 常驻 AcpClient，多轮对话复用同一子进程。 */
-  private readonly acpPool: AcpPool;
+  /** per-profile ACP 进程池（仅 kiro-acp runtime 使用）。 */
+  private readonly acpPools = new Map<string, AcpPool>();
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
   private readonly activeCards?: ActiveCardsStore;
@@ -126,14 +130,40 @@ export class Dispatcher {
     if (opts.cronScheduler) this.cronScheduler = opts.cronScheduler;
     if (opts.activeCards) this.activeCards = opts.activeCards;
     if (opts.taskHistory) this.taskHistory = opts.taskHistory;
-    this.acpPool = new AcpPool({
-      clientConfig: {
-        binPath: this.config.kiro.binPath,
-        model: this.config.kiro.model,
-        agent: this.config.kiro.agent,
-      },
-      idleMs: 10 * 60 * 1000,
-    });
+  }
+
+  private acpPoolKey(profile: RuntimeProfile): string {
+    return `${profile.bin}:${profile.model ?? ''}:${profile.agent ?? ''}`;
+  }
+
+  private getAcpPool(profile: RuntimeProfile): AcpPool {
+    const key = this.acpPoolKey(profile);
+    let pool = this.acpPools.get(key);
+    if (!pool) {
+      pool = new AcpPool({
+        clientConfig: {
+          binPath: profile.bin,
+          model: profile.model,
+          agent: profile.agent,
+        },
+        idleMs: 10 * 60 * 1000,
+      });
+      this.acpPools.set(key, pool);
+    }
+    return pool;
+  }
+
+  private async evictChatFromAllPools(chatId: string): Promise<void> {
+    await Promise.all([...this.acpPools.values()].map((p) => p.evict(chatId)));
+  }
+
+  private async resolveChatRuntime(
+    chatId: string,
+  ): Promise<{ profileName: string; profile: RuntimeProfile }> {
+    const stored = await this.sessions.getRuntimeProfile(chatId);
+    const profileName = stored ?? this.config.runtime?.default ?? 'kiro';
+    const profile = resolveRuntimeProfile(this.config, profileName);
+    return { profileName, profile };
   }
 
   private getPipeline(chatId: string): ChatPipeline {
@@ -459,7 +489,8 @@ export class Dispatcher {
           return;
         }
         case 'status': {
-          const kiroSid = await this.sessions.getKiroSession(msg.chatId, session.currentCwd);
+          const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
+          const agentSid = await this.sessions.getAgentSession(msg.chatId, session.currentCwd);
           const wsName = await this.workspaceNameOf(session.currentCwd);
           const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
           const cardOpts: Parameters<typeof buildStatusCard>[0] = {
@@ -467,22 +498,30 @@ export class Dispatcher {
             hasActiveTask: this.getPipeline(msg.chatId).hasActiveTask(),
             idleMinutes: idleMin,
             isPerChatOverride: session.idleTimeoutMinutes !== undefined,
+            runtimeProfile: profileName,
+            runtimeKind: profile.kind,
           };
           if (wsName !== undefined) cardOpts.workspaceName = wsName;
-          if (kiroSid !== undefined) cardOpts.kiroSessionId = kiroSid;
-          if (this.config.kiro.agent !== undefined) cardOpts.currentAgent = this.config.kiro.agent;
+          if (agentSid !== undefined) cardOpts.kiroSessionId = agentSid;
+          if (profile.agent !== undefined) cardOpts.currentAgent = profile.agent;
+          else if (this.config.kiro.agent !== undefined)
+            cardOpts.currentAgent = this.config.kiro.agent;
           await this.sendInteractiveCard(msg, buildStatusCard(cardOpts));
+          return;
+        }
+        case 'runtime': {
+          await this.handleRuntimeCmd(msg, cmd, session.currentCwd);
           return;
         }
         case 'new': {
           await this.sessions.clearKiroSession(msg.chatId, session.currentCwd);
-          await this.acpPool.evict(msg.chatId);
+          await this.evictChatFromAllPools(msg.chatId);
           await this.sendInteractiveCard(
             msg,
             buildAckCard({
               state: 'done',
               title: '🔄 会话已重置',
-              body: `下次提问会在 \`${session.currentCwd}\` 下新建 Kiro session。`,
+              body: `下次提问会在 \`${session.currentCwd}\` 下新建 agent session。`,
             }),
           );
           return;
@@ -911,6 +950,68 @@ export class Dispatcher {
    *   - 切模型只改全局 config.json，不做 per-chat 覆盖（先做最少必要）
    *   - 切完不需要 reconnect，下一条消息直接生效（spawn kiro-cli 时读最新 config）
    */
+  private async handleRuntimeCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'runtime' }>,
+    _cwd: string,
+  ): Promise<void> {
+    if (cmd.mode === 'show') {
+      const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
+      const names = listRuntimeProfileNames(this.config);
+      const lines = names.map((n) => {
+        const p = resolveRuntimeProfile(this.config, n);
+        const cur = n === profileName ? ' ← 当前' : '';
+        return `• \`${n}\` — ${p.kind} (\`${p.bin}\`)${cur}`;
+      });
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'done',
+          title: '⚙️ Agent 引擎',
+          body: [
+            `当前：**${profileName}** (${profile.kind})`,
+            '',
+            '可用 profile：',
+            ...lines,
+            '',
+            '切换：`/runtime cursor` 或 `/runtime kiro`',
+          ].join('\n'),
+        }),
+      );
+      return;
+    }
+
+    const name = cmd.name;
+    try {
+      resolveRuntimeProfile(this.config, name);
+    } catch {
+      const valid = listRuntimeProfileNames(this.config)
+        .map((n) => `\`${n}\``)
+        .join('、');
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'error',
+          title: '❌ 未知引擎',
+          body: `没有 profile \`${name}\`。\n\n可用：${valid}`,
+        }),
+      );
+      return;
+    }
+
+    await this.sessions.setRuntimeProfile(msg.chatId, name, this.config.workspace.defaultCwd);
+    await this.evictChatFromAllPools(msg.chatId);
+    const profile = resolveRuntimeProfile(this.config, name);
+    await this.sendInteractiveCard(
+      msg,
+      buildAckCard({
+        state: 'done',
+        title: '✅ 引擎已切换',
+        body: `已切换到 \`${name}\`（${profile.kind} / \`${profile.bin}\`）。\n下一条消息使用新引擎；旧 session 不会跨引擎续接。`,
+      }),
+    );
+  }
+
   private async handleModelCmd(
     msg: IncomingMessage,
     cmd: Extract<ParsedCommand, { kind: 'model' }>,
@@ -2175,21 +2276,19 @@ export class Dispatcher {
       `输入：${raw}`,
     ].join('\n');
 
-    // 直接调 runKiro 的内部能力
-    const { runKiro } = await import('../kiro/runner.js');
-    let result: Awaited<ReturnType<typeof runKiro>>;
+    // 直接调 runAgentTurn
+    const { runAgentTurn } = await import('../runtime/runner.js');
+    const { resolveRuntimeProfile } = await import('../runtime/config.js');
+    const profile = resolveRuntimeProfile(this.config);
+    let result: Awaited<ReturnType<typeof runAgentTurn>>;
     try {
-      const runOpts: Parameters<typeof runKiro>[0] = {
+      result = await runAgentTurn(profile, {
         prompt: translatePrompt,
         cwd: this.config.workspace.defaultCwd,
-        binPath: this.config.kiro.binPath,
-        trustedTools: [],
         timeoutMs: 60_000,
         idleTimeoutMs: 30_000,
         signal: new AbortController().signal,
-      };
-      if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
-      result = await runKiro(runOpts);
+      });
     } catch (e) {
       await this.sendCardToChat(
         evt.chatId,
@@ -2960,17 +3059,28 @@ export class Dispatcher {
         try {
           const sessionTtlMs =
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
-          const resumeId = await this.sessions.getKiroSession(msg.chatId, cwd, sessionTtlMs);
+          const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
+          const storedSid = await this.sessions.getAgentSession(msg.chatId, cwd, sessionTtlMs);
+          const resumeId = storedSid
+            ? decodeSessionId(storedSid, profile.kind)
+              ? storedSid
+              : undefined
+            : undefined;
 
-          // 从 per-chat 常驻进程池获取就绪的 client + sessionId（复用 = 0 开销）
-          const pooled = await this.acpPool.acquire(msg.chatId, { cwd, resumeId });
+          let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
+          if (profile.kind === 'kiro-acp') {
+            const pool = this.getAcpPool(profile);
+            pooled = await pool.acquire(msg.chatId, {
+              cwd,
+              resumeId: resumeId ? decodeSessionId(resumeId, profile.kind) : undefined,
+            });
+          }
 
-          const runOpts: Parameters<typeof runKiro>[0] = {
+          const runOpts: Parameters<typeof runAgentTurn>[1] = {
             prompt: finalPrompt,
             cwd,
-            binPath: this.config.kiro.binPath,
-            trustedTools: this.config.kiro.trustedTools,
-            timeoutMs: this.config.kiro.timeoutMs,
+            resumeId: storedSid,
+            timeoutMs: profile.timeoutMs ?? this.config.kiro.timeoutMs,
             idleTimeoutMs,
             signal,
             onEvent: (ev) => ctrl.applyEvent(ev),
@@ -2978,21 +3088,21 @@ export class Dispatcher {
               LARK_KIRO_CHAT_ID: msg.chatId,
               LARK_KIRO_CHAT_TYPE: msg.chatType,
               LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
+              LARK_AGENT_RUNTIME: profileName,
             },
             pooled,
           };
-          if (this.config.kiro.model !== undefined) runOpts.model = this.config.kiro.model;
-          if (this.config.kiro.agent !== undefined) runOpts.agent = this.config.kiro.agent;
 
-          let result: Awaited<ReturnType<typeof runKiro>>;
+          let result: Awaited<ReturnType<typeof runAgentTurn>>;
           try {
-            result = await runKiro(runOpts);
+            result = await runAgentTurn(profile, runOpts);
           } catch (e) {
             await ctrl.finalize('error', (e as Error).message);
             return;
           } finally {
-            // turn 结束归还进程池（重置空闲计时器）
-            this.acpPool.release(msg.chatId);
+            if (profile.kind === 'kiro-acp') {
+              this.getAcpPool(profile).release(msg.chatId);
+            }
           }
 
           if (result.aborted) {
@@ -3017,7 +3127,8 @@ export class Dispatcher {
             return;
           }
           if (result.exitCode !== 0) {
-            await ctrl.finalize('error', `kiro-cli 退出码 ${result.exitCode}`);
+            const engine = profile.kind === 'cursor-cli' ? 'cursor agent' : 'kiro-cli';
+            await ctrl.finalize('error', `${engine} 退出码 ${result.exitCode}`);
             return;
           }
 
@@ -3245,7 +3356,7 @@ export class Dispatcher {
           draft.kiro.agent = cmd.name;
         });
         // 确保下一条消息用新 agent：evict 当前 chat 的池化进程
-        await this.acpPool.evict(msg.chatId);
+        await this.evictChatFromAllPools(msg.chatId);
         await this.sendInteractiveCard(
           msg,
           buildAckCard({
@@ -3260,7 +3371,7 @@ export class Dispatcher {
         this.config = patchAndSaveConfig(this.config, (draft) => {
           delete draft.kiro.agent;
         });
-        await this.acpPool.evict(msg.chatId);
+        await this.evictChatFromAllPools(msg.chatId);
         await this.sendInteractiveCard(
           msg,
           buildAckCard({

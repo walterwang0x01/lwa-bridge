@@ -78,6 +78,8 @@ export type ParsedCommand =
   | { kind: 'model'; mode: 'show' }
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
+  | { kind: 'runtime'; mode: 'show' }
+  | { kind: 'runtime'; mode: 'set'; name: string }
   | { kind: 'help' }
   | { kind: 'kiro-internal'; name: string }
   | { kind: 'unknown'; raw: string };
@@ -111,6 +113,9 @@ const COMMAND_ALIASES: Record<string, string> = {
   mode: 'model',
   modle: 'model',
   models: 'model',
+  // /runtime 系列
+  engine: 'runtime',
+  cli: 'runtime',
   // /help 系列
   h: 'help',
   '?': 'help',
@@ -413,6 +418,13 @@ export function parseCommand(text: string): ParsedCommand | null {
       const name = tail.trim();
       if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) return { kind: 'unknown', raw: trimmed };
       return { kind: 'agent', mode: 'set', name };
+    }
+    case 'runtime':
+    case 'rt': {
+      if (!tail) return { kind: 'runtime', mode: 'show' };
+      const name = tail.trim();
+      if (!/^[a-zA-Z0-9._-]{1,32}$/.test(name)) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'runtime', mode: 'set', name };
     }
     case 'model': {
       if (!tail) return { kind: 'model', mode: 'show' };

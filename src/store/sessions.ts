@@ -20,6 +20,8 @@ import { getLogger } from '../lib/logger.js';
 const ChatSessionSchema = z.object({
   currentCwd: z.string(),
   sessionsByCwd: z.record(z.string(), z.string()).default({}),
+  /** per-chat 选用的 runtime profile 名（config.runtime.profiles 的 key） */
+  runtimeProfile: z.string().optional(),
   lastActiveAt: z.number().int().nonnegative().default(0),
   /**
    * per-chat idle watchdog 分钟数覆盖：
@@ -160,7 +162,8 @@ export class SessionStore {
   }
 
   /**
-   * 获取当前 (chatId, cwd) 对应的 kiroSessionId（可能不存在）。
+   * 获取当前 (chatId, cwd) 对应的 agent session id（可能不存在）。
+   * 存储格式为 `{runtimeKind}:{nativeId}`；legacy 无前缀视为 kiro-acp。
    *
    * @param maxAgeMs 超过此毫秒数未活动则视为过期，返回 undefined（自动开新 session）。
    *   传 0 = 永不过期。undefined = 不做检查（兼容旧调用）。
@@ -170,12 +173,19 @@ export class SessionStore {
     cwd: string,
     maxAgeMs?: number,
   ): Promise<string | undefined> {
+    return this.getAgentSession(chatId, cwd, maxAgeMs);
+  }
+
+  async getAgentSession(
+    chatId: string,
+    cwd: string,
+    maxAgeMs?: number,
+  ): Promise<string | undefined> {
     return withLock(() => {
       const data = readFile();
       const session = data.chats[chatId];
       if (!session) return undefined;
 
-      // 过期检查：lastActiveAt 距今超过 maxAgeMs 则丢弃 session
       if (maxAgeMs && maxAgeMs > 0 && session.lastActiveAt > 0) {
         const age = Date.now() - session.lastActiveAt;
         if (age > maxAgeMs) {
@@ -195,6 +205,30 @@ export class SessionStore {
       }
 
       return session.sessionsByCwd[cwd];
+    });
+  }
+
+  async getRuntimeProfile(chatId: string): Promise<string | undefined> {
+    return withLock(() => {
+      const data = readFile();
+      return data.chats[chatId]?.runtimeProfile;
+    });
+  }
+
+  async setRuntimeProfile(chatId: string, profileName: string, defaultCwd: string): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[chatId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      session.runtimeProfile = profileName;
+      session.lastActiveAt = Date.now();
+      data.chats[chatId] = session;
+      writeFile(data);
     });
   }
 

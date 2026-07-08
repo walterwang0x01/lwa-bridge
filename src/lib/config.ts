@@ -17,7 +17,35 @@ import { readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { z } from 'zod';
 import { CONFIG_FILE, ensureDataDirs } from './paths.js';
 
+/** 单个 Agent CLI runtime profile（kiro-acp / cursor-cli 等）。 */
+export const RuntimeProfileSchema = z.object({
+  kind: z.enum(['kiro-acp', 'cursor-cli']),
+  bin: z.string().optional(),
+  model: z.string().optional(),
+  agent: z.string().optional(),
+  force: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  idleTimeoutMinutes: z.number().int().nonnegative().optional(),
+  systemPromptPrefix: z.string().optional(),
+  trustedTools: z.array(z.string()).optional(),
+});
+
 export const ConfigSchema = z.object({
+  /**
+   * 多 CLI 运行时配置（v0.10+）。
+   * 未配置时从 legacy `kiro.*` 自动推导 `profiles.kiro` 与 `profiles.cursor`。
+   */
+  runtime: z
+    .object({
+      default: z.string().default('kiro'),
+      profiles: z.record(z.string(), RuntimeProfileSchema).default({}),
+      routing: z
+        .object({
+          commands: z.record(z.string(), z.string()).default({}),
+        })
+        .default({}),
+    })
+    .optional(),
   lark: z.object({
     appId: z.string().min(1),
     appSecret: z.string().min(1),

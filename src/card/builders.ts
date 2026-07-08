@@ -552,6 +552,8 @@ export function buildStatusCard(opts: {
   idleMinutes: number;
   isPerChatOverride: boolean;
   currentAgent?: string;
+  runtimeProfile?: string;
+  runtimeKind?: string;
 }): object {
   const elements: object[] = [];
   const row = (label: string, val: string): object =>
@@ -571,10 +573,16 @@ export function buildStatusCard(opts: {
   if (opts.workspaceName) {
     elements.push(row('工作区', `🗂️ \`${opts.workspaceName}\``));
   }
+  if (opts.runtimeProfile) {
+    const kindLabel = opts.runtimeKind ?? '';
+    elements.push(
+      row('Agent 引擎', `⚙️ \`${opts.runtimeProfile}\`${kindLabel ? ` (${kindLabel})` : ''}`),
+    );
+  }
   elements.push(
     row(
-      'Kiro session',
-      opts.kiroSessionId ? `↪️ \`${opts.kiroSessionId.slice(0, 8)}…\`` : '_未建立，下条消息会新建_',
+      'Agent session',
+      opts.kiroSessionId ? `↪️ \`${opts.kiroSessionId.slice(0, 12)}…\`` : '_未建立，下条消息会新建_',
     ),
   );
   elements.push(row('任务状态', opts.hasActiveTask ? '🟢 进行中' : '⚪ 空闲'));
