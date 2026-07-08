@@ -24,6 +24,8 @@
 
 lark-kiro-bridge + kiro-cli + lark-* 技能集 = 在飞书里跑本地命令 + 操作飞书 API 的统一入口。
 
+如果你想看这套系统为什么要做成“bridge + conduit + 多 CLI 路由”的完整设计，先读 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)。
+
 ### Q: 安全吗？把 shell 工具开了不会被滥用？
 
 默认 `trustedTools` **没开** `execute_bash`。打开后：

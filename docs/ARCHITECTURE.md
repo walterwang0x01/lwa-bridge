@@ -2,6 +2,8 @@
 
 深入理解 lark-kiro-bridge 内部如何工作。普通用户**不需要看这份**，README 已经覆盖日常使用；这份是给想读源码、贡献代码、或在生产环境调优的人看的。
 
+如果你想先理解整套多 CLI 方案，而不是先看实现细节，先读 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md) 和 [`runtime-routing-production.md`](./runtime-routing-production.md)。
+
 ## 整体数据流
 
 ```

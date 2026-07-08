@@ -214,3 +214,5 @@ kiro-conduit report --base-repo .
 
 相关规范：[`agent-runtime-spec.md`](./agent-runtime-spec.md)  
 Conduit 侧同主题：`kiro-conduit` 仓库的 `docs/runtime-routing.md`
+
+面向团队/开源读者的总览：[`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)
