@@ -30,6 +30,7 @@ const TaskHistoryRecordSchema = z.object({
   toolCallCount: z.number().int().nonnegative(),
   /** 本次任务写入/编辑过的文件路径（去重），从 fs_write/fsWrite 等工具的 input.path 提取 */
   artifacts: z.array(z.string()).default([]),
+  taskBucket: z.string().optional(),
   runtimeProfile: z.string().optional(),
   runtimeKind: z.string().optional(),
   model: z.string().optional(),
@@ -39,6 +40,7 @@ const TaskHistoryRecordSchema = z.object({
 
 export type TaskHistoryRecord = z.infer<typeof TaskHistoryRecordSchema>;
 export interface RuntimeMetricsRow {
+  taskBucket: string;
   runtimeKind: string;
   model: string;
   total: number;
@@ -46,6 +48,9 @@ export interface RuntimeMetricsRow {
   failed: number;
   successRate: number;
   avgDurationMs: number;
+  avgArtifacts: number;
+  avgToolCalls: number;
+  score: number;
 }
 
 export interface AdaptiveRuntimeRecommendation {
@@ -55,6 +60,40 @@ export interface AdaptiveRuntimeRecommendation {
   reason: string;
   runtimeSuccessRate?: number;
   modelSuccessRate?: number;
+  runtimeScore?: number;
+  modelScore?: number;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function costScoreFor(runtimeKind: string, model: string): number {
+  if (runtimeKind === 'cursor-agent-cli') return 1;
+  const lower = model.toLowerCase();
+  if (lower.includes('opus')) return 0.35;
+  if (lower.includes('sonnet')) return 0.65;
+  if (lower.includes('haiku')) return 0.85;
+  return 0.5;
+}
+
+function rowScore(
+  row: Pick<
+    RuntimeMetricsRow,
+    'runtimeKind' | 'model' | 'successRate' | 'avgDurationMs' | 'avgArtifacts' | 'avgToolCalls'
+  >,
+): number {
+  const speedScore = 1 / (1 + row.avgDurationMs / 30_000);
+  const changeScore = 1 / (1 + row.avgArtifacts / 6);
+  const toolScore = 1 / (1 + row.avgToolCalls / 12);
+  const costScore = costScoreFor(row.runtimeKind, row.model);
+  return clamp01(
+    row.successRate * 0.65 +
+      speedScore * 0.15 +
+      costScore * 0.1 +
+      changeScore * 0.05 +
+      toolScore * 0.05,
+  );
 }
 
 const FileSchema = z.object({
@@ -120,15 +159,18 @@ export class TaskHistoryStore {
     });
   }
 
-  async summarizeRuntimeMetrics(limit = 200): Promise<RuntimeMetricsRow[]> {
+  async summarizeRuntimeMetrics(limit = 200, bucket?: string): Promise<RuntimeMetricsRow[]> {
     return withLock(() => {
       const data = readFile();
       const rows = new Map<string, RuntimeMetricsRow>();
       for (const record of data.records.slice(-limit)) {
+        if (bucket && record.taskBucket !== bucket) continue;
+        const taskBucket = record.taskBucket ?? '(unbucketed)';
         const runtimeKind = record.runtimeKind ?? 'unknown';
         const model = record.model ?? '(default)';
-        const key = `${runtimeKind}__${model}`;
+        const key = `${taskBucket}__${runtimeKind}__${model}`;
         const row = rows.get(key) ?? {
+          taskBucket,
           runtimeKind,
           model,
           total: 0,
@@ -136,12 +178,17 @@ export class TaskHistoryStore {
           failed: 0,
           successRate: 0,
           avgDurationMs: 0,
+          avgArtifacts: 0,
+          avgToolCalls: 0,
+          score: 0,
         };
         row.total += 1;
         const ok = record.terminal === 'done';
         if (ok) row.success += 1;
         else row.failed += 1;
         row.avgDurationMs += Math.max(0, record.finishedAt - record.startedAt);
+        row.avgArtifacts += record.artifacts.length;
+        row.avgToolCalls += record.toolCallCount;
         rows.set(key, row);
       }
       return [...rows.values()]
@@ -149,13 +196,25 @@ export class TaskHistoryStore {
           ...row,
           successRate: row.total > 0 ? row.success / row.total : 0,
           avgDurationMs: row.total > 0 ? Math.round(row.avgDurationMs / row.total) : 0,
+          avgArtifacts: row.total > 0 ? Number((row.avgArtifacts / row.total).toFixed(2)) : 0,
+          avgToolCalls: row.total > 0 ? Number((row.avgToolCalls / row.total).toFixed(2)) : 0,
+          score: rowScore({
+            ...row,
+            successRate: row.total > 0 ? row.success / row.total : 0,
+            avgDurationMs: row.total > 0 ? Math.round(row.avgDurationMs / row.total) : 0,
+            avgArtifacts: row.total > 0 ? row.avgArtifacts / row.total : 0,
+            avgToolCalls: row.total > 0 ? row.avgToolCalls / row.total : 0,
+          }),
         }))
-        .sort((a, b) => b.total - a.total || b.successRate - a.successRate);
+        .sort((a, b) => b.score - a.score || b.successRate - a.successRate || b.total - a.total);
     });
   }
 
-  async recommendAdaptiveStrategy(limit = 200): Promise<AdaptiveRuntimeRecommendation> {
-    const rows = await this.summarizeRuntimeMetrics(limit);
+  async recommendAdaptiveStrategy(
+    limit = 200,
+    bucket?: string,
+  ): Promise<AdaptiveRuntimeRecommendation> {
+    const rows = await this.summarizeRuntimeMetrics(limit, bucket);
     const eligible = rows.filter((row) => row.total >= 3);
     if (eligible.length === 0) {
       return { sampleSize: 0, reason: 'insufficient-history' };
@@ -164,25 +223,27 @@ export class TaskHistoryStore {
     const runtimeRows = new Map<string, RuntimeMetricsRow>();
     for (const row of eligible) {
       const current = runtimeRows.get(row.runtimeKind);
-      if (!current || row.successRate > current.successRate || row.total > current.total) {
+      if (!current || row.score > current.score || row.successRate > current.successRate) {
         runtimeRows.set(row.runtimeKind, row);
       }
     }
     const bestRuntime = [...runtimeRows.values()].sort(
-      (a, b) => b.successRate - a.successRate || b.total - a.total,
+      (a, b) => b.score - a.score || b.successRate - a.successRate || b.total - a.total,
     )[0];
     const bestKiro = eligible
       .filter((row) => row.runtimeKind === 'kiro-cli-acp')
-      .sort((a, b) => b.successRate - a.successRate || b.total - a.total)[0];
+      .sort((a, b) => b.score - a.score || b.successRate - a.successRate || b.total - a.total)[0];
 
     return {
       preferredRuntimeKind:
-        bestRuntime && bestRuntime.successRate >= 0.8 ? bestRuntime.runtimeKind : undefined,
-      preferredModel: bestKiro && bestKiro.successRate >= 0.8 ? bestKiro.model : undefined,
+        bestRuntime && bestRuntime.successRate >= 0.75 ? bestRuntime.runtimeKind : undefined,
+      preferredModel: bestKiro && bestKiro.successRate >= 0.75 ? bestKiro.model : undefined,
       sampleSize: eligible.reduce((sum, row) => sum + row.total, 0),
-      reason: 'history-success-rate',
+      reason: 'history-multi-objective-score',
       runtimeSuccessRate: bestRuntime?.successRate,
       modelSuccessRate: bestKiro?.successRate,
+      runtimeScore: bestRuntime?.score,
+      modelScore: bestKiro?.score,
     };
   }
 }

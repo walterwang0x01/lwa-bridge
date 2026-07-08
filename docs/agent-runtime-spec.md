@@ -31,8 +31,13 @@
     }
   },
   "modelRouting": {
+    "cursor": { "mode": "fixed", "model": "Auto" },
     "kiro": {
       "mode": "smart",
+      "adaptiveMode": "suggest",
+      "simpleTier": "balanced",
+      "mediumTier": "strong",
+      "hardTier": "max",
       "mediumThreshold": 4,
       "hardThreshold": 7
     }
@@ -42,18 +47,25 @@
 
 飞书命令：`/runtime cursor` | `/runtime kiro`
 
+完整生产实践：[`runtime-routing-production.md`](./runtime-routing-production.md)  
+示例配置：[`runtime-config.example.json`](./runtime-config.example.json)
+
 ## kiro-conduit CLI
 
 ```bash
 kiro-conduit run --workspace ./my-ws --runtime-kind kiro-cli-acp
 kiro-conduit run --workspace ./my-ws --runtime-kind cursor-agent-cli --kiro-cli agent
+kiro-conduit report --base-repo .
 ```
 
-生产建议：同一 DAG run 内保持 homogeneous runtime（不要混用两种 CLI）。
+生产建议：同一 DAG run 内同一角色保持 homogeneous runtime（不要混用两种 CLI）。
 
 ## 路由与观测
 
 - 先做 CLI 路由：简单任务优先 `cursor-agent-cli`，复杂任务优先 `kiro-cli-acp`
-- 命中 `kiro-cli` 后再做模型路由：从 `kiro-cli chat --list-models --format json` 的实时结果里选模型
-- `lark-kiro-bridge` 会记录 `runtimeKind`、`model`、`complexityScore`、`modelRouteTier`
-- `kiro-conduit` 会记录各角色的 runtime/model 选择，方便排查成本与稳定性问题
+- 命中 `kiro-cli` 后再做模型路由：从实时 `--list-models` 结果里选模型
+- 任务分桶：bridge 记 `taskBucket`（chat/review/plan/edit/conduit）；conduit 按角色（planner/implementor/reviewer）
+- 自适应：`off` / `suggest` / `apply-safe` / `apply-aggressive`，按桶、多目标分数（成功率+耗时+改动+成本）
+- reviewer：`execution_ok` 与 `verdict_pass` 分开；审查 FAIL 不算 runtime 失败
+- `lark-kiro-bridge` Dashboard 展示按桶 metrics / score / adaptive 推荐
+- `kiro-conduit report` 打印分桶 metrics、avg_duration、score、推荐

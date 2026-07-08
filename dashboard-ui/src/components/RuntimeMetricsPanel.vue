@@ -12,6 +12,10 @@ function percent(v: number): string {
 function duration(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
+
+function score(v: number): string {
+  return v.toFixed(2);
+}
 </script>
 
 <template>
@@ -23,6 +27,9 @@ function duration(ms: number): string {
       推荐：
       runtime=<span class="text-neutral-200">{{ recommendation.preferredRuntimeKind || '保持当前' }}</span>
       · model=<span class="text-teal-300">{{ recommendation.preferredModel || '保持当前' }}</span>
+      · score=<span class="text-amber-300">{{
+        recommendation.runtimeScore != null ? score(recommendation.runtimeScore) : '-'
+      }}</span>
       · samples={{ recommendation.sampleSize }}
     </div>
     <EmptyState v-if="rows.length === 0" text="还没有 runtime 指标" />
@@ -30,8 +37,10 @@ function duration(ms: number): string {
       <table class="min-w-full text-left text-xs text-neutral-400">
         <thead class="bg-white/[0.02] text-neutral-500">
           <tr>
+            <th class="px-4 py-2 font-medium">Bucket</th>
             <th class="px-4 py-2 font-medium">Runtime</th>
             <th class="px-4 py-2 font-medium">Model</th>
+            <th class="px-4 py-2 font-medium">Score</th>
             <th class="px-4 py-2 font-medium">Total</th>
             <th class="px-4 py-2 font-medium">Success</th>
             <th class="px-4 py-2 font-medium">Failed</th>
@@ -40,9 +49,15 @@ function duration(ms: number): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="`${row.runtimeKind}-${row.model}`" class="border-t border-white/5">
+          <tr
+            v-for="row in rows"
+            :key="`${row.taskBucket}-${row.runtimeKind}-${row.model}`"
+            class="border-t border-white/5"
+          >
+            <td class="px-4 py-2 text-violet-300">{{ row.taskBucket }}</td>
             <td class="px-4 py-2 text-neutral-300">{{ row.runtimeKind }}</td>
             <td class="px-4 py-2 text-teal-300">{{ row.model }}</td>
+            <td class="px-4 py-2 text-amber-300">{{ score(row.score) }}</td>
             <td class="px-4 py-2">{{ row.total }}</td>
             <td class="px-4 py-2 text-emerald-400">{{ row.success }}</td>
             <td class="px-4 py-2 text-red-400">{{ row.failed }}</td>

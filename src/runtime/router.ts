@@ -6,6 +6,8 @@ import { resolveRuntimeProfile } from './config.js';
 import { discoverRuntimeRegistry } from './registry.js';
 import type { ModelRouteDecision, RuntimeProfile } from './types.js';
 
+export type TaskBucket = 'chat' | 'review' | 'plan' | 'edit' | 'conduit';
+
 export interface RuntimeRouteContext {
   prompt: string;
   mediaCount?: number;
@@ -17,6 +19,16 @@ export interface RuntimeDecision {
   profile: RuntimeProfile;
   reason: string;
   complexityScore?: number;
+}
+
+export function classifyTaskBucket(ctx: RuntimeRouteContext): TaskBucket {
+  if (ctx.commandName === 'conduit') return 'conduit';
+  if (ctx.commandName === 'doctor') return 'review';
+  const prompt = ctx.prompt.toLowerCase();
+  if (/plan|规划|拆分|dag|workflow/.test(prompt)) return 'plan';
+  if (/review|审查|检查|代码评审/.test(prompt)) return 'review';
+  if (/修改|重构|编辑|multi-file|多文件|patch/.test(prompt)) return 'edit';
+  return 'chat';
 }
 
 export function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {

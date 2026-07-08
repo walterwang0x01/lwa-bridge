@@ -29,7 +29,11 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
 import { runAgentTurn } from '../runtime/runner.js';
 import { listRuntimeProfileNames, resolveRuntimeProfile } from '../runtime/config.js';
-import { chooseModelForProfile, chooseRuntimeProfile } from '../runtime/router.js';
+import {
+  chooseModelForProfile,
+  chooseRuntimeProfile,
+  classifyTaskBucket,
+} from '../runtime/router.js';
 import { decodeSessionId } from '../runtime/sessionId.js';
 import type { RuntimeProfile } from '../runtime/types.js';
 import { AcpPool } from '../kiro/acpPool.js';
@@ -186,6 +190,7 @@ export class Dispatcher {
     complexityScore?: number;
     modelDecision?: Awaited<ReturnType<typeof chooseModelForProfile>>;
   }> {
+    const taskBucket = classifyTaskBucket({ prompt, mediaCount, commandName });
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
     let picked = await chooseRuntimeProfile(
       this.config,
@@ -193,7 +198,9 @@ export class Dispatcher {
       explicitProfileName,
     );
     if (!explicitProfileName && this.taskHistory) {
-      const adaptive = await this.taskHistory.recommendAdaptiveStrategy(200).catch(() => undefined);
+      const adaptive = await this.taskHistory
+        .recommendAdaptiveStrategy(200, taskBucket)
+        .catch(() => undefined);
       if (!adaptive) {
         const modelDecision = await chooseModelForProfile(this.config, picked.profile, {
           prompt,
@@ -207,7 +214,7 @@ export class Dispatcher {
         return {
           profileName: picked.profileName,
           profile,
-          reason: `${picked.reason};adaptive-unavailable`,
+          reason: `${picked.reason};adaptive-unavailable(bucket=${taskBucket})`,
           complexityScore: picked.complexityScore ?? modelDecision.complexityScore,
           modelDecision,
         };
@@ -229,7 +236,7 @@ export class Dispatcher {
         picked = {
           profileName: adaptiveProfileName,
           profile: resolveRuntimeProfile(this.config, adaptiveProfileName),
-          reason: `${picked.reason};adaptive-runtime(${adaptive.reason})`,
+          reason: `${picked.reason};adaptive-runtime(bucket=${taskBucket};${adaptive.reason})`,
           complexityScore: picked.complexityScore,
         };
       }
@@ -242,7 +249,7 @@ export class Dispatcher {
         picked = {
           ...picked,
           profile: { ...picked.profile, model: adaptive.preferredModel },
-          reason: `${picked.reason};adaptive-model(${adaptive.reason})`,
+          reason: `${picked.reason};adaptive-model(bucket=${taskBucket};${adaptive.reason})`,
         };
       }
     }
@@ -3277,6 +3284,10 @@ export class Dispatcher {
           // 记录任务历史（discard 掉的空任务 terminal 仍是 'running'，不记录，没有展示价值）
           if (this.taskHistory && ctrl.getTerminal() !== 'running') {
             const { toolCallCount, artifacts } = ctrl.summarizeForHistory();
+            const taskBucket = classifyTaskBucket({
+              prompt: finalPrompt,
+              mediaCount: mediaPaths.length,
+            });
             const record: Parameters<TaskHistoryStore['add']>[0] = {
               taskId,
               chatId: msg.chatId,
@@ -3287,6 +3298,7 @@ export class Dispatcher {
               promptPreview: prompt.slice(0, 100),
               toolCallCount,
               artifacts,
+              taskBucket,
               runtimeProfile: selectedProfileName,
               runtimeKind: selectedProfile?.kind,
               model: selectedProfile?.model,

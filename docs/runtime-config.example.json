@@ -44,6 +44,7 @@
     },
     "kiro": {
       "mode": "smart",
+      "adaptiveMode": "suggest",
       "simpleTier": "balanced",
       "mediumTier": "strong",
       "hardTier": "max",

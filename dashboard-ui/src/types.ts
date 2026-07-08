@@ -58,6 +58,7 @@ export interface TaskHistoryRecord {
   promptPreview: string;
   toolCallCount: number;
   artifacts: string[];
+  taskBucket?: string;
   runtimeProfile?: string;
   runtimeKind?: string;
   model?: string;
@@ -66,6 +67,7 @@ export interface TaskHistoryRecord {
 }
 
 export interface RuntimeMetricsRow {
+  taskBucket: string;
   runtimeKind: string;
   model: string;
   total: number;
@@ -73,6 +75,9 @@ export interface RuntimeMetricsRow {
   failed: number;
   successRate: number;
   avgDurationMs: number;
+  avgArtifacts: number;
+  avgToolCalls: number;
+  score: number;
 }
 
 export interface AdaptiveRecommendation {
@@ -80,6 +85,10 @@ export interface AdaptiveRecommendation {
   preferredModel?: string;
   sampleSize: number;
   reason: string;
+  runtimeSuccessRate?: number;
+  modelSuccessRate?: number;
+  runtimeScore?: number;
+  modelScore?: number;
 }
 
 export interface BridgeInfo {

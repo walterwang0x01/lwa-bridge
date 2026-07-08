@@ -1,58 +1,216 @@
-# 多 CLI 生产实践
+# 多 CLI 生产实践（完整版）
 
-这套方案的目标不是做一个“万能 Agent 平台”，而是把本地多 CLI 编排做成一条成本优先、扩展友好的生产链路。
+这套方案不是做一个“万能 Agent 平台”，而是把本地多 CLI 编排做成一条**成本优先、角色分桶、可观测、可自适应**的生产链路。
 
-## 设计原则
+核心产品约定：
 
-1. 简单任务优先免费或低成本引擎：默认走 `cursor-agent-cli` 的 `Auto`
-2. 复杂任务才升级到 `kiro-cli`
-3. 进入 `kiro-cli` 之后，再按复杂度和实时可用模型二次选模
-4. 不硬编码假定模型名，始终以 `kiro-cli --list-models` 实时结果为准
-5. 把“为什么这样选”记录下来，便于后续优化成本、速度和成功率
+| 组件 | 角色 |
+|------|------|
+| `lark-kiro-bridge` | 飞书交互入口、低延迟对话、任务路由与观测面板 |
+| `kiro-conduit` | DAG / 并行编排、无人值守执行、角色级 runtime 选择 |
+| `cursor-agent-cli` (`agent`) | 便宜、快，适合简单实现与轻量任务（`Auto`） |
+| `kiro-cli-acp` (`kiro-cli`) | 更强能力，适合复杂实现、规划、审查 |
 
-## 推荐分工
+---
 
-- `lark-kiro-bridge`
-  - 适合交互式、低延迟、用户在飞书里连续追问的场景
-  - 简单问答、轻量总结、单文件修改优先走 `Cursor Auto`
-  - 多步骤、跨模块、架构调整、review 类任务优先走 `Kiro`
+## 1. 设计原则
 
-- `kiro-conduit`
-  - 适合 DAG、并行 worker、无人值守执行
-  - `implementor` 可以优先吃低成本 runtime
-  - `reviewer` / `planner` 更适合稳定和更强模型
+1. **简单任务优先免费 / 低成本**：默认走 `cursor-agent-cli` 的 `Auto`
+2. **复杂任务才升级到 `kiro-cli`**
+3. **进入 Kiro 后再二次选模**：按复杂度和 `kiro-cli --list-models` 实时可用列表选
+4. **不硬编码模型名**：永远以本机实时列表为准
+5. **按任务类型分桶学习**：`chat` / `review` / `plan` / `edit` / `conduit`（bridge），`planner` / `implementor` / `reviewer`（conduit）
+6. **多目标评分，不只看成功率**：成功率 + 耗时 + 改动规模 + 成本代理（+ 重试）
+7. **审查结论 ≠ runtime 失败**：`verdict FAIL`（审出问题）不能当成模型/执行失败
 
-## 推荐默认策略
+---
 
-- CLI 路由
-  - 简单：`cursor`
-  - 复杂：`kiro`
+## 2. 两层路由（永远先 CLI，再模型）
 
-- Kiro 模型路由
-  - `simple`：优先较便宜的 Sonnet / Haiku 档
-  - `medium`：优先 `claude-sonnet-5`
-  - `hard`：优先 `claude-opus-4.8`
+```text
+prompt / role
+    │
+    ├─① CLI 路由
+    │     simple  → cursor-agent-cli (Auto)
+    │     complex → kiro-cli-acp
+    │
+    └─② 若命中 kiro
+          complexityScore
+            ├─ simple  → fast / balanced tier
+            ├─ medium  → strong tier
+            └─ hard    → max tier
+          再从 --list-models 实时结果里 pickFirst
+```
 
-## 什么时候不要直接接入外部“最强项目”
+### Bridge（飞书侧）推荐默认
 
-不要直接把网上的通用 router 当成主系统替换掉，原因是你的核心价值来自这几个组合：
+- `runtime.default = "auto"`
+- `runtime.router.mode = "smart"`
+- `simpleProfile = "cursor"`，`complexProfile = "kiro"`
+- `modelRouting.cursor.model = "Auto"`（固定）
+- `modelRouting.kiro.mode = "smart"`
+
+### Conduit（编排侧）推荐默认
+
+| Role | 默认 runtime | 说明 |
+|------|--------------|------|
+| `implementor` | `cursor-agent-cli` | 吞吐优先、成本优先 |
+| `planner` | `kiro-cli-acp` | 拆分 durability 优先 |
+| `reviewer` | `kiro-cli-acp` | 审查能力优先 |
+
+同一 DAG run 内单角色保持 homogeneous runtime，不要混着用。
+
+---
+
+## 3. 任务分桶（Task Buckets）
+
+### Bridge 分桶
+
+`classifyTaskBucket()` 基于 command / prompt 归类：
+
+| Bucket | 典型触发 |
+|--------|----------|
+| `chat` | 普通对话、轻量问答 |
+| `review` | 审查 / doctor / 代码评审类 |
+| `plan` | 规划、DAG、工作流拆分 |
+| `edit` | 多文件修改、重构、patch |
+| `conduit` | `/conduit` 编排 |
+
+任务历史会写入 `taskBucket`；metrics 与 adaptive 推荐**按桶隔离**，避免「chat 历史污染 review」。
+
+### Conduit 分桶
+
+| Bucket | 来源 |
+|--------|------|
+| `implementor` | `run` 并行执行结果（兼容读取旧 `conduit-run`） |
+| `planner` | `plan` 成功 / 失败落盘 |
+| `reviewer` | per-task semantic review + integration review |
+
+---
+
+## 4. 自适应路由（Adaptive）
+
+### 模式
+
+| Mode | 行为 |
+|------|------|
+| `off` | 完全不用历史 |
+| `suggest`（默认） | 只建议，不改默认选择 |
+| `apply-safe` | 样本够、成功率够高时才覆盖（保守） |
+| `apply-aggressive` | 有推荐就覆盖（更激进） |
+
+Bridge 配置：`modelRouting.kiro.adaptiveMode`  
+Conduit CLI：`--adaptive-mode`（`run` / `plan` / `report`）
+
+### 多目标分数（要点）
+
+综合分大致考虑：
+
+- 成功率（主权重）
+- 平均耗时 / 重试（速度）
+- 改动规模 / 工具调用（噪声惩罚）
+- 成本代理（`cursor Auto` 高，`opus` 低）
+
+Dashboard / `kiro-conduit report` 会展示 `score`、样本数、按桶推荐。
+
+### Reviewer 特殊规则
+
+指标分两列概念：
+
+- `execution_ok` / `passed`：runtime 是否跑通（超时、崩溃 = 失败）
+- `verdict_pass`：审查结论（`FAIL` = 找到问题，**正常产出**）
+
+自适应**只学 execution**，不会因为「经常审出 FAIL」而错误降权 reviewer 模型。
+
+---
+
+## 5. 可观测性
+
+### Bridge
+
+- 任务历史：`taskBucket`、`runtimeKind`、`model`、`complexityScore`
+- Dashboard「Runtime 指标」：按桶聚合，含 Score / Rate / Avg Duration
+- Adaptive 推荐条：preferred runtime/model + score + samples
+
+### Conduit
+
+- `.kiro-conduit/runtime-metrics.json`
+- `kiro-conduit report --base-repo <repo>`
+- 运行日志记录各角色实际命中的 runtime / model
+- report 打印每桶：`success_rate` / `avg_files` / `avg_duration` / `score` / （reviewer）`verdict_pass_rate`
+
+---
+
+## 6. 推荐生产配置
+
+完整例子见 [`runtime-config.example.json`](./runtime-config.example.json)。
+
+起步策略：
+
+1. Bridge：`smart` 路由 + Kiro `smart` 选模 + `adaptiveMode: "suggest"`（先观察 1~2 周）
+2. 样本稳定后：交互侧可切 `apply-safe`
+3. Conduit：implementor 用 cursor，reviewer/planner 用 kiro；`--adaptive-mode suggest`，确认后按桶 `apply-safe`
+
+```bash
+# Conduit：实现便宜优先，审查能力优先
+kiro-conduit run \
+  --workspace my-workspace/ \
+  --runtime-kind cursor-agent-cli \
+  --kiro-cli agent \
+  --reviewer-runtime-kind kiro-cli-acp \
+  --reviewer-bin kiro-cli \
+  --adaptive-mode suggest \
+  --kiro-simple-tier balanced \
+  --kiro-medium-tier strong \
+  --kiro-hard-tier max
+
+# 查看分桶指标与推荐
+kiro-conduit report --base-repo .
+```
+
+飞书侧可用：`/runtime cursor` | `/runtime kiro` 手动锁定会话 runtime。
+
+---
+
+## 7. 什么时候不要“接外部最强 router 替换自己”
+
+不要直接把网上的通用 router 当成主系统替换掉。你的价值在于：
 
 - 飞书入口
-- 本地 CLI 执行
-- 多 CLI 统一抽象
-- 成本优先
-- 可扩到更多 agent/editor CLI
+- 本地多 CLI 执行
+- 角色化编排（conduit）
+- 成本优先策略
+- 可扩到更多 agent / editor CLI
 
-最佳做法是：
+正确做法：
 
-- 保留自己的 runtime 抽象层
-- 借鉴外部项目的路由、fallback、可观测性设计
-- 不把主执行链路外包给一个你无法稳定控制的通用框架
+- **保留**自己的 `AgentRuntime` / Runtime Registry 抽象
+- **借鉴**外部的路由、fallback、可观测设计
+- **不要**把主执行链路外包给无法控制的通用框架
 
-## 后续建议
+---
 
-下一阶段最值得补的是：
+## 8. 扩展新 CLI 的检查清单
 
-1. 路由命中率、失败率、平均耗时、平均成本的统计面板
-2. 基于历史成功率的自适应路由，而不只是规则路由
-3. 新 CLI 接入协议：能力声明、模型发现、流式解析、session 续接、可观测性字段
+接入第三个 CLI（如某个新 agent / editor）时至少补齐：
+
+1. Runtime kind 命名（清晰、稳定）
+2. Session ID 前缀：`{kind}:{nativeId}`
+3. 能力发现（是否可用、模型列表）
+4. 流式解析 / 统一事件映射到 UI
+5. 写入 metrics：`taskBucket`、`runtimeKind`、`model`、耗时、成败
+6. 成本代理分（进多目标评分）
+7. 文档与 example config
+
+---
+
+## 9. 运维建议
+
+- 先 `suggest`，后 `apply-safe`；`apply-aggressive` 只给熟悉系统的维护者
+- 复杂任务过早升级：提高 complexity / medium / hard threshold
+- 成本过高：simple/medium 往 `fast`/`balanced` 调，implementor 保持 cursor
+- 成功率掉：medium/hard 往 `strong`/`max`，reviewer 保持 kiro
+- 定期看 Dashboard / `report`：按桶看 score，而不是全局混看
+
+相关规范：[`agent-runtime-spec.md`](./agent-runtime-spec.md)  
+Conduit 侧同主题：`kiro-conduit` 仓库的 `docs/runtime-routing.md`
