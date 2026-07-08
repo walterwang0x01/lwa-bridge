@@ -44,6 +44,26 @@ export const ConfigSchema = z.object({
           commands: z.record(z.string(), z.string()).default({}),
         })
         .default({}),
+      router: z
+        .object({
+          mode: z.enum(['manual', 'smart']).default('manual'),
+          fallbackProfiles: z.array(z.string()).default([]),
+          lark: z
+            .object({
+              simpleProfile: z.string().default('cursor'),
+              complexProfile: z.string().default('kiro'),
+              conduitProfile: z.string().default('kiro'),
+            })
+            .default({}),
+          rules: z
+            .object({
+              maxPromptCharsForCursor: z.number().int().positive().default(800),
+              complexityThreshold: z.number().int().nonnegative().default(4),
+              complexKeywords: z.array(z.string()).default([]),
+            })
+            .default({}),
+        })
+        .default({}),
     })
     .optional(),
   lark: z.object({

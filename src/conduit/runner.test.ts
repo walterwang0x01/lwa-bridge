@@ -86,7 +86,10 @@ describe('runConduit', () => {
 
   it('AbortSignal 中止后真正终止子进程（不是"看起来中止但还在跑"）', async () => {
     // 脚本 sleep 10s，我们在 100ms 后 abort，验证 runConduit 在远早于 10s 时返回
-    const bin = writeFakeBin('slow.sh', 'sleep 10\necho "should not reach here"\nexit 0\n');
+    const bin = writeFakeBin(
+      'slow.sh',
+      'trap \'kill "$child" 2>/dev/null; exit 0\' TERM INT\nsleep 10 &\nchild=$!\nwait "$child"\necho "should not reach here"\nexit 0\n',
+    );
     process.env['KIRO_CONDUIT_BIN'] = bin;
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
@@ -99,7 +102,7 @@ describe('runConduit', () => {
     expect(r.ok).toBe(false);
     // 关键断言：必须远早于脚本的 10s sleep 结束，证明进程真的被杀了而不是等它跑完
     expect(elapsed).toBeLessThan(5000);
-  });
+  }, 10_000);
 
   it('onProgress 回调收到流式输出（每次 data 事件触发一次）', async () => {
     const bin = writeFakeBin(

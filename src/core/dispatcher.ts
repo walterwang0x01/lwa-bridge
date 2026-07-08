@@ -31,6 +31,7 @@ import { runAgentTurn } from '../runtime/runner.js';
 import { listRuntimeProfileNames, resolveRuntimeProfile } from '../runtime/config.js';
 import { decodeSessionId } from '../runtime/sessionId.js';
 import type { RuntimeProfile } from '../runtime/types.js';
+import { chooseRuntimeProfile } from '../runtime/router.js';
 import { AcpPool } from '../kiro/acpPool.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
@@ -161,9 +162,30 @@ export class Dispatcher {
     chatId: string,
   ): Promise<{ profileName: string; profile: RuntimeProfile }> {
     const stored = await this.sessions.getRuntimeProfile(chatId);
+    if (!stored && (this.config.runtime?.default ?? 'kiro') === 'auto') {
+      const picked = chooseRuntimeProfile(this.config, { prompt: '' });
+      return { profileName: `auto→${picked.profileName}`, profile: picked.profile };
+    }
     const profileName = stored ?? this.config.runtime?.default ?? 'kiro';
-    const profile = resolveRuntimeProfile(this.config, profileName);
+    const profile = resolveRuntimeProfile(
+      this.config,
+      profileName === 'auto' ? 'kiro' : profileName,
+    );
     return { profileName, profile };
+  }
+
+  private async selectRuntimeForTask(
+    chatId: string,
+    prompt: string,
+    mediaCount: number,
+    commandName?: string,
+  ): Promise<{ profileName: string; profile: RuntimeProfile; reason: string }> {
+    const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
+    return chooseRuntimeProfile(
+      this.config,
+      { prompt, mediaCount, commandName },
+      explicitProfileName,
+    );
   }
 
   private getPipeline(chatId: string): ChatPipeline {
@@ -3059,13 +3081,21 @@ export class Dispatcher {
         try {
           const sessionTtlMs =
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
-          const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
+          const { profileName, profile, reason } = await this.selectRuntimeForTask(
+            msg.chatId,
+            finalPrompt,
+            mediaPaths.length,
+          );
           const storedSid = await this.sessions.getAgentSession(msg.chatId, cwd, sessionTtlMs);
           const resumeId = storedSid
             ? decodeSessionId(storedSid, profile.kind)
               ? storedSid
               : undefined
             : undefined;
+          this.log.info(
+            { chatId: msg.chatId, profileName, runtimeKind: profile.kind, reason },
+            'runtime selected for task',
+          );
 
           let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
           if (profile.kind === 'kiro-acp') {
@@ -3089,6 +3119,7 @@ export class Dispatcher {
               LARK_KIRO_CHAT_TYPE: msg.chatType,
               LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
               LARK_AGENT_RUNTIME: profileName,
+              LARK_AGENT_RUNTIME_REASON: reason,
             },
             pooled,
           };
