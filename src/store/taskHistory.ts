@@ -30,10 +30,23 @@ const TaskHistoryRecordSchema = z.object({
   toolCallCount: z.number().int().nonnegative(),
   /** 本次任务写入/编辑过的文件路径（去重），从 fs_write/fsWrite 等工具的 input.path 提取 */
   artifacts: z.array(z.string()).default([]),
+  runtimeProfile: z.string().optional(),
+  runtimeKind: z.string().optional(),
+  model: z.string().optional(),
+  complexityScore: z.number().int().nonnegative().optional(),
   errorMsg: z.string().optional(),
 });
 
 export type TaskHistoryRecord = z.infer<typeof TaskHistoryRecordSchema>;
+export interface RuntimeMetricsRow {
+  runtimeKind: string;
+  model: string;
+  total: number;
+  success: number;
+  failed: number;
+  successRate: number;
+  avgDurationMs: number;
+}
 
 const FileSchema = z.object({
   version: z.literal(1).default(1),
@@ -95,6 +108,40 @@ export class TaskHistoryStore {
     return withLock(() => {
       const data = readFile();
       return [...data.records].reverse().slice(0, limit);
+    });
+  }
+
+  async summarizeRuntimeMetrics(limit = 200): Promise<RuntimeMetricsRow[]> {
+    return withLock(() => {
+      const data = readFile();
+      const rows = new Map<string, RuntimeMetricsRow>();
+      for (const record of data.records.slice(-limit)) {
+        const runtimeKind = record.runtimeKind ?? 'unknown';
+        const model = record.model ?? '(default)';
+        const key = `${runtimeKind}__${model}`;
+        const row = rows.get(key) ?? {
+          runtimeKind,
+          model,
+          total: 0,
+          success: 0,
+          failed: 0,
+          successRate: 0,
+          avgDurationMs: 0,
+        };
+        row.total += 1;
+        const ok = record.terminal === 'done';
+        if (ok) row.success += 1;
+        else row.failed += 1;
+        row.avgDurationMs += Math.max(0, record.finishedAt - record.startedAt);
+        rows.set(key, row);
+      }
+      return [...rows.values()]
+        .map((row) => ({
+          ...row,
+          successRate: row.total > 0 ? row.success / row.total : 0,
+          avgDurationMs: row.total > 0 ? Math.round(row.avgDurationMs / row.total) : 0,
+        }))
+        .sort((a, b) => b.total - a.total || b.successRate - a.successRate);
     });
   }
 }

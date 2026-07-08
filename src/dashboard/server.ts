@@ -97,6 +97,9 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
   const agents = listGlobalAgents();
   const assetInstalls = await listInstalls();
   const taskHistory = deps.taskHistory ? await deps.taskHistory.listRecent(50) : [];
+  const runtimeMetrics = deps.taskHistory
+    ? await deps.taskHistory.summarizeRuntimeMetrics(200)
+    : [];
 
   return {
     bridge: {
@@ -113,6 +116,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     agents,
     assetInstalls,
     taskHistory,
+    runtimeMetrics,
     logs,
   };
 }

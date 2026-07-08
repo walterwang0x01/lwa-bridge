@@ -53,4 +53,32 @@ describe('TaskHistoryStore', () => {
     const store = new TaskHistoryStore();
     expect(await store.listRecent()).toEqual([]);
   });
+
+  it('能聚合 runtime/model 指标', async () => {
+    const store = new TaskHistoryStore();
+    await store.add({
+      ...makeRecord('t1', 1000),
+      runtimeKind: 'cursor-agent-cli',
+      model: 'Auto',
+    });
+    await store.add({
+      ...makeRecord('t2', 2500),
+      runtimeKind: 'cursor-agent-cli',
+      model: 'Auto',
+    });
+    await store.add({
+      ...makeRecord('t3', 4000),
+      runtimeKind: 'kiro-cli-acp',
+      model: 'claude-sonnet-5',
+      terminal: 'error',
+    });
+    const rows = await store.summarizeRuntimeMetrics();
+    expect(rows[0]).toMatchObject({
+      runtimeKind: 'cursor-agent-cli',
+      model: 'Auto',
+      total: 2,
+      success: 2,
+      failed: 0,
+    });
+  });
 });

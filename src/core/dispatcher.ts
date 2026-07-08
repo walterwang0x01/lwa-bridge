@@ -3070,6 +3070,9 @@ export class Dispatcher {
         };
         if (idleMin > 0) ctrlOpts.idleTimeoutMinutes = idleMin;
         const ctrl = new RunCardController(ctrlOpts);
+        let selectedProfileName: string | undefined;
+        let selectedProfile: RuntimeProfile | undefined;
+        let selectedComplexityScore: number | undefined;
         try {
           await ctrl.open();
         } catch (e) {
@@ -3105,6 +3108,9 @@ export class Dispatcher {
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
           const { profileName, profile, reason, complexityScore, modelDecision } =
             await this.selectRuntimeForTask(msg.chatId, finalPrompt, mediaPaths.length);
+          selectedProfileName = profileName;
+          selectedProfile = profile;
+          selectedComplexityScore = complexityScore;
           const storedSid = await this.sessions.getAgentSession(msg.chatId, cwd, sessionTtlMs);
           const resumeId = storedSid
             ? decodeSessionId(storedSid, profile.kind)
@@ -3227,6 +3233,10 @@ export class Dispatcher {
               promptPreview: prompt.slice(0, 100),
               toolCallCount,
               artifacts,
+              runtimeProfile: selectedProfileName,
+              runtimeKind: selectedProfile?.kind,
+              model: selectedProfile?.model,
+              complexityScore: selectedComplexityScore,
             };
             const errMsg = ctrl.getErrorMsg();
             if (errMsg !== undefined) record.errorMsg = errMsg;
