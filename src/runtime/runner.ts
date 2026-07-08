@@ -48,7 +48,7 @@ export async function runAgentTurn(
   let runtime: ReturnType<typeof createAgentRuntime> | null = null;
   let ownsRuntime = true;
 
-  if (pooled && profile.kind === 'kiro-acp') {
+  if (pooled && profile.kind === 'kiro-cli-acp') {
     runtime = new KiroAcpRuntime(pooled.client, false);
     sessionId = pooled.sessionId;
     ownsRuntime = false;
@@ -156,7 +156,7 @@ export async function runKiroFromProfile(
   profile: RuntimeProfile,
   opts: AgentTurnOptions & { binPath?: string },
 ): Promise<AgentTurnResult> {
-  if (opts.binPath && profile.kind === 'kiro-acp') {
+  if (opts.binPath && profile.kind === 'kiro-cli-acp') {
     profile = { ...profile, bin: opts.binPath };
   }
   return runAgentTurn(profile, opts);

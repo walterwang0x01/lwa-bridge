@@ -25,7 +25,7 @@ const CAPABILITIES: RuntimeCapabilities = {
 };
 
 export class CursorCliRuntime implements AgentRuntime {
-  readonly kind = 'cursor-cli' as const;
+  readonly kind = 'cursor-agent-cli' as const;
   readonly capabilities = CAPABILITIES;
 
   private readonly profile: RuntimeProfile;

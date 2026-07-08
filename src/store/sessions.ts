@@ -163,7 +163,7 @@ export class SessionStore {
 
   /**
    * 获取当前 (chatId, cwd) 对应的 agent session id（可能不存在）。
-   * 存储格式为 `{runtimeKind}:{nativeId}`；legacy 无前缀视为 kiro-acp。
+   * 存储格式为 `{runtimeKind}:{nativeId}`；legacy 无前缀视为 kiro-cli-acp。
    *
    * @param maxAgeMs 超过此毫秒数未活动则视为过期，返回 undefined（自动开新 session）。
    *   传 0 = 永不过期。undefined = 不做检查（兼容旧调用）。

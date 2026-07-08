@@ -17,9 +17,9 @@ import { readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { z } from 'zod';
 import { CONFIG_FILE, ensureDataDirs } from './paths.js';
 
-/** 单个 Agent CLI runtime profile（kiro-acp / cursor-cli 等）。 */
+/** 单个 Agent CLI runtime profile（kiro-cli-acp / cursor-agent-cli 等）。 */
 export const RuntimeProfileSchema = z.object({
-  kind: z.enum(['kiro-acp', 'cursor-cli']),
+  kind: z.enum(['kiro-cli-acp', 'cursor-agent-cli']),
   bin: z.string().optional(),
   model: z.string().optional(),
   agent: z.string().optional(),
@@ -66,6 +66,26 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .optional(),
+  modelRouting: z
+    .object({
+      kiro: z
+        .object({
+          mode: z.enum(['fixed', 'smart']).default('smart'),
+          simpleTier: z.string().default('balanced'),
+          mediumTier: z.string().default('strong'),
+          hardTier: z.string().default('max'),
+          mediumThreshold: z.number().int().nonnegative().default(4),
+          hardThreshold: z.number().int().nonnegative().default(7),
+        })
+        .default({}),
+      cursor: z
+        .object({
+          mode: z.enum(['fixed']).default('fixed'),
+          model: z.string().default('Auto'),
+        })
+        .default({}),
+    })
+    .default({}),
   lark: z.object({
     appId: z.string().min(1),
     appSecret: z.string().min(1),

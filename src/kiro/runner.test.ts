@@ -73,7 +73,7 @@ describe('runKiro session 续接降级', () => {
     expect(h.loadSession).toHaveBeenCalledWith('sess_old', '/tmp/proj');
     expect(h.newSession).toHaveBeenCalledWith('/tmp/proj');
     expect(result.text).toBe('Hello world');
-    expect(result.newSessionId).toBe('kiro-acp:sess_new');
+    expect(result.newSessionId).toBe('kiro-cli-acp:sess_new');
     expect(result.exitCode).toBe(0);
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
@@ -93,7 +93,7 @@ describe('runKiro session 续接降级', () => {
 
     expect(h.loadSession).toHaveBeenCalledWith('sess_old', '/tmp/proj');
     expect(h.newSession).not.toHaveBeenCalled();
-    expect(result.newSessionId).toBe('kiro-acp:sess_old');
+    expect(result.newSessionId).toBe('kiro-cli-acp:sess_old');
     expect(result.exitCode).toBe(0);
   });
 
@@ -104,7 +104,7 @@ describe('runKiro session 续接降级', () => {
 
     expect(h.loadSession).not.toHaveBeenCalled();
     expect(h.newSession).toHaveBeenCalledWith('/tmp/proj');
-    expect(result.newSessionId).toBe('kiro-acp:sess_fresh');
+    expect(result.newSessionId).toBe('kiro-cli-acp:sess_fresh');
   });
 
   it('传入 agent 时透传给 AcpClient.spawn 的 config', async () => {

@@ -3,8 +3,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import type { Config } from '../lib/config.js';
+import { listModels } from '../kiro/models.js';
 import { defaultRuntimeProfiles, resolveRuntimeProfile } from './config.js';
-import type { RuntimeProfile } from './types.js';
+import type { ModelRouteDecision, RuntimeProfile } from './types.js';
 
 export interface RuntimeRouteContext {
   prompt: string;
@@ -16,6 +17,7 @@ export interface RuntimeDecision {
   profileName: string;
   profile: RuntimeProfile;
   reason: string;
+  modelDecision?: ModelRouteDecision;
 }
 
 function isBinAvailable(bin: string): boolean {
@@ -106,5 +108,81 @@ export function chooseRuntimeProfile(
     profileName: 'kiro',
     profile: resolveRuntimeProfile(cfg, 'kiro'),
     reason: 'smart-hard-fallback',
+  };
+}
+
+function pickFirst(models: string[], candidates: string[]): string | undefined {
+  for (const candidate of candidates) {
+    if (models.includes(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+export async function chooseModelForProfile(
+  cfg: Config,
+  profile: RuntimeProfile,
+  ctx: RuntimeRouteContext,
+): Promise<ModelRouteDecision> {
+  if (profile.kind === 'cursor-agent-cli') {
+    return {
+      mode: 'fixed',
+      selectedModel: cfg.modelRouting.cursor.model ?? profile.model ?? 'Auto',
+      reason: 'cursor-fixed-auto',
+    };
+  }
+
+  if (cfg.modelRouting.kiro.mode === 'fixed') {
+    return {
+      mode: 'fixed',
+      selectedModel: profile.model,
+      reason: profile.model ? 'kiro-fixed-profile' : 'kiro-fixed-default',
+    };
+  }
+
+  const score = complexityScore(cfg, ctx);
+  const list = await listModels(profile.bin);
+  if (!list || list.models.length === 0) {
+    return {
+      mode: 'smart',
+      selectedModel: profile.model,
+      reason: `kiro-smart-no-list(score=${score})`,
+    };
+  }
+
+  const names = list.models.map((m) => m.name);
+  const mediumThreshold = cfg.modelRouting.kiro.mediumThreshold;
+  const hardThreshold = cfg.modelRouting.kiro.hardThreshold;
+
+  let tier: 'simple' | 'medium' | 'hard' = 'simple';
+  if (score >= hardThreshold) tier = 'hard';
+  else if (score >= mediumThreshold) tier = 'medium';
+
+  let selected: string | undefined;
+  if (tier === 'hard') {
+    selected =
+      pickFirst(names, ['claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6']) ??
+      pickFirst(names, ['claude-sonnet-5', 'claude-sonnet-4.6']) ??
+      list.defaultModel;
+  } else if (tier === 'medium') {
+    selected =
+      pickFirst(names, ['claude-sonnet-5', 'claude-sonnet-4.6', 'claude-sonnet-4.5']) ??
+      pickFirst(names, ['claude-opus-4.8', 'claude-opus-4.7']) ??
+      list.defaultModel;
+  } else {
+    selected =
+      pickFirst(names, [
+        'claude-sonnet-4.6',
+        'claude-sonnet-4.5',
+        'claude-sonnet-4',
+        'claude-haiku-4.5',
+      ]) ??
+      pickFirst(names, ['claude-sonnet-5', 'minimax-m2.5', 'deepseek-3.2']) ??
+      list.defaultModel;
+  }
+
+  return {
+    mode: 'smart',
+    selectedModel: selected,
+    reason: `kiro-smart-${tier}(score=${score})`,
   };
 }

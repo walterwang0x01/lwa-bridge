@@ -2,7 +2,7 @@
  * 跨 runtime 的 session id 编解码。
  *
  * 存储格式：`{runtimeKind}:{nativeId}`，避免 kiro / cursor session 混用。
- * 旧数据无冒号前缀时视为 kiro-acp 原生 id（向后兼容）。
+ * 旧数据无冒号前缀时视为 kiro-cli-acp 原生 id（向后兼容）。
  */
 import { RUNTIME_KINDS, type RuntimeKind } from './types.js';
 
@@ -30,7 +30,7 @@ export function decodeSessionId(
       return stored.slice(colon + 1);
     }
   }
-  // 遗留：无前缀的 id 仅对 kiro-acp 有效
-  if (expectedKind === 'kiro-acp') return stored;
+  // 遗留：无前缀的 id 仅对 kiro-cli-acp 有效
+  if (expectedKind === 'kiro-cli-acp') return stored;
   return undefined;
 }

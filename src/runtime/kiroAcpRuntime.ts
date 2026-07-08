@@ -20,7 +20,7 @@ const CAPABILITIES: RuntimeCapabilities = {
 };
 
 export class KiroAcpRuntime implements AgentRuntime {
-  readonly kind = 'kiro-acp' as const;
+  readonly kind = 'kiro-cli-acp' as const;
   readonly capabilities = CAPABILITIES;
 
   private readonly client: AcpClient;

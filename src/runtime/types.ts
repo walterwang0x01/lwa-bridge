@@ -2,14 +2,14 @@
  * 多 Agent CLI 运行时抽象层。
  *
  * 上层（dispatcher / conduit）只依赖本模块的类型与 runAgentTurn，
- * 具体 kiro-cli acp / cursor agent 由适配器实现。
+ * 具体 kiro-cli（经 ACP）/ cursor agent 由适配器实现。
  */
 import type { SessionEvent } from '../kiro/acp/messages.js';
 
 /** 支持的运行时种类。新增 CLI 时扩展此联合类型并实现对应适配器。 */
-export type RuntimeKind = 'kiro-acp' | 'cursor-cli';
+export type RuntimeKind = 'kiro-cli-acp' | 'cursor-agent-cli';
 
-export const RUNTIME_KINDS = new Set<RuntimeKind>(['kiro-acp', 'cursor-cli']);
+export const RUNTIME_KINDS = new Set<RuntimeKind>(['kiro-cli-acp', 'cursor-agent-cli']);
 
 /** 与 ACP SessionEvent 对齐的统一事件（卡片渲染器直接消费）。 */
 export type UnifiedSessionEvent = SessionEvent;
@@ -27,7 +27,7 @@ export interface RuntimeCapabilities {
   parallelWorkers: boolean;
   /** 是否支持 kiro agent / skill 列表 */
   skills: boolean;
-  /** 是否支持进程池复用（仅 kiro-acp） */
+  /** 是否支持进程池复用（仅 kiro-cli-acp） */
   poolable: boolean;
 }
 
@@ -38,12 +38,18 @@ export interface RuntimeProfile {
   bin: string;
   model?: string;
   agent?: string;
-  /** cursor-cli：等同 --force / --yolo */
+  /** cursor-agent-cli：等同 --force / --yolo */
   force?: boolean;
   timeoutMs?: number;
   idleTimeoutMinutes?: number;
   systemPromptPrefix?: string;
   trustedTools?: string[];
+}
+
+export interface ModelRouteDecision {
+  mode: 'fixed' | 'smart';
+  selectedModel?: string;
+  reason: string;
 }
 
 export interface AgentTurnOptions {
@@ -55,7 +61,7 @@ export interface AgentTurnOptions {
   onEvent?: (ev: UnifiedSessionEvent) => void;
   signal?: AbortSignal;
   extraEnv?: Record<string, string>;
-  /** 仅 kiro-acp 池化模式 */
+  /** 仅 kiro-cli-acp 池化模式 */
   pooled?: {
     client: import('../kiro/acp/client.js').AcpClient;
     sessionId: string;

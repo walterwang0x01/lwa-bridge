@@ -32,7 +32,7 @@ export type RunResult = Omit<AgentTurnResult, 'runtimeKind'> & {
 
 function optionsToProfile(opts: RunOptions): RuntimeProfile {
   const profile: RuntimeProfile = {
-    kind: 'kiro-acp',
+    kind: 'kiro-cli-acp',
     bin: opts.binPath ?? 'kiro-cli',
   };
   if (opts.model) profile.model = opts.model;

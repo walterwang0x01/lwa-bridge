@@ -23,7 +23,7 @@ export function helpMarkdown(): string {
     '**运维**',
     '`/timeout [N|off|default]` — idle watchdog 阈值（分钟）',
     '`/model [name|auto]` — 查看 / 切换 / 重置模型（kiro 引擎）',
-    '`/runtime [kiro|cursor]` — 查看 / 切换 Agent CLI 引擎（kiro-acp / cursor-cli）',
+    '`/runtime [kiro|cursor]` — 查看 / 切换 Agent CLI 引擎（kiro-cli-acp / cursor-agent-cli）',
     '`/config` — 查看 / 编辑访问控制 + 偏好（管理员）',
     '`/steering [list|view|edit|new|rm] [--global]` — 管理 Kiro steering 文件',
     '`/cron [list|add|rm|pause|resume|run|next|translate]` — 定时任务',

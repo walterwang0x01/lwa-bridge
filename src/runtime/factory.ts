@@ -10,9 +10,9 @@ export function createAgentRuntime(
   opts: { cwd: string; extraEnv?: Record<string, string> },
 ): AgentRuntime {
   switch (profile.kind) {
-    case 'kiro-acp':
+    case 'kiro-cli-acp':
       return KiroAcpRuntime.spawn(profile, opts);
-    case 'cursor-cli':
+    case 'cursor-agent-cli':
       return new CursorCliRuntime(profile, opts);
     default: {
       const _exhaustive: never = profile.kind;

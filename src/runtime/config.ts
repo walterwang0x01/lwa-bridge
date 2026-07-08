@@ -5,15 +5,15 @@ import type { Config } from '../lib/config.js';
 import type { RuntimeKind, RuntimeProfile } from './types.js';
 
 const DEFAULT_BINS: Record<RuntimeKind, string> = {
-  'kiro-acp': 'kiro-cli',
-  'cursor-cli': 'agent',
+  'kiro-cli-acp': 'kiro-cli',
+  'cursor-agent-cli': 'agent',
 };
 
 export function defaultRuntimeProfiles(
   cfg: Config,
 ): { kiro: RuntimeProfile; cursor: RuntimeProfile } & Record<string, RuntimeProfile> {
   const kiro: RuntimeProfile = {
-    kind: 'kiro-acp',
+    kind: 'kiro-cli-acp',
     bin: cfg.kiro.binPath,
     model: cfg.kiro.model,
     agent: cfg.kiro.agent,
@@ -23,8 +23,9 @@ export function defaultRuntimeProfiles(
     trustedTools: cfg.kiro.trustedTools,
   };
   const cursor: RuntimeProfile = {
-    kind: 'cursor-cli',
-    bin: DEFAULT_BINS['cursor-cli'],
+    kind: 'cursor-agent-cli',
+    bin: DEFAULT_BINS['cursor-agent-cli'],
+    model: 'Auto',
     force: true,
     timeoutMs: cfg.kiro.timeoutMs,
     idleTimeoutMinutes: cfg.kiro.idleTimeoutMinutes,

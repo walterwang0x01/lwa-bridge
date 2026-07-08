@@ -29,9 +29,9 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
 import { runAgentTurn } from '../runtime/runner.js';
 import { listRuntimeProfileNames, resolveRuntimeProfile } from '../runtime/config.js';
+import { chooseModelForProfile, chooseRuntimeProfile } from '../runtime/router.js';
 import { decodeSessionId } from '../runtime/sessionId.js';
 import type { RuntimeProfile } from '../runtime/types.js';
-import { chooseRuntimeProfile } from '../runtime/router.js';
 import { AcpPool } from '../kiro/acpPool.js';
 import { listModels, clearModelCache } from '../kiro/models.js';
 import { CardRenderer } from '../card/renderer.js';
@@ -113,7 +113,7 @@ export class Dispatcher {
   private readonly memory = new MemoryStore();
   /** Kiro 当前 agent 可用 skill 缓存（per chatId，每次 turn 成功后更新）。 */
   private readonly chatSkills = new Map<string, Array<{ name: string; description: string }>>();
-  /** per-profile ACP 进程池（仅 kiro-acp runtime 使用）。 */
+  /** per-profile ACP 进程池（仅 kiro-cli-acp runtime 使用）。 */
   private readonly acpPools = new Map<string, AcpPool>();
   private readonly cronStore?: CronStore;
   private readonly cronScheduler?: CronScheduler;
@@ -181,11 +181,25 @@ export class Dispatcher {
     commandName?: string,
   ): Promise<{ profileName: string; profile: RuntimeProfile; reason: string }> {
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
-    return chooseRuntimeProfile(
+    const picked = chooseRuntimeProfile(
       this.config,
       { prompt, mediaCount, commandName },
       explicitProfileName,
     );
+    const modelDecision = await chooseModelForProfile(this.config, picked.profile, {
+      prompt,
+      mediaCount,
+      commandName,
+    });
+    const profile =
+      modelDecision.selectedModel !== undefined
+        ? { ...picked.profile, model: modelDecision.selectedModel }
+        : picked.profile;
+    return {
+      profileName: picked.profileName,
+      profile,
+      reason: `${picked.reason};${modelDecision.reason}`,
+    };
   }
 
   private getPipeline(chatId: string): ChatPipeline {
@@ -3098,7 +3112,7 @@ export class Dispatcher {
           );
 
           let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
-          if (profile.kind === 'kiro-acp') {
+          if (profile.kind === 'kiro-cli-acp') {
             const pool = this.getAcpPool(profile);
             pooled = await pool.acquire(msg.chatId, {
               cwd,
@@ -3131,7 +3145,7 @@ export class Dispatcher {
             await ctrl.finalize('error', (e as Error).message);
             return;
           } finally {
-            if (profile.kind === 'kiro-acp') {
+            if (profile.kind === 'kiro-cli-acp') {
               this.getAcpPool(profile).release(msg.chatId);
             }
           }
@@ -3158,7 +3172,7 @@ export class Dispatcher {
             return;
           }
           if (result.exitCode !== 0) {
-            const engine = profile.kind === 'cursor-cli' ? 'cursor agent' : 'kiro-cli';
+            const engine = profile.kind === 'cursor-agent-cli' ? 'cursor agent' : 'kiro-cli';
             await ctrl.finalize('error', `${engine} 退出码 ${result.exitCode}`);
             return;
           }
