@@ -29,7 +29,10 @@ const connected = computed(() => data.value !== null && error.value === null);
       <ProcessesPanel :processes="data?.processes ?? []" />
       <SkillsPanel :skills="data?.skills ?? []" />
       <AgentsPanel :agents="data?.agents ?? []" />
-      <RuntimeMetricsPanel :rows="data?.runtimeMetrics ?? []" />
+      <RuntimeMetricsPanel
+        :rows="data?.runtimeMetrics ?? []"
+        :recommendation="data?.adaptiveRecommendation ?? null"
+      />
       <div class="lg:col-span-2">
         <TaskHistoryPanel :tasks="data?.taskHistory ?? []" />
       </div>

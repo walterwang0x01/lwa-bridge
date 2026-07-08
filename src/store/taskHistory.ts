@@ -48,6 +48,13 @@ export interface RuntimeMetricsRow {
   avgDurationMs: number;
 }
 
+export interface AdaptiveRuntimeRecommendation {
+  preferredRuntimeKind?: string;
+  preferredModel?: string;
+  sampleSize: number;
+  reason: string;
+}
+
 const FileSchema = z.object({
   version: z.literal(1).default(1),
   records: z.array(TaskHistoryRecordSchema).default([]),
@@ -143,5 +150,35 @@ export class TaskHistoryStore {
         }))
         .sort((a, b) => b.total - a.total || b.successRate - a.successRate);
     });
+  }
+
+  async recommendAdaptiveStrategy(limit = 200): Promise<AdaptiveRuntimeRecommendation> {
+    const rows = await this.summarizeRuntimeMetrics(limit);
+    const eligible = rows.filter((row) => row.total >= 3);
+    if (eligible.length === 0) {
+      return { sampleSize: 0, reason: 'insufficient-history' };
+    }
+
+    const runtimeRows = new Map<string, RuntimeMetricsRow>();
+    for (const row of eligible) {
+      const current = runtimeRows.get(row.runtimeKind);
+      if (!current || row.successRate > current.successRate || row.total > current.total) {
+        runtimeRows.set(row.runtimeKind, row);
+      }
+    }
+    const bestRuntime = [...runtimeRows.values()].sort(
+      (a, b) => b.successRate - a.successRate || b.total - a.total,
+    )[0];
+    const bestKiro = eligible
+      .filter((row) => row.runtimeKind === 'kiro-cli-acp')
+      .sort((a, b) => b.successRate - a.successRate || b.total - a.total)[0];
+
+    return {
+      preferredRuntimeKind:
+        bestRuntime && bestRuntime.successRate >= 0.8 ? bestRuntime.runtimeKind : undefined,
+      preferredModel: bestKiro && bestKiro.successRate >= 0.8 ? bestKiro.model : undefined,
+      sampleSize: eligible.reduce((sum, row) => sum + row.total, 0),
+      reason: 'history-success-rate',
+    };
   }
 }

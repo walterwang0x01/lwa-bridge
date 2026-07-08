@@ -187,11 +187,31 @@ export class Dispatcher {
     modelDecision?: Awaited<ReturnType<typeof chooseModelForProfile>>;
   }> {
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
-    const picked = await chooseRuntimeProfile(
+    let picked = await chooseRuntimeProfile(
       this.config,
       { prompt, mediaCount, commandName },
       explicitProfileName,
     );
+    if (!explicitProfileName && this.taskHistory) {
+      const adaptive = await this.taskHistory.recommendAdaptiveStrategy(200).catch(() => undefined);
+      if (adaptive?.preferredRuntimeKind && adaptive.sampleSize >= 5) {
+        const adaptiveProfileName =
+          adaptive.preferredRuntimeKind === 'cursor-agent-cli' ? 'cursor' : 'kiro';
+        picked = {
+          profileName: adaptiveProfileName,
+          profile: resolveRuntimeProfile(this.config, adaptiveProfileName),
+          reason: `${picked.reason};adaptive-runtime(${adaptive.reason})`,
+          complexityScore: picked.complexityScore,
+        };
+      }
+      if (adaptive?.preferredModel && picked.profile.kind === 'kiro-cli-acp') {
+        picked = {
+          ...picked,
+          profile: { ...picked.profile, model: adaptive.preferredModel },
+          reason: `${picked.reason};adaptive-model(${adaptive.reason})`,
+        };
+      }
+    }
     const modelDecision = await chooseModelForProfile(this.config, picked.profile, {
       prompt,
       mediaCount,

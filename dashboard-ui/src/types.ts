@@ -75,6 +75,13 @@ export interface RuntimeMetricsRow {
   avgDurationMs: number;
 }
 
+export interface AdaptiveRecommendation {
+  preferredRuntimeKind?: string;
+  preferredModel?: string;
+  sampleSize: number;
+  reason: string;
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -93,5 +100,6 @@ export interface Overview {
   assetInstalls: AssetInstallRecord[];
   taskHistory: TaskHistoryRecord[];
   runtimeMetrics: RuntimeMetricsRow[];
+  adaptiveRecommendation: AdaptiveRecommendation;
   logs: string[];
 }

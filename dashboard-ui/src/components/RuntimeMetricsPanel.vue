@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { RuntimeMetricsRow } from '../types';
+import type { AdaptiveRecommendation, RuntimeMetricsRow } from '../types';
 import Panel from './Panel.vue';
 import EmptyState from './EmptyState.vue';
 
-defineProps<{ rows: RuntimeMetricsRow[] }>();
+defineProps<{ rows: RuntimeMetricsRow[]; recommendation?: AdaptiveRecommendation | null }>();
 
 function percent(v: number): string {
   return `${Math.round(v * 100)}%`;
@@ -16,6 +16,15 @@ function duration(ms: number): string {
 
 <template>
   <Panel title="Runtime 指标" subtitle="METRICS" :count="rows.length">
+    <div
+      v-if="recommendation && recommendation.sampleSize > 0"
+      class="border-b border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-neutral-400"
+    >
+      推荐：
+      runtime=<span class="text-neutral-200">{{ recommendation.preferredRuntimeKind || '保持当前' }}</span>
+      · model=<span class="text-teal-300">{{ recommendation.preferredModel || '保持当前' }}</span>
+      · samples={{ recommendation.sampleSize }}
+    </div>
     <EmptyState v-if="rows.length === 0" text="还没有 runtime 指标" />
     <div v-else class="overflow-x-auto">
       <table class="min-w-full text-left text-xs text-neutral-400">

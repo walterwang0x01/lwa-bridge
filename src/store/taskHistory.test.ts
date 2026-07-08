@@ -81,4 +81,26 @@ describe('TaskHistoryStore', () => {
       failed: 0,
     });
   });
+
+  it('能给出保守的自适应建议', async () => {
+    const store = new TaskHistoryStore();
+    await store.add({
+      ...makeRecord('t1', 1000),
+      runtimeKind: 'kiro-cli-acp',
+      model: 'claude-sonnet-5',
+    });
+    await store.add({
+      ...makeRecord('t2', 2000),
+      runtimeKind: 'kiro-cli-acp',
+      model: 'claude-sonnet-5',
+    });
+    await store.add({
+      ...makeRecord('t3', 3000),
+      runtimeKind: 'kiro-cli-acp',
+      model: 'claude-sonnet-5',
+    });
+    const rec = await store.recommendAdaptiveStrategy();
+    expect(rec.preferredRuntimeKind).toBe('kiro-cli-acp');
+    expect(rec.preferredModel).toBe('claude-sonnet-5');
+  });
 });

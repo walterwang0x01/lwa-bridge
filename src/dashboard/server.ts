@@ -100,6 +100,9 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
   const runtimeMetrics = deps.taskHistory
     ? await deps.taskHistory.summarizeRuntimeMetrics(200)
     : [];
+  const adaptiveRecommendation = deps.taskHistory
+    ? await deps.taskHistory.recommendAdaptiveStrategy(200)
+    : { sampleSize: 0, reason: 'no-task-history' };
 
   return {
     bridge: {
@@ -117,6 +120,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     assetInstalls,
     taskHistory,
     runtimeMetrics,
+    adaptiveRecommendation,
     logs,
   };
 }
