@@ -1,10 +1,9 @@
 /**
  * 智能 runtime 路由：简单任务优先 cursor，复杂任务优先 kiro。
  */
-import { spawnSync } from 'node:child_process';
 import type { Config } from '../lib/config.js';
-import { listModels } from '../kiro/models.js';
-import { defaultRuntimeProfiles, resolveRuntimeProfile } from './config.js';
+import { resolveRuntimeProfile } from './config.js';
+import { discoverRuntimeRegistry } from './registry.js';
 import type { ModelRouteDecision, RuntimeProfile } from './types.js';
 
 export interface RuntimeRouteContext {
@@ -18,18 +17,6 @@ export interface RuntimeDecision {
   profile: RuntimeProfile;
   reason: string;
   complexityScore?: number;
-}
-
-function isBinAvailable(bin: string): boolean {
-  const res = spawnSync('which', [bin], { stdio: 'ignore' });
-  return res.status === 0;
-}
-
-function availableProfiles(cfg: Config): Array<{ name: string; profile: RuntimeProfile }> {
-  const names = Object.keys({ ...defaultRuntimeProfiles(cfg), ...(cfg.runtime?.profiles ?? {}) });
-  return names
-    .map((name) => ({ name, profile: resolveRuntimeProfile(cfg, name) }))
-    .filter(({ profile }) => isBinAvailable(profile.bin));
 }
 
 export function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {
@@ -51,11 +38,11 @@ export function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {
   return score;
 }
 
-export function chooseRuntimeProfile(
+export async function chooseRuntimeProfile(
   cfg: Config,
   ctx: RuntimeRouteContext,
   explicitProfileName?: string,
-): RuntimeDecision {
+): Promise<RuntimeDecision> {
   if (explicitProfileName) {
     return {
       profileName: explicitProfileName,
@@ -66,7 +53,9 @@ export function chooseRuntimeProfile(
   }
 
   const mode = cfg.runtime?.router?.mode ?? 'manual';
-  const available = availableProfiles(cfg);
+  const available = (await discoverRuntimeRegistry(cfg))
+    .filter((entry) => entry.available)
+    .map((entry) => ({ name: entry.profileName, profile: entry.profile }));
   if (available.length === 1) {
     const only = available[0]!;
     return {
@@ -128,6 +117,20 @@ function pickFirst(models: string[], candidates: string[]): string | undefined {
   return undefined;
 }
 
+function candidatesForTier(tierProfile: string, fallback: string[]): string[] {
+  switch (tierProfile) {
+    case 'max':
+      return ['claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', ...fallback];
+    case 'strong':
+      return ['claude-sonnet-5', 'claude-sonnet-4.6', 'claude-sonnet-4.5', ...fallback];
+    case 'fast':
+      return ['claude-haiku-4.5', 'deepseek-3.2', 'minimax-m2.5', ...fallback];
+    case 'balanced':
+    default:
+      return ['claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-sonnet-4', ...fallback];
+  }
+}
+
 export async function chooseModelForProfile(
   cfg: Config,
   profile: RuntimeProfile,
@@ -153,8 +156,11 @@ export async function chooseModelForProfile(
     };
   }
 
-  const list = await listModels(profile.bin);
-  if (!list || list.models.length === 0) {
+  const registry = await discoverRuntimeRegistry(cfg);
+  const entry = registry.find(
+    (item) => item.profile.bin === profile.bin && item.profile.kind === profile.kind,
+  );
+  if (!entry || entry.models.length === 0) {
     return {
       mode: 'smart',
       selectedModel: profile.model,
@@ -163,7 +169,7 @@ export async function chooseModelForProfile(
     };
   }
 
-  const names = list.models.map((m) => m.name);
+  const names = entry.models;
   const mediumThreshold = cfg.modelRouting.kiro.mediumThreshold;
   const hardThreshold = cfg.modelRouting.kiro.hardThreshold;
 
@@ -174,24 +180,20 @@ export async function chooseModelForProfile(
   let selected: string | undefined;
   if (tier === 'hard') {
     selected =
-      pickFirst(names, ['claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6']) ??
-      pickFirst(names, ['claude-sonnet-5', 'claude-sonnet-4.6']) ??
-      list.defaultModel;
+      pickFirst(
+        names,
+        candidatesForTier(cfg.modelRouting.kiro.hardTier, ['claude-sonnet-5', 'claude-sonnet-4.6']),
+      ) ?? entry.defaultModel;
   } else if (tier === 'medium') {
     selected =
-      pickFirst(names, ['claude-sonnet-5', 'claude-sonnet-4.6', 'claude-sonnet-4.5']) ??
-      pickFirst(names, ['claude-opus-4.8', 'claude-opus-4.7']) ??
-      list.defaultModel;
+      pickFirst(
+        names,
+        candidatesForTier(cfg.modelRouting.kiro.mediumTier, ['claude-opus-4.8', 'claude-opus-4.7']),
+      ) ?? entry.defaultModel;
   } else {
     selected =
-      pickFirst(names, [
-        'claude-sonnet-4.6',
-        'claude-sonnet-4.5',
-        'claude-sonnet-4',
-        'claude-haiku-4.5',
-      ]) ??
-      pickFirst(names, ['claude-sonnet-5', 'minimax-m2.5', 'deepseek-3.2']) ??
-      list.defaultModel;
+      pickFirst(names, candidatesForTier(cfg.modelRouting.kiro.simpleTier, ['claude-sonnet-5'])) ??
+      entry.defaultModel;
   }
 
   return {

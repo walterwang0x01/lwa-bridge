@@ -71,9 +71,9 @@ export const ConfigSchema = z.object({
       kiro: z
         .object({
           mode: z.enum(['fixed', 'smart']).default('smart'),
-          simpleTier: z.string().default('balanced'),
-          mediumTier: z.string().default('strong'),
-          hardTier: z.string().default('max'),
+          simpleTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('balanced'),
+          mediumTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('strong'),
+          hardTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('max'),
           mediumThreshold: z.number().int().nonnegative().default(4),
           hardThreshold: z.number().int().nonnegative().default(7),
         })

@@ -163,7 +163,7 @@ export class Dispatcher {
   ): Promise<{ profileName: string; profile: RuntimeProfile }> {
     const stored = await this.sessions.getRuntimeProfile(chatId);
     if (!stored && (this.config.runtime?.default ?? 'kiro') === 'auto') {
-      const picked = chooseRuntimeProfile(this.config, { prompt: '' });
+      const picked = await chooseRuntimeProfile(this.config, { prompt: '' });
       return { profileName: `auto→${picked.profileName}`, profile: picked.profile };
     }
     const profileName = stored ?? this.config.runtime?.default ?? 'kiro';
@@ -187,7 +187,7 @@ export class Dispatcher {
     modelDecision?: Awaited<ReturnType<typeof chooseModelForProfile>>;
   }> {
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
-    const picked = chooseRuntimeProfile(
+    const picked = await chooseRuntimeProfile(
       this.config,
       { prompt, mediaCount, commandName },
       explicitProfileName,

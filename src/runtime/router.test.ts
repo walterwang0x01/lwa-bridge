@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigSchema } from '../lib/config.js';
-import { chooseRuntimeProfile, complexityScore } from './router.js';
+import { chooseModelForProfile, chooseRuntimeProfile, complexityScore } from './router.js';
+import * as registry from './registry.js';
 
 function makeConfig() {
   return ConfigSchema.parse({
@@ -16,22 +17,65 @@ function makeConfig() {
 }
 
 describe('chooseRuntimeProfile', () => {
-  it('显式 profile 优先', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('显式 profile 优先', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'kiro',
+        profile: { kind: 'kiro-cli-acp', bin: 'kiro-cli' },
+        available: true,
+        models: ['claude-sonnet-5'],
+        defaultModel: 'claude-sonnet-5',
+      },
+    ]);
     const cfg = makeConfig();
-    const picked = chooseRuntimeProfile(cfg, { prompt: 'hi' }, 'kiro');
+    const picked = await chooseRuntimeProfile(cfg, { prompt: 'hi' }, 'kiro');
     expect(picked.profileName).toBe('kiro');
     expect(picked.reason).toBe('explicit-profile');
   });
 
-  it('简单任务优先 cursor', () => {
+  it('简单任务优先 cursor', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'kiro',
+        profile: { kind: 'kiro-cli-acp', bin: 'kiro-cli' },
+        available: true,
+        models: ['claude-sonnet-5'],
+        defaultModel: 'claude-sonnet-5',
+      },
+      {
+        profileName: 'cursor',
+        profile: { kind: 'cursor-agent-cli', bin: 'agent', force: true },
+        available: true,
+        models: [],
+      },
+    ]);
     const cfg = makeConfig();
-    const picked = chooseRuntimeProfile(cfg, { prompt: '帮我总结这段话' });
-    expect(['cursor', 'kiro']).toContain(picked.profileName);
+    const picked = await chooseRuntimeProfile(cfg, { prompt: '帮我总结这段话' });
+    expect(picked.profileName).toBe('cursor');
   });
 
-  it('复杂任务优先 kiro', () => {
+  it('复杂任务优先 kiro', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'kiro',
+        profile: { kind: 'kiro-cli-acp', bin: 'kiro-cli' },
+        available: true,
+        models: ['claude-sonnet-5'],
+        defaultModel: 'claude-sonnet-5',
+      },
+      {
+        profileName: 'cursor',
+        profile: { kind: 'cursor-agent-cli', bin: 'agent', force: true },
+        available: true,
+        models: [],
+      },
+    ]);
     const cfg = makeConfig();
-    const picked = chooseRuntimeProfile(cfg, {
+    const picked = await chooseRuntimeProfile(cfg, {
       prompt: '请在 monorepo 里做跨模块重构，先分析架构，再修改多个文件，最后 review',
     });
     expect(picked.profileName).toBe('kiro');
@@ -44,5 +88,27 @@ describe('chooseRuntimeProfile', () => {
       prompt: '请在 monorepo 里做跨模块重构，先分析架构，再修改多个文件，最后 review',
     });
     expect(complex).toBeGreaterThan(simple);
+  });
+
+  it('simpleTier 配置会影响 Kiro 选模偏好', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'kiro',
+        profile: { kind: 'kiro-cli-acp', bin: 'kiro-cli' },
+        available: true,
+        models: ['claude-sonnet-4.6', 'claude-sonnet-5', 'claude-opus-4.8'],
+        defaultModel: 'claude-sonnet-4.6',
+      },
+    ]);
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+      modelRouting: { kiro: { simpleTier: 'strong' } },
+    });
+    const decision = await chooseModelForProfile(
+      cfg,
+      { kind: 'kiro-cli-acp', bin: 'kiro-cli' },
+      { prompt: '帮我总结这段话' },
+    );
+    expect(decision.selectedModel).toBe('claude-sonnet-5');
   });
 });
