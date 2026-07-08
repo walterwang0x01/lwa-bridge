@@ -194,7 +194,36 @@ export class Dispatcher {
     );
     if (!explicitProfileName && this.taskHistory) {
       const adaptive = await this.taskHistory.recommendAdaptiveStrategy(200).catch(() => undefined);
-      if (adaptive?.preferredRuntimeKind && adaptive.sampleSize >= 5) {
+      if (!adaptive) {
+        const modelDecision = await chooseModelForProfile(this.config, picked.profile, {
+          prompt,
+          mediaCount,
+          commandName,
+        });
+        const profile =
+          modelDecision.selectedModel !== undefined
+            ? { ...picked.profile, model: modelDecision.selectedModel }
+            : picked.profile;
+        return {
+          profileName: picked.profileName,
+          profile,
+          reason: `${picked.reason};adaptive-unavailable`,
+          complexityScore: picked.complexityScore ?? modelDecision.complexityScore,
+          modelDecision,
+        };
+      }
+      const adaptiveMode = this.config.modelRouting.kiro.adaptiveMode;
+      const canApplyRuntime =
+        adaptiveMode === 'apply-aggressive' ||
+        (adaptiveMode === 'apply-safe' &&
+          (adaptive.runtimeSuccessRate ?? 0) >= 0.9 &&
+          adaptive.sampleSize >= 8);
+      const canApplyModel =
+        adaptiveMode === 'apply-aggressive' ||
+        (adaptiveMode === 'apply-safe' &&
+          (adaptive.modelSuccessRate ?? 0) >= 0.9 &&
+          adaptive.sampleSize >= 8);
+      if (adaptiveMode !== 'off' && adaptive?.preferredRuntimeKind && canApplyRuntime) {
         const adaptiveProfileName =
           adaptive.preferredRuntimeKind === 'cursor-agent-cli' ? 'cursor' : 'kiro';
         picked = {
@@ -204,7 +233,12 @@ export class Dispatcher {
           complexityScore: picked.complexityScore,
         };
       }
-      if (adaptive?.preferredModel && picked.profile.kind === 'kiro-cli-acp') {
+      if (
+        adaptiveMode !== 'off' &&
+        adaptive?.preferredModel &&
+        picked.profile.kind === 'kiro-cli-acp' &&
+        canApplyModel
+      ) {
         picked = {
           ...picked,
           profile: { ...picked.profile, model: adaptive.preferredModel },

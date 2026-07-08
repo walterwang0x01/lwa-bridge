@@ -53,6 +53,8 @@ export interface AdaptiveRuntimeRecommendation {
   preferredModel?: string;
   sampleSize: number;
   reason: string;
+  runtimeSuccessRate?: number;
+  modelSuccessRate?: number;
 }
 
 const FileSchema = z.object({
@@ -179,6 +181,8 @@ export class TaskHistoryStore {
       preferredModel: bestKiro && bestKiro.successRate >= 0.8 ? bestKiro.model : undefined,
       sampleSize: eligible.reduce((sum, row) => sum + row.total, 0),
       reason: 'history-success-rate',
+      runtimeSuccessRate: bestRuntime?.successRate,
+      modelSuccessRate: bestKiro?.successRate,
     };
   }
 }

@@ -71,6 +71,9 @@ export const ConfigSchema = z.object({
       kiro: z
         .object({
           mode: z.enum(['fixed', 'smart']).default('smart'),
+          adaptiveMode: z
+            .enum(['off', 'suggest', 'apply-safe', 'apply-aggressive'])
+            .default('suggest'),
           simpleTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('balanced'),
           mediumTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('strong'),
           hardTier: z.enum(['fast', 'balanced', 'strong', 'max']).default('max'),

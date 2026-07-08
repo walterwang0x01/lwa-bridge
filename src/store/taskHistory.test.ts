@@ -102,5 +102,6 @@ describe('TaskHistoryStore', () => {
     const rec = await store.recommendAdaptiveStrategy();
     expect(rec.preferredRuntimeKind).toBe('kiro-cli-acp');
     expect(rec.preferredModel).toBe('claude-sonnet-5');
+    expect(rec.runtimeSuccessRate).toBe(1);
   });
 });
