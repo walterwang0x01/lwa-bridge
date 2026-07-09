@@ -22,6 +22,22 @@ const pathsMod = await import('../lib/paths.js');
 
 const silentLogger = pino({ level: 'silent' });
 
+async function waitFor<T>(
+  getter: () => T,
+  predicate: (value: T) => boolean,
+  timeoutMs = 3000,
+  intervalMs = 50,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let last = getter();
+  while (Date.now() < deadline) {
+    last = getter();
+    if (predicate(last)) return last;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return last;
+}
+
 describe('plan/types', () => {
   it('schema accepts a valid plan', () => {
     const r = typesMod.PlanSchema.safeParse({
@@ -224,9 +240,10 @@ describe('plan/source - FilePlanSource', () => {
     );
     renameSync(tmpPath, filePath);
 
-    // 等 debounce + watch 触发
-    await new Promise((r) => setTimeout(r, 250));
-    expect(updates.length).toBeGreaterThanOrEqual(1);
+    await waitFor(
+      () => updates,
+      (u) => u.length >= 1,
+    );
     expect(updates[updates.length - 1]?.items[0]?.title).toBe('first');
     src.stop();
   });
