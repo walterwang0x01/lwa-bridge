@@ -2,7 +2,7 @@
   "name": "dashboard-ui",
   "private": true,
   "version": "0.0.0",
-  "description": "lark-kiro-bridge 只读 Web Dashboard 的 Vue 3 前端，构建产物由根包 bridge 托管",
+  "description": "LWA Bridge read-only Web Dashboard (Vue 3); static assets shipped by lark-kiro-bridge",
   "type": "module",
   "scripts": {
     "dev": "vite",

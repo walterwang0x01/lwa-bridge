@@ -1,7 +1,7 @@
 {
   "name": "lark-kiro-bridge",
   "version": "0.9.2",
-  "description": "Bridge Feishu/Lark messenger with local Kiro CLI — streaming cards, per-chat sessions, named workspaces",
+  "description": "LWA Bridge — Feishu/Lark entry for local multi-CLI agents (Cursor/Kiro). Streaming cards, smart routing, observability.",
   "type": "module",
   "bin": {
     "lark-kiro-bridge": "bin/lark-kiro-bridge.mjs"
@@ -69,9 +69,14 @@
   "keywords": [
     "feishu",
     "lark",
+    "lwa",
+    "lark-local-agent-workbench",
+    "bridge",
     "kiro",
     "kiro-cli",
-    "bridge",
+    "cursor",
+    "multi-cli",
+    "agent-routing",
     "bot",
     "ai-coding-agent"
   ],
