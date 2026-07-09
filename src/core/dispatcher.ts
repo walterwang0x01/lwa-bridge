@@ -1283,12 +1283,13 @@ export class Dispatcher {
    * 不会再 patch；按钮回调走 onCardAction 流程。
    */
   private async sendInteractiveCard(msg: IncomingMessage, card: object): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     try {
       await this.ingress.replyCard(msg.messageId, card);
     } catch (e) {
       this.log.error({ err: e }, 'sendInteractiveCard failed; falling back to text');
       try {
-        await this.ingress.sendText(msg.chatId, '❌ 卡片发送失败，请检查日志');
+        await this.ingress.sendText(conversationId, '❌ 卡片发送失败，请检查日志');
       } catch {
         // ignore
       }
@@ -2377,9 +2378,14 @@ export class Dispatcher {
     evt: CardActionEvent,
     mode: 'run' | 'pause' | 'resume' | 'rm',
   ): Promise<void> {
+    const conversationId = this.conversationIdOfAction(evt);
     const id = String(evt.value['id'] ?? '');
     if (!id) return;
-    await this.applyCronAction((card) => this.sendCardToConversation(evt.chatId, card), id, mode);
+    await this.applyCronAction(
+      (card) => this.sendCardToConversation(conversationId, card),
+      id,
+      mode,
+    );
   }
 
   /**
@@ -2610,15 +2616,17 @@ export class Dispatcher {
     description: string,
     prompt: string,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const senderPrincipalId = this.senderPrincipalIdOfMessage(msg);
     if (!this.cronStore || !this.cronScheduler) return;
     try {
       const task = await this.cronStore.create({
-        chatId: msg.chatId,
+        chatId: conversationId,
         cwd,
         expression,
         prompt,
         description,
-        createdBy: msg.senderOpenId,
+        createdBy: senderPrincipalId,
       });
       this.cronScheduler.register(task);
       await this.sendInteractiveCard(
@@ -2745,7 +2753,8 @@ export class Dispatcher {
     }
 
     // mode === 'run'
-    const pipeline = this.getPipeline(msg.chatId);
+    const conversationId = this.conversationIdOfMessage(msg);
+    const pipeline = this.getPipeline(conversationId);
     await pipeline.submit({
       id: `conduit-run-${Date.now()}`,
       run: async (signal) => {
@@ -2977,6 +2986,7 @@ export class Dispatcher {
    * 直接调用 executeKiroTask。
    */
   async fireCronTask(task: CronTask): Promise<void> {
+    const conversationId = task.chatId;
     const fakeMessage: IncomingMessage = {
       eventId: `cron-${task.id}-${Date.now()}`,
       messageId: '',
@@ -2992,7 +3002,7 @@ export class Dispatcher {
     // 触发时给一张提示卡片，让用户知道是定时任务
     try {
       await this.sendCardToConversation(
-        task.chatId,
+        conversationId,
         buildAckCard({
           state: 'done',
           title: '⏰ 定时任务触发',
@@ -3016,13 +3026,16 @@ export class Dispatcher {
    *
    * 我们这里只需要构造一条"继续"prompt 触发任务，无需重传全部上下文。
    */
-  async fireContinue(chatId: string): Promise<void> {
-    const session = await this.sessions.get(chatId, this.config.workspace.defaultCwd);
-    const resumeId = await this.sessions.getKiroSession(chatId, session.currentCwd);
+  async fireContinue(conversationId: string): Promise<void> {
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const resumeId = await this.sessions.getKiroSession(conversationId, session.currentCwd);
     if (!resumeId) {
       // 没有 sessionId 说明上次根本没跑成功；提示一下就行
       await this.sendCardToConversation(
-        chatId,
+        conversationId,
         buildAckCard({
           state: 'error',
           title: '⚠️ 无法继续',
@@ -3032,9 +3045,9 @@ export class Dispatcher {
       return;
     }
     const fakeMessage: IncomingMessage = {
-      eventId: `continue-${chatId}-${Date.now()}`,
+      eventId: `continue-${conversationId}-${Date.now()}`,
       messageId: '',
-      chatId,
+      chatId: conversationId,
       chatType: 'group',
       senderOpenId: 'continue-button',
       messageType: 'text',
@@ -3056,9 +3069,10 @@ export class Dispatcher {
   }
 
   private async replyErrorCard(msg: IncomingMessage, body: string, cwd: string): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     const renderer = new CardRenderer({
       ingress: this.ingress,
-      chatId: msg.chatId,
+      chatId: conversationId,
       replyToMessageId: msg.messageId,
       intervalMs: this.config.preferences.cardUpdateIntervalMs,
       logger: this.log,
@@ -3093,7 +3107,7 @@ export class Dispatcher {
       return;
     }
 
-    const existing = this.mergeBuffers.get(msg.chatId);
+    const existing = this.mergeBuffers.get(conversationId);
     if (existing) {
       // 追加到现有 buffer
       if (prompt) existing.texts.push(prompt);
@@ -3102,10 +3116,10 @@ export class Dispatcher {
       // 重置计时器：续窗用短窗（用户已在连发，不必久等）
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => {
-        this.flushMergeBuffer(msg.chatId);
+        this.flushMergeBuffer(conversationId);
       }, this.MERGE_WINDOW_MS);
       this.log.debug(
-        { chatId: msg.chatId, accumulated: existing.texts.length },
+        { chatId: conversationId, accumulated: existing.texts.length },
         'merging rapid-fire message',
       );
       return;
@@ -3116,9 +3130,9 @@ export class Dispatcher {
     const firstWindow =
       msg.messageType === 'merge_forward' ? this.MERGE_WINDOW_FORWARD_MS : this.MERGE_WINDOW_MS;
     const timer = setTimeout(() => {
-      this.flushMergeBuffer(msg.chatId);
+      this.flushMergeBuffer(conversationId);
     }, firstWindow);
-    this.mergeBuffers.set(msg.chatId, {
+    this.mergeBuffers.set(conversationId, {
       anchor: msg,
       texts: prompt ? [prompt] : [],
       mediaPaths: [...mediaPaths],
@@ -3135,15 +3149,15 @@ export class Dispatcher {
    * 引用/转发内容在这里统一拉取（而非主路径），原因见 handle() 第 4.6 步注释：
    * 避免网络延迟破坏 200ms 合并窗口。多条消息引用同一源时只拉一次（Set 去重）。
    */
-  private flushMergeBuffer(chatId: string): void {
-    const buf = this.mergeBuffers.get(chatId);
+  private flushMergeBuffer(conversationId: string): void {
+    const buf = this.mergeBuffers.get(conversationId);
     if (!buf) return;
-    this.mergeBuffers.delete(chatId);
+    this.mergeBuffers.delete(conversationId);
     clearTimeout(buf.timer);
     const userText = buf.texts.filter((t) => t.length > 0).join('\n\n');
     if (buf.texts.length > 1) {
       this.log.info(
-        { chatId, mergedCount: buf.texts.length, totalLen: userText.length },
+        { chatId: conversationId, mergedCount: buf.texts.length, totalLen: userText.length },
         'flushing merged rapid-fire batch',
       );
     }
@@ -3170,11 +3184,13 @@ export class Dispatcher {
         prompt = userText;
       }
       if (!prompt) {
-        this.log.debug({ chatId }, 'merge buffer flushed with empty prompt, skip');
+        this.log.debug({ chatId: conversationId }, 'merge buffer flushed with empty prompt, skip');
         return;
       }
       await this.executeKiroTask(buf.anchor, prompt, buf.cwd, buf.mediaPaths, buf.perChatIdleMin);
-    })().catch((e) => this.log.error({ err: e, chatId }, 'flush merge buffer execute failed'));
+    })().catch((e) =>
+      this.log.error({ err: e, chatId: conversationId }, 'flush merge buffer execute failed'),
+    );
   }
 
   /**
@@ -3197,14 +3213,14 @@ export class Dispatcher {
     const taskStartedAt = Date.now();
 
     // 任务开始前：清理该 chat 上次任务遗留的 plan 文件，准备新目录
-    const planDir = planDirFor(msg.chatId);
+    const planDir = planDirFor(conversationId);
     try {
       rmSync(planDir, { recursive: true, force: true });
       mkdirSync(planDir, { recursive: true, mode: 0o700 });
     } catch (e) {
       this.log.warn({ err: e, planDir }, 'plan dir reset failed (non-fatal)');
     }
-    const planFilePath = planFilePathFor(msg.chatId);
+    const planFilePath = planFilePathFor(conversationId);
 
     // 拼接 prompt：[系统前缀] + [plan 路径提示] + 媒体路径 + 用户文本
     // 系统前缀约束工具偏好；plan 路径提示让 kiro 知道写计划文件的位置
@@ -3228,7 +3244,7 @@ export class Dispatcher {
     this.log.debug(
       {
         taskId,
-        chatId: msg.chatId,
+        chatId: conversationId,
         cwd,
         promptLen: finalPrompt.length,
         promptHead: finalPrompt.slice(0, 120),
@@ -3243,7 +3259,7 @@ export class Dispatcher {
       run: async (signal) => {
         const ctrlOpts: ConstructorParameters<typeof RunCardController>[0] = {
           ingress: this.ingress,
-          chatId: msg.chatId,
+          chatId: conversationId,
           replyToMessageId: msg.messageId,
           intervalMs: this.config.preferences.cardUpdateIntervalMs,
           logger: this.log,
@@ -3265,7 +3281,7 @@ export class Dispatcher {
         if (this.activeCards && cardMessageId) {
           await this.activeCards
             .add({
-              chatId: msg.chatId,
+              chatId: conversationId,
               messageId: cardMessageId,
               taskId,
               startedAt: Date.now(),
@@ -3278,7 +3294,7 @@ export class Dispatcher {
         }
 
         // 启动 PlanSource 监听该 chat 的 plan 文件变化；变化推到 ctrl 触发 patch
-        const planSource = new FilePlanSource(msg.chatId, this.log);
+        const planSource = new FilePlanSource(conversationId, this.log);
         await planSource.start((plan) => {
           ctrl.setPlan(plan);
         });
@@ -3287,7 +3303,7 @@ export class Dispatcher {
           const sessionTtlMs =
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
           const { profileName, profile, reason, complexityScore, modelDecision } =
-            await this.selectRuntimeForTask(msg.chatId, finalPrompt, mediaPaths.length);
+            await this.selectRuntimeForTask(conversationId, finalPrompt, mediaPaths.length);
           selectedProfileName = profileName;
           selectedProfile = profile;
           selectedComplexityScore = complexityScore;
@@ -3303,7 +3319,7 @@ export class Dispatcher {
             : undefined;
           this.log.info(
             {
-              chatId: msg.chatId,
+              chatId: conversationId,
               profileName,
               runtimeKind: profile.kind,
               model: profile.model,
@@ -3319,7 +3335,7 @@ export class Dispatcher {
           let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
           if (profile.kind === 'kiro-cli-acp') {
             const pool = this.getAcpPool(profile);
-            pooled = await pool.acquire(msg.chatId, {
+            pooled = await pool.acquire(conversationId, {
               cwd,
               resumeId: resumeId ? decodeSessionId(resumeId, profile.kind) : undefined,
             });
@@ -3334,7 +3350,7 @@ export class Dispatcher {
             signal,
             onEvent: (ev) => ctrl.applyEvent(ev),
             extraEnv: {
-              LARK_KIRO_CHAT_ID: msg.chatId,
+              LARK_KIRO_CHAT_ID: conversationId,
               LARK_KIRO_CHAT_TYPE: msg.chatType,
               LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
               LARK_AGENT_RUNTIME: profileName,
@@ -3354,7 +3370,7 @@ export class Dispatcher {
             return;
           } finally {
             if (profile.kind === 'kiro-cli-acp') {
-              this.getAcpPool(profile).release(msg.chatId);
+              this.getAcpPool(profile).release(conversationId);
             }
           }
 
@@ -3397,7 +3413,7 @@ export class Dispatcher {
           await this.sessions.touchConversation(conversationId);
           // 缓存 Kiro 推送的当前 agent 可用 skills（供 /help 动态展示）
           if (result.availableSkills && result.availableSkills.length > 0) {
-            this.chatSkills.set(msg.chatId, result.availableSkills);
+            this.chatSkills.set(conversationId, result.availableSkills);
           }
           await ctrl.finalize('done');
         } finally {
@@ -3417,7 +3433,7 @@ export class Dispatcher {
             });
             const record: Parameters<TaskHistoryStore['add']>[0] = {
               taskId,
-              chatId: msg.chatId,
+              chatId: conversationId,
               cwd,
               startedAt: taskStartedAt,
               finishedAt: Date.now(),
