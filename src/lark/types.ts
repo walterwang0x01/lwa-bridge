@@ -1,6 +1,11 @@
 /**
  * 业务层使用的精简飞书事件类型。
  * 把飞书 SDK 的复杂结构压平成 bridge 关心的字段。
+ *
+ * 注意：
+ * - 本文件仍保留飞书原生命名（`chatId` / `senderOpenId`），因为它是 Lark adapter 的边界层
+ * - 渠道无关语义请在 `src/ingress/types.ts` 中使用 `conversationId` / `senderPrincipalId`
+ * - `core/dispatcher` 内部已逐步通过 helper 把本文件字段映射到渠道无关语义
  */
 export type ChatType = 'p2p' | 'group' | 'topic_group' | 'unknown';
 
@@ -9,7 +14,7 @@ export interface IncomingMessage {
   eventId: string;
   /** 飞书 message id */
   messageId: string;
-  /** 飞书 chat id（DM 或群） */
+  /** 飞书 chat id（DM 或群）。在渠道无关语义里等价于 `conversationId`。 */
   chatId: string;
   /** 被引用消息的 message id（用户"引用回复"时存在），用于拉取被引用原文 */
   parentId?: string;
@@ -19,7 +24,7 @@ export interface IncomingMessage {
   threadId?: string;
   /** 单聊 / 群聊 / 主题群 */
   chatType: ChatType;
-  /** 发送者的 open_id（飞书租户内稳定 id） */
+  /** 发送者的 open_id（飞书租户内稳定 id）。在渠道无关语义里等价于 `senderPrincipalId`。 */
   senderOpenId: string;
   /** 消息类型：text、post、image、file、... */
   messageType: string;
@@ -42,9 +47,9 @@ export interface IncomingMessage {
 export interface CardActionEvent {
   /** 触发事件的 message_id（即卡片所在那条消息的 id） */
   messageId: string;
-  /** chat id */
+  /** 飞书 chat id。在渠道无关语义里等价于 `conversationId`。 */
   chatId: string;
-  /** 操作者的 open_id */
+  /** 操作者的 open_id。在渠道无关语义里等价于 `senderPrincipalId`。 */
   senderOpenId: string;
   /**
    * 按钮 value 字段——业务层自定义结构。

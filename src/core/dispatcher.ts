@@ -1,14 +1,14 @@
 /**
  * 消息总分发器
  *
- * 把一条飞书消息变成一个动作：
+ * 把一条入站消息变成一个动作：
  *   1. 访问控制校验（用户/群白名单、@bot 检测）
  *   2. 下载图片/文件资源（如果有）
  *   3. 解析斜杠命令
  *   4. 路由到 commandHandler 或 kiroHandler
  *   5. 更新卡片
  *
- * 跨 chat 并发不限（每个 chat 自己内部串行）。
+ * 跨会话并发不限（每个会话自己内部串行）。
  */
 import type { Logger } from 'pino';
 import type { Config } from '../lib/config.js';
@@ -121,7 +121,7 @@ export class Dispatcher {
   private readonly pipelines = new Map<string, ChatPipeline>();
   private readonly onReconnect?: () => Promise<void>;
   private readonly memory = new MemoryStore();
-  /** Kiro 当前 agent 可用 skill 缓存（per chatId，每次 turn 成功后更新）。 */
+  /** Kiro 当前 agent 可用 skill 缓存（per conversationId，每次 turn 成功后更新）。 */
   private readonly chatSkills = new Map<string, Array<{ name: string; description: string }>>();
   /** per-profile ACP 进程池（仅 kiro-cli-acp runtime 使用）。 */
   private readonly acpPools = new Map<string, AcpPool>();
@@ -164,14 +164,14 @@ export class Dispatcher {
     return pool;
   }
 
-  private async evictChatFromAllPools(chatId: string): Promise<void> {
-    await Promise.all([...this.acpPools.values()].map((p) => p.evict(chatId)));
+  private async evictChatFromAllPools(conversationId: string): Promise<void> {
+    await Promise.all([...this.acpPools.values()].map((p) => p.evict(conversationId)));
   }
 
   private async resolveChatRuntime(
-    chatId: string,
+    conversationId: string,
   ): Promise<{ profileName: string; profile: RuntimeProfile }> {
-    const stored = await this.sessions.getRuntimeProfile(chatId);
+    const stored = await this.sessions.getRuntimeProfile(conversationId);
     if (!stored && (this.config.runtime?.default ?? 'kiro') === 'auto') {
       const picked = await chooseRuntimeProfile(this.config, { prompt: '' });
       return { profileName: `auto→${picked.profileName}`, profile: picked.profile };
@@ -185,7 +185,7 @@ export class Dispatcher {
   }
 
   private async selectRuntimeForTask(
-    chatId: string,
+    conversationId: string,
     prompt: string,
     mediaCount: number,
     commandName?: string,
@@ -197,7 +197,7 @@ export class Dispatcher {
     modelDecision?: Awaited<ReturnType<typeof chooseModelForProfile>>;
   }> {
     const taskBucket = classifyTaskBucket({ prompt, mediaCount, commandName });
-    const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
+    const explicitProfileName = await this.sessions.getRuntimeProfile(conversationId);
     const monthUsageByKind = this.taskHistory
       ? await this.taskHistory.countMonthUsageByKind().catch(() => undefined)
       : undefined;
