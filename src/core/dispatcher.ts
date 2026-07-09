@@ -24,6 +24,7 @@ import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
 import type { ActiveCardsStore } from '../store/activeCards.js';
 import type { TaskHistoryStore } from '../store/taskHistory.js';
+import { evaluateApplySafeGates } from '../runtime/adaptive.js';
 import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
@@ -220,16 +221,17 @@ export class Dispatcher {
         };
       }
       const adaptiveMode = this.config.modelRouting.kiro.adaptiveMode;
+      const applyGates = evaluateApplySafeGates({
+        sampleSize: adaptive.sampleSize,
+        runtimeSuccessRate: adaptive.runtimeSuccessRate,
+        modelSuccessRate: adaptive.modelSuccessRate,
+      });
       const canApplyRuntime =
         adaptiveMode === 'apply-aggressive' ||
-        (adaptiveMode === 'apply-safe' &&
-          (adaptive.runtimeSuccessRate ?? 0) >= 0.9 &&
-          adaptive.sampleSize >= 8);
+        (adaptiveMode === 'apply-safe' && applyGates.canApplyRuntime);
       const canApplyModel =
         adaptiveMode === 'apply-aggressive' ||
-        (adaptiveMode === 'apply-safe' &&
-          (adaptive.modelSuccessRate ?? 0) >= 0.9 &&
-          adaptive.sampleSize >= 8);
+        (adaptiveMode === 'apply-safe' && applyGates.canApplyModel);
       if (adaptiveMode !== 'off' && adaptive?.preferredRuntimeKind && canApplyRuntime) {
         const adaptiveProfileName =
           adaptive.preferredRuntimeKind === 'cursor-agent-cli' ? 'cursor' : 'kiro';

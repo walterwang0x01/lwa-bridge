@@ -12,6 +12,7 @@ import lockfile from 'proper-lockfile';
 import { z } from 'zod';
 import { TASK_HISTORY_FILE, ensureDataDirs } from '../lib/paths.js';
 import { getLogger } from '../lib/logger.js';
+import { evaluateApplySafeGates } from '../runtime/adaptive.js';
 
 const log = () => getLogger().child({ module: 'task-history' });
 
@@ -62,6 +63,27 @@ export interface AdaptiveRuntimeRecommendation {
   modelSuccessRate?: number;
   runtimeScore?: number;
   modelScore?: number;
+}
+
+export const BRIDGE_TASK_BUCKETS = ['chat', 'review', 'plan', 'edit', 'conduit'] as const;
+
+export interface AdaptiveBucketReadiness {
+  taskBucket: string;
+  sampleSize: number;
+  recommendation: AdaptiveRuntimeRecommendation;
+  canApplyRuntime: boolean;
+  canApplyModel: boolean;
+  rolloutReady: boolean;
+}
+
+export interface MetricsAlertRow {
+  taskBucket: string;
+  runtimeKind: string;
+  model: string;
+  total: number;
+  failed: number;
+  successRate: number;
+  reason: 'low-success-rate';
 }
 
 function clamp01(value: number): number {
@@ -245,5 +267,48 @@ export class TaskHistoryStore {
       runtimeScore: bestRuntime?.score,
       modelScore: bestKiro?.score,
     };
+  }
+
+  /** 按桶评估 apply-safe 是否满足门禁（与 dispatcher 逻辑一致）。 */
+  async evaluateApplySafeReadiness(limit = 200): Promise<AdaptiveBucketReadiness[]> {
+    const out: AdaptiveBucketReadiness[] = [];
+    for (const taskBucket of BRIDGE_TASK_BUCKETS) {
+      const recommendation = await this.recommendAdaptiveStrategy(limit, taskBucket);
+      const gates = evaluateApplySafeGates({
+        sampleSize: recommendation.sampleSize,
+        runtimeSuccessRate: recommendation.runtimeSuccessRate,
+        modelSuccessRate: recommendation.modelSuccessRate,
+      });
+      out.push({
+        taskBucket,
+        sampleSize: recommendation.sampleSize,
+        recommendation,
+        canApplyRuntime: gates.canApplyRuntime,
+        canApplyModel: gates.canApplyModel,
+        rolloutReady: recommendation.sampleSize >= 30 && gates.canApplyRuntime,
+      });
+    }
+    return out;
+  }
+
+  /** 样本足够但成功率偏低的组合，供 Dashboard 高亮。 */
+  async listMetricsAlerts(
+    limit = 200,
+    minTotal = 3,
+    maxSuccessRate = 0.75,
+  ): Promise<MetricsAlertRow[]> {
+    const rows = await this.summarizeRuntimeMetrics(limit);
+    return rows
+      .filter((row) => row.total >= minTotal && row.successRate < maxSuccessRate)
+      .map((row) => ({
+        taskBucket: row.taskBucket,
+        runtimeKind: row.runtimeKind,
+        model: row.model,
+        total: row.total,
+        failed: row.failed,
+        successRate: row.successRate,
+        reason: 'low-success-rate' as const,
+      }))
+      .sort((a, b) => a.successRate - b.successRate || b.failed - a.failed);
   }
 }

@@ -91,6 +91,25 @@ export interface AdaptiveRecommendation {
   modelScore?: number;
 }
 
+export interface AdaptiveBucketReadiness {
+  taskBucket: string;
+  sampleSize: number;
+  recommendation: AdaptiveRecommendation;
+  canApplyRuntime: boolean;
+  canApplyModel: boolean;
+  rolloutReady: boolean;
+}
+
+export interface MetricsAlertRow {
+  taskBucket: string;
+  runtimeKind: string;
+  model: string;
+  total: number;
+  failed: number;
+  successRate: number;
+  reason: 'low-success-rate';
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -110,5 +129,7 @@ export interface Overview {
   taskHistory: TaskHistoryRecord[];
   runtimeMetrics: RuntimeMetricsRow[];
   adaptiveRecommendation: AdaptiveRecommendation;
+  adaptiveReadiness: AdaptiveBucketReadiness[];
+  metricsAlerts: MetricsAlertRow[];
   logs: string[];
 }

@@ -103,6 +103,10 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
   const adaptiveRecommendation = deps.taskHistory
     ? await deps.taskHistory.recommendAdaptiveStrategy(200)
     : { sampleSize: 0, reason: 'no-task-history' };
+  const adaptiveReadiness = deps.taskHistory
+    ? await deps.taskHistory.evaluateApplySafeReadiness(200)
+    : [];
+  const metricsAlerts = deps.taskHistory ? await deps.taskHistory.listMetricsAlerts(200) : [];
 
   return {
     bridge: {
@@ -121,6 +125,8 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     taskHistory,
     runtimeMetrics,
     adaptiveRecommendation,
+    adaptiveReadiness,
+    metricsAlerts,
     logs,
   };
 }

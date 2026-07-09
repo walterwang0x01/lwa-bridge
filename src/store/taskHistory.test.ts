@@ -136,4 +136,36 @@ describe('TaskHistoryStore', () => {
     expect(rec.preferredRuntimeKind).toBe('cursor-agent-cli');
     expect((rec.runtimeScore ?? 0) > 0.8).toBe(true);
   });
+
+  it('能按桶评估 apply-safe 就绪度', async () => {
+    const store = new TaskHistoryStore();
+    for (let n = 1; n <= 8; n++) {
+      await store.add({
+        ...makeRecord(`c${n}`, n * 1000),
+        runtimeKind: 'cursor-agent-cli',
+        model: 'Auto',
+        taskBucket: 'chat',
+      });
+    }
+    const readiness = await store.evaluateApplySafeReadiness();
+    const chat = readiness.find((r) => r.taskBucket === 'chat');
+    expect(chat?.canApplyRuntime).toBe(true);
+    expect(chat?.rolloutReady).toBe(false);
+  });
+
+  it('能列出低成功率告警行', async () => {
+    const store = new TaskHistoryStore();
+    for (let n = 1; n <= 3; n++) {
+      await store.add({
+        ...makeRecord(`bad-${n}`, n * 1000),
+        runtimeKind: 'kiro-cli-acp',
+        model: 'claude-opus-4.8',
+        terminal: 'error',
+        taskBucket: 'review',
+      });
+    }
+    const alerts = await store.listMetricsAlerts();
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0]?.taskBucket).toBe('review');
+  });
 });

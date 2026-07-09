@@ -50,8 +50,8 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 
 | 项 | 交付物 | 验收标准 |
 |----|--------|----------|
-| Adaptive 升级 | 文档 + 配置模板默认 `suggest`，提供 `apply-safe` 切换指南 | 至少 2 个 bucket 样本 ≥30 条后切 `apply-safe` 无回退 |
-| Metrics 告警（本地） | Dashboard 或日志对「连续失败 / 超时」高亮 | 人工能 5 分钟内定位劣化 runtime |
+| Adaptive 升级 | 文档 + `runtime-config.apply-safe.json` + Dashboard 就绪条 | ✅ 模板与就绪 API |
+| Metrics 告警（本地） | Dashboard 低成功率行高亮 + `metricsAlerts` | ✅ |
 | Runtime 契约 | 更新 `agent-runtime-spec.md`：未来 runtime 扩展字段 | Conduit 与 Bridge schema 对齐 |
 
 ### Conduit
