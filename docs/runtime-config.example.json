@@ -44,6 +44,7 @@
     },
     "quota": {
       "cacheTtlMs": 600000,
+      "dashboardRefreshMs": 60000,
       "monthlyLimits": {
         "kiro-cli-acp": 50
       },

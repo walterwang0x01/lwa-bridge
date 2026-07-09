@@ -31,7 +31,7 @@ import { listGlobalSkills } from './skills.js';
 import { listGlobalAgents } from '../kiro/agents.js';
 import { listInstalls } from '../assets/gitSource.js';
 import { discoverRuntimeRegistry } from '../runtime/registry.js';
-import { probeAllRuntimeQuotas } from '../runtime/quota.js';
+import { probeAllRuntimeQuotasForDashboard } from '../runtime/quota.js';
 
 // tsup 把整个包打成单文件 bundle（dist/cli.js / dist/index.js），不保留 src/
 // 的目录结构——所以运行时 import.meta.url 指向的是 dist/cli.js，HERE 算出来
@@ -115,7 +115,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     ? await deps.taskHistory.countMonthUsageByKind().catch(() => ({}))
     : {};
   const registry = await discoverRuntimeRegistry(deps.config);
-  const quotaStatuses = await probeAllRuntimeQuotas(
+  const quotaStatuses = await probeAllRuntimeQuotasForDashboard(
     registry
       .filter((e) => e.available)
       .map((e) => ({ profileName: e.profileName, profile: e.profile })),

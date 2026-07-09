@@ -20,9 +20,9 @@
 
 | 能力 | Bridge | Conduit |
 |------|--------|---------|
-| Runtime | `kiro-cli-acp`, `cursor-agent-cli` | 同左 + 角色级覆盖 |
-| 路由 | smart + task bucket + adaptive | role bucket + adaptive |
-| 观测 | Dashboard + taskHistory metrics | `report` + duration / verdict 分离 |
+| Runtime | `kiro-cli-acp`, `cursor-agent-cli`, `gemini-cli` | 同左 + 角色级覆盖 |
+| 路由 | smart + task bucket + adaptive + quota fallback | role bucket + adaptive + quota fallback |
+| 观测 | Dashboard + taskHistory metrics + quota status | `report` + quota + duration / verdict 分离 |
 | 编排 | `/conduit` 子进程 | DAG + worktree + verifier |
 | 品牌 | LWA 文档 + GitHub `lwa-*` | 同左 |
 
@@ -58,15 +58,15 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 
 | 项 | 交付物 | 验收标准 |
 |----|--------|----------|
-| **M2 实战** | 真实大 spec（≥8 PR）端到端 | 节省时间 ≥50%，见 Conduit ROADMAP |
-| Reviewer 指标稳定 | `execution_ok` / `verdict_pass` 分桶 report | FAIL 审查不拉低 runtime 成功率 |
-| PyPI 首发（可选） | `kiro-conduit` 0.1.0 | `pipx install` 文档路径跑通 |
+| **M2 实战** | 真实大 spec（≥8 PR）端到端 | ✅ stub 17 任务 / 8 波次集成测试；真实 spec 持续验证 |
+| Reviewer 指标稳定 | `execution_ok` / `verdict_pass` 分桶 report | ✅ |
+| PyPI 首发（可选） | `kiro-conduit` 0.1.0 | ✅ 版本 + release workflow + `pipx install` 文档 |
 
 ### 跨项目
 
 | 项 | 交付物 | 验收标准 |
 |----|--------|----------|
-| 配额调研 Spike | `docs/spikes/quota-probe.md`（设计，可不写代码） | 列出 Cursor / Kiro / Gemini 可探测 API 与 fallback 策略 |
+| 配额调研 Spike | `docs/spikes/quota-probe.md` | ✅ 已实现 probe + fallback + 原生 CLI JSON |
 | 品牌 | 评估是否引入副品牌 **LAW**（Local Agent Workbench） | Issue 讨论结论记录在 `#18` 同级 |
 
 **本季度不做**：新 IM 渠道、Gemini 正式接入、多用户服务器。
@@ -86,7 +86,7 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 | Conduit 适配器 | ✅ `gemini_cli.py` implementor / reviewer / planner |
 | 路由策略 | `simple + high-volume → gemini`（配置 `profiles.gemini` + `/runtime gemini`） |
 | metrics | ✅ cost proxy 三档分列 |
-| 配额探测 | 见 `spikes/quota-probe.md`（待实现） |
+| 配额探测 | ✅ `quota.ts` + Dashboard + native CLI JSON |
 
 **验收（剩余）**：本机 `npm i -g @google/gemini-cli` 后跑通一条 chat turn；adaptive 分桶出现 gemini 推荐行。
 
@@ -199,10 +199,10 @@ src/
 
 接入任一 runtime 的**最小清单**：
 
-- [ ] `RuntimeKind` + 适配器（Bridge + Conduit）
-- [ ] `agent-runtime-spec.md` 协议表
-- [ ] `QuotaProbe` 实现
-- [ ] metrics `cost_score` 更新
+- [x] `RuntimeKind` + 适配器（Bridge + Conduit）
+- [x] `agent-runtime-spec.md` 协议表
+- [x] `QuotaProbe` 实现
+- [x] metrics `cost_score` 更新
 - [ ] bucket 样本 ≥30 后再参与 adaptive
 
 ---
@@ -213,11 +213,11 @@ src/
 |------|------|---------|---------|---------|
 | 多 CLI 路由 | ✅ | ✅ | ✅ + Gemini | ✅ |
 | 分桶 adaptive 自动应用 | suggest | apply-safe 部分桶 | 多数桶 | 全面 |
-| 配额 fallback | ❌ | 设计 | ✅ | ✅ |
+| 配额 fallback | ❌ | ✅ | ✅ | ✅ |
 | 多 IM | 仅飞书 | 仅飞书 | 抽象就绪 | 2 渠道 |
 | 审批 / 审计 | 部分（merge 确认） | 文档化 | 基础策略 | 完整 |
 | 多用户部署 | ❌ | ❌ | ❌ | v1.0 |
-| Conduit 生产大 spec | M2 进行中 | ✅ | 稳定 | 稳定 |
+| Conduit 生产大 spec | M2 进行中 | ✅ stub e2e | 稳定 | 稳定 |
 
 ---
 

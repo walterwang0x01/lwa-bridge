@@ -82,6 +82,8 @@ export const ConfigSchema = z.object({
           fallbackByBucket: z
             .record(z.enum(['chat', 'review', 'plan', 'edit', 'conduit']), z.array(z.string()))
             .optional(),
+          /** Dashboard 配额重探最小间隔（默认 60s）；路由仍用 cacheTtlMs */
+          dashboardRefreshMs: z.number().int().positive().optional(),
         })
         .optional(),
     })

@@ -24,11 +24,21 @@
     "default": "auto",
     "profiles": {
       "kiro": { "kind": "kiro-cli-acp", "bin": "kiro-cli" },
-      "cursor": { "kind": "cursor-agent-cli", "bin": "agent", "force": true, "model": "Auto" }
+      "cursor": { "kind": "cursor-agent-cli", "bin": "agent", "force": true, "model": "Auto" },
+      "gemini": { "kind": "gemini-cli", "bin": "gemini", "force": true, "model": "auto" }
     },
     "router": {
       "mode": "smart",
       "lark": { "simpleProfile": "cursor", "complexProfile": "kiro" }
+    },
+    "quota": {
+      "cacheTtlMs": 600000,
+      "dashboardRefreshMs": 60000,
+      "monthlyLimits": { "kiro-cli-acp": 50 },
+      "fallbackByBucket": {
+        "chat": ["cursor", "gemini", "kiro"],
+        "review": ["kiro", "gemini", "cursor"]
+      }
     }
   },
   "modelRouting": {
@@ -46,7 +56,7 @@
 }
 ```
 
-飞书命令：`/runtime cursor` | `/runtime kiro`
+飞书命令：`/runtime cursor` | `/runtime kiro` | `/runtime gemini`
 
 完整生产实践：[`runtime-routing-production.md`](./runtime-routing-production.md)  
 示例配置：[`runtime-config.example.json`](./runtime-config.example.json)
@@ -56,20 +66,29 @@
 ```bash
 kiro-conduit run --workspace ./my-ws --runtime-kind kiro-cli-acp
 kiro-conduit run --workspace ./my-ws --runtime-kind cursor-agent-cli --kiro-cli agent
+kiro-conduit run --workspace ./my-ws --runtime-kind gemini-cli
 kiro-conduit report --base-repo .
+kiro-conduit report --quota-only
 ```
+
+环境变量（配额）：
+
+- `KIRO_CONDUIT_QUOTA_OVERRIDES` — JSON `{"cursor-agent-cli":"depleted"}`
+- `KIRO_CONDUIT_KIRO_MONTHLY_LIMIT` / `CURSOR` / `GEMINI` — 本地月度计数上限
 
 生产建议：同一 DAG run 内同一角色保持 homogeneous runtime（不要混用两种 CLI）。
 
 ## 路由与观测
 
 - 先做 CLI 路由：简单任务优先 `cursor-agent-cli`，复杂任务优先 `kiro-cli-acp`
+- 配额硬约束：`depleted` / `error` 的 runtime 不参与路由；按 bucket fallback
+- 原生探测（best-effort）：`kiro-cli usage --json`、`gemini quota --json`
 - 命中 `kiro-cli` 后再做模型路由：从实时 `--list-models` 结果里选模型
 - 任务分桶：bridge 记 `taskBucket`（chat/review/plan/edit/conduit）；conduit 按角色（planner/implementor/reviewer）
 - 自适应：`off` / `suggest` / `apply-safe` / `apply-aggressive`，按桶、多目标分数（成功率+耗时+改动+成本）
 - reviewer：`execution_ok` 与 `verdict_pass` 分开；审查 FAIL 不算 runtime 失败
-- `lark-kiro-bridge` Dashboard 展示按桶 metrics / score / adaptive 推荐
-- `kiro-conduit report` 打印分桶 metrics、avg_duration、score、推荐
+- `lark-kiro-bridge` Dashboard 展示按桶 metrics / score / adaptive 推荐 / **quota status**（60s 重探）
+- `kiro-conduit report` 打印分桶 metrics、avg_duration、score、推荐、**quota**
 
 ## 演进
 

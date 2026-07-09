@@ -71,7 +71,7 @@ export async function probeRuntimeQuota(
   profile: RuntimeProfile,
   profileName: string,
   cfg: Config,
-  options?: { monthUsage?: number },
+  options?: { monthUsage?: number; bypassCache?: boolean },
 ): Promise<QuotaStatus> {
   const override = cfg.runtime?.quota?.overrides?.[profile.kind];
   const limit = cfg.runtime?.quota?.monthlyLimits?.[profile.kind];
@@ -79,7 +79,7 @@ export async function probeRuntimeQuota(
   const cacheKey = `${profile.kind}:${profile.bin}:${override ?? '-'}:${limit ?? '-'}:${usage ?? '-'}`;
   const ttl = cfg.runtime?.quota?.cacheTtlMs ?? 10 * 60 * 1000;
   const cached = probeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!options?.bypassCache && cached && cached.expiresAt > Date.now()) {
     return { ...cached.status, profileName };
   }
 
@@ -140,16 +140,39 @@ export async function probeAllRuntimeQuotas(
   entries: Array<{ profileName: string; profile: RuntimeProfile }>,
   cfg: Config,
   monthUsageByKind?: Partial<Record<RuntimeKind, number>>,
+  options?: { bypassCache?: boolean },
 ): Promise<QuotaStatus[]> {
   const out: QuotaStatus[] = [];
   for (const entry of entries) {
     out.push(
       await probeRuntimeQuota(entry.profile, entry.profileName, cfg, {
         monthUsage: monthUsageByKind?.[entry.profile.kind],
+        bypassCache: options?.bypassCache,
       }),
     );
   }
   return out;
+}
+
+let dashboardQuotaLastRefresh = 0;
+
+export function resetDashboardQuotaRefreshClock(): void {
+  dashboardQuotaLastRefresh = 0;
+}
+
+/** Dashboard 轮询用：至多每 dashboardRefreshMs 重探一次（默认 60s）。 */
+export async function probeAllRuntimeQuotasForDashboard(
+  entries: Array<{ profileName: string; profile: RuntimeProfile }>,
+  cfg: Config,
+  monthUsageByKind?: Partial<Record<RuntimeKind, number>>,
+): Promise<QuotaStatus[]> {
+  const minInterval = cfg.runtime?.quota?.dashboardRefreshMs ?? 60_000;
+  const now = Date.now();
+  const bypassCache = now - dashboardQuotaLastRefresh >= minInterval;
+  if (bypassCache) {
+    dashboardQuotaLastRefresh = now;
+  }
+  return probeAllRuntimeQuotas(entries, cfg, monthUsageByKind, { bypassCache });
 }
 
 export function uniqueProfileOrder(...groups: string[][]): string[] {
