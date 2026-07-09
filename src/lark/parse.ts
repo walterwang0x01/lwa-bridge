@@ -167,7 +167,11 @@ function extractText(messageType: string, contentJson: string): string {
  * - image/file/audio 等无法转文本的类型：返回一个 [图片]/[文件] 之类的占位描述
  * - 解析失败：返回空字符串（调用方决定要不要丢弃）
  */
-export function larkItemToText(item: LarkMessageItem): string {
+export function larkItemToText(item: {
+  msgType: string;
+  content: string;
+  mentions: Array<{ key: string; name: string }>;
+}): string {
   const raw = messageContentToText(item.msgType, item.content);
   if (raw) {
     // 把 @_user_N 占位符替换成真实姓名

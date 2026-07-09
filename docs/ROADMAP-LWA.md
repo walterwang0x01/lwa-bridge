@@ -106,21 +106,22 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 
 **验收**：Kiro credits 用尽时，chat bucket 自动落到 Cursor 或 Gemini，并写日志。
 
-### Ingress 抽象（P1，设计 + 飞书迁移第一步）
+### Ingress 抽象（P1，设计 + 飞书迁移第一步） — 🚧 骨架已落地
 
 目标目录结构（示意）：
 
 ```
 src/
   ingress/
-    types.ts          # NormalizedMessage, NormalizedReply, ChannelId
-    lark/             # 现有飞书逻辑迁入
-    registry.ts
+    types.ts          # NormalizedMessage, NormalizedReply, ChannelId ✅
+    lark/             # 适配器（normalize + port + channel）✅
+    mock/             # 无凭据集成测试 ✅
+    registry.ts       ✅
   core/
-    dispatcher.ts     # 只认 ingress 类型，不认 Lark SDK
+    dispatcher.ts     # 出站经 IngressPort；入站 handleNormalized ✅
 ```
 
-**验收**：飞书行为无回归；新增 `ingress/mock` 可在无飞书凭据下跑集成测试。
+**验收**：飞书行为无回归 ✅；`ingress/mock` 可无凭据跑集成测试 ✅。详见 `docs/spikes/ingress-abstraction.md`。
 
 **本季度不做**：Teams / Telegram 正式上线。
 
@@ -214,7 +215,7 @@ src/
 | 多 CLI 路由 | ✅ | ✅ | ✅ + Gemini | ✅ |
 | 分桶 adaptive 自动应用 | suggest | apply-safe 部分桶 | 多数桶 | 全面 |
 | 配额 fallback | ❌ | ✅ | ✅ | ✅ |
-| 多 IM | 仅飞书 | 仅飞书 | 抽象就绪 | 2 渠道 |
+| 多 IM | 仅飞书 | 仅飞书 | 抽象骨架 ✅ | 2 渠道 |
 | 审批 / 审计 | 部分（merge 确认） | 文档化 | 基础策略 | 完整 |
 | 多用户部署 | ❌ | ❌ | ❌ | v1.0 |
 | Conduit 生产大 spec | M2 进行中 | ✅ stub e2e | 稳定 | 稳定 |

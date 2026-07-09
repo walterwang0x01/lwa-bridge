@@ -8,6 +8,8 @@
 import { loadConfig } from '../lib/config.js';
 import { getLogger, pruneOldLogs } from '../lib/logger.js';
 import { LarkClient } from '../lark/client.js';
+import { createLarkIngressChannel } from '../ingress/lark/channel.js';
+import { registerIngressChannel } from '../ingress/registry.js';
 import { pruneOldMedia } from '../lark/media.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
@@ -61,6 +63,8 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     appSecret: config.lark.appSecret,
     logger: log,
   });
+  const ingressChannel = createLarkIngressChannel(lark);
+  registerIngressChannel(ingressChannel);
 
   // 启动时主动查一次 bot 的 open_id，后续群消息 @判定不再依赖名字字符串
   // 失败也不阻塞启动，dispatcher 会降级到"等第一次 @bot 学习"的旧路径
@@ -84,9 +88,9 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   const larkRef = lark;
 
   const startEventLoop = async (): Promise<void> => {
-    await larkRef.startEventLoop({
-      onMessage: (msg) => dispatcher.handle(msg),
-      onCardAction: (evt) => dispatcher.handleCardAction(evt),
+    await ingressChannel.startInbound({
+      onMessage: (msg) => dispatcher.handleNormalized(msg),
+      onCardAction: (evt) => dispatcher.handleNormalizedCardAction(evt),
       onReady: () => log.info('🚀 lark-kiro-bridge ready, waiting for messages'),
     });
   };
@@ -107,6 +111,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
 
   const dispatcher = new Dispatcher({
     config,
+    ingress: ingressChannel.port,
     lark,
     sessions,
     workspaces,

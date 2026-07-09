@@ -14,6 +14,10 @@ import type { Logger } from 'pino';
 import type { Config } from '../lib/config.js';
 import { patchAndSaveConfig } from '../lib/config.js';
 import type { LarkClient } from '../lark/client.js';
+import type { IngressPort } from '../ingress/types.js';
+import { createLarkIngressPort } from '../ingress/lark/port.js';
+import type { NormalizedCardAction, NormalizedMessage } from '../ingress/types.js';
+import { toCardActionEvent, toIncomingMessage } from '../ingress/lark/normalize.js';
 import type { IncomingMessage, CardActionEvent } from '../lark/types.js';
 import { stripMentions, larkItemToText } from '../lark/parse.js';
 import { downloadMessageMedia } from '../lark/media.js';
@@ -96,7 +100,10 @@ import { listPersonaLibrary } from '../kiro/personaLibrary/index.js';
 
 export interface DispatcherOptions {
   config: Config;
-  lark: LarkClient;
+  /** 出站端口（推荐）。与 lark 二选一，优先 ingress。 */
+  ingress?: IngressPort;
+  /** @deprecated 请改用 ingress；保留兼容，内部会包装为 Lark IngressPort */
+  lark?: LarkClient;
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   logger: Logger;
@@ -113,7 +120,9 @@ export interface DispatcherOptions {
 
 export class Dispatcher {
   private config: Config;
-  private readonly lark: LarkClient;
+  private readonly ingress: IngressPort;
+  /** 媒体下载 / CardRenderer 仍依赖 LarkClient，待迁入 ingress。 */
+  private readonly larkClient?: LarkClient;
   private readonly sessions: SessionStore;
   private readonly workspaces: WorkspaceStore;
   private readonly log: Logger;
@@ -131,7 +140,14 @@ export class Dispatcher {
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config;
-    this.lark = opts.lark;
+    if (opts.ingress) {
+      this.ingress = opts.ingress;
+    } else if (opts.lark) {
+      this.ingress = createLarkIngressPort(opts.lark);
+    } else {
+      throw new Error('Dispatcher requires ingress or lark');
+    }
+    this.larkClient = opts.lark;
     this.sessions = opts.sessions;
     this.workspaces = opts.workspaces;
     this.log = opts.logger.child({ module: 'dispatcher' });
@@ -356,7 +372,14 @@ export class Dispatcher {
   }
 
   /**
-   * 主入口：处理一条飞书消息。
+   * 主入口：处理一条归一化入站消息（推荐）。
+   */
+  async handleNormalized(msg: NormalizedMessage): Promise<void> {
+    return this.handle(toIncomingMessage(msg));
+  }
+
+  /**
+   * 主入口：处理一条飞书消息（兼容；等价于 handleNormalized(fromLarkMessage(msg))）。
    */
   async handle(msg: IncomingMessage): Promise<void> {
     // 0) 去重（飞书 at-least-once 可能重推同一 eventId）
@@ -367,7 +390,7 @@ export class Dispatcher {
 
     // 1) 学习 botOpenId（兜底：bootstrap 启动时已经调过 /open-apis/bot/v3/info 主动获取，
     //    极少数情况下接口没返回，就按"第一次有人 @ 任意 bot"的方式学习）
-    if (!this.lark.getCachedBotOpenId()) {
+    if (!this.ingress.getCachedBotPrincipalId()) {
       // 飞书 mention.id_type 在 mentions[].key="@_user_X" 体系里区分不出"是不是机器人"，
       // 但群里被 @ 的人有 open_id；如果只有一个 mention，多半就是 @ 了 bot 自己。
       // 名字带 kiro / bot 的优先级最高（兼容老用户），其次回退到第一个 mention。
@@ -377,7 +400,7 @@ export class Dispatcher {
       const fallback = msg.mentions[0]?.openId;
       const guess = byName ?? fallback;
       if (guess) {
-        this.lark.setBotOpenId(guess);
+        this.ingress.setBotPrincipalId(guess);
         this.log.info(
           { openId: guess, source: byName ? 'name-match' : 'first-mention-fallback' },
           'bot open_id learned from mention',
@@ -397,7 +420,7 @@ export class Dispatcher {
     // 3) 群里要 @bot 才回复（除非 preferences.requireMentionInGroup=false）
     if (msg.chatType === 'group' || msg.chatType === 'topic_group') {
       if (this.config.preferences.requireMentionInGroup) {
-        const botOpenId = this.lark.getCachedBotOpenId();
+        const botOpenId = this.ingress.getCachedBotPrincipalId();
         if (botOpenId) {
           // 标准路径：用 open_id 精确判定，不依赖 bot 起的名字
           const botMentioned = msg.mentions.some((m) => m.openId === botOpenId);
@@ -442,7 +465,7 @@ export class Dispatcher {
 
     // 提取纯净文本（去掉 @bot mention key）
     const botOpenIdForStrip =
-      this.lark.getCachedBotOpenId() ||
+      this.ingress.getCachedBotPrincipalId() ||
       msg.mentions.find((m) => (m.name ?? '').toLowerCase().includes('kiro'))?.openId ||
       '';
     const cleanText = stripMentions(msg, botOpenIdForStrip).trim();
@@ -452,7 +475,7 @@ export class Dispatcher {
     let asrText = ''; // 语音转写出来的文本，会被拼到 cleanText 前面
     if (supportedMedia) {
       try {
-        mediaPaths = await downloadMessageMedia(this.lark, msg);
+        mediaPaths = await downloadMessageMedia(this.larkClient!, msg);
       } catch (e) {
         this.log.warn({ err: e }, 'media download error, will skip');
       }
@@ -460,7 +483,7 @@ export class Dispatcher {
       // 失败则把音频当成普通"文件附件"留给 Kiro，Kiro 起码能告诉用户"这是个音频文件"。
       if (msg.messageType === 'audio' && mediaPaths.length > 0) {
         const audioPath = mediaPaths[0]!;
-        const r = await transcribeAudio(this.lark, audioPath);
+        const r = await transcribeAudio(this.larkClient!, audioPath);
         if (r.ok) {
           asrText = r.text;
           mediaPaths = mediaPaths.filter((p) => p !== audioPath);
@@ -861,7 +884,7 @@ export class Dispatcher {
     const clip = (s: string, max: number): string =>
       s.length > max ? `${s.slice(0, max)}…[已截断]` : s;
     try {
-      const items = await this.lark.getMessageContent(sourceMessageId);
+      const items = await this.ingress.getMessageContent(sourceMessageId);
       if (items.length === 0) return '';
 
       const subs = items.filter((it) => it.upperMessageId);
@@ -1042,7 +1065,7 @@ export class Dispatcher {
    * WS 连上就意味着 token 至少拿过一次。
    */
   private async handleSelftestCmd(msg: IncomingMessage): Promise<void> {
-    const wsConnected = this.lark.isWsConnected();
+    const wsConnected = this.ingress.isConnected();
     const report = await runSelfChecks({
       config: this.config,
       senderOpenId: msg.senderOpenId,
@@ -1222,11 +1245,11 @@ export class Dispatcher {
    */
   private async sendInteractiveCard(msg: IncomingMessage, card: object): Promise<void> {
     try {
-      await this.lark.replyCard(msg.messageId, card);
+      await this.ingress.replyCard(msg.messageId, card);
     } catch (e) {
       this.log.error({ err: e }, 'sendInteractiveCard failed; falling back to text');
       try {
-        await this.lark.sendText(msg.chatId, '❌ 卡片发送失败，请检查日志');
+        await this.ingress.sendText(msg.chatId, '❌ 卡片发送失败，请检查日志');
       } catch {
         // ignore
       }
@@ -1250,7 +1273,7 @@ export class Dispatcher {
   ): Promise<void> {
     let placeholderMessageId: string | undefined;
     try {
-      placeholderMessageId = await this.lark.replyCard(msg.messageId, placeholderCard);
+      placeholderMessageId = await this.ingress.replyCard(msg.messageId, placeholderCard);
     } catch (e) {
       this.log.error({ err: e }, 'placeholder card send failed');
       // placeholder 都发不出去，直接尝试拿最终结果再发一次
@@ -1269,7 +1292,7 @@ export class Dispatcher {
 
     if (placeholderMessageId) {
       try {
-        await this.lark.patchCard(placeholderMessageId, finalCard);
+        await this.ingress.patchCard(placeholderMessageId, finalCard);
       } catch (e) {
         this.log.error({ err: e }, 'patch final card failed; sending fresh');
         await this.sendInteractiveCard(msg, finalCard);
@@ -1287,15 +1310,19 @@ export class Dispatcher {
    */
   private async sendCardToChat(chatId: string, card: object): Promise<void> {
     try {
-      await this.lark.sendCard(chatId, card);
+      await this.ingress.sendCard(chatId, card);
     } catch (e) {
       this.log.error({ err: e }, 'sendCardToChat failed; falling back to text');
       try {
-        await this.lark.sendText(chatId, '❌ 卡片发送失败，请检查日志');
+        await this.ingress.sendText(chatId, '❌ 卡片发送失败，请检查日志');
       } catch {
         // ignore
       }
     }
+  }
+
+  async handleNormalizedCardAction(evt: NormalizedCardAction): Promise<void> {
+    return this.handleCardAction(toCardActionEvent(evt));
   }
 
   /**
@@ -1693,7 +1720,7 @@ export class Dispatcher {
           '🚦 conduit run --merge',
         );
         try {
-          await this.lark.patchCard(evt.messageId, runningCard);
+          await this.ingress.patchCard(evt.messageId, runningCard);
         } catch {
           await this.sendCardToChat(evt.chatId, runningCard);
         }
@@ -1710,7 +1737,7 @@ export class Dispatcher {
             );
             const card = this.conduitRunCard(r, true);
             try {
-              await this.lark.patchCard(evt.messageId, card);
+              await this.ingress.patchCard(evt.messageId, card);
             } catch {
               await this.sendCardToChat(evt.chatId, card);
             }
@@ -1721,7 +1748,7 @@ export class Dispatcher {
       case 'conduit.cancel': {
         const card = buildAckCard({ state: 'aborted', title: '已取消', body: '不执行合并。' });
         try {
-          await this.lark.patchCard(evt.messageId, card);
+          await this.ingress.patchCard(evt.messageId, card);
         } catch {
           await this.sendCardToChat(evt.chatId, card);
         }
@@ -2653,7 +2680,7 @@ export class Dispatcher {
         );
         let placeholderMessageId: string | undefined;
         try {
-          placeholderMessageId = await this.lark.replyCard(msg.messageId, placeholderCard);
+          placeholderMessageId = await this.ingress.replyCard(msg.messageId, placeholderCard);
         } catch (e) {
           this.log.error({ err: e }, 'conduit placeholder send failed');
         }
@@ -2686,7 +2713,7 @@ export class Dispatcher {
       if (now - lastPatch < 2000 || !messageId) return;
       lastPatch = now;
       const card = buildLoadingCard(`\`\`\`\n${tailStr}\n\`\`\``, runningTitle);
-      void this.lark.patchCard(messageId, card).catch(() => {});
+      void this.ingress.patchCard(messageId, card).catch(() => {});
     };
     return runConduit(args, { cwd, signal, onProgress });
   }
@@ -2698,7 +2725,9 @@ export class Dispatcher {
     card: object,
   ): Promise<void> {
     if (messageId) {
-      await this.lark.patchCard(messageId, card).catch(() => this.sendInteractiveCard(msg, card));
+      await this.ingress
+        .patchCard(messageId, card)
+        .catch(() => this.sendInteractiveCard(msg, card));
     } else {
       await this.sendInteractiveCard(msg, card);
     }
@@ -2745,7 +2774,7 @@ export class Dispatcher {
       body: '没有创建任何任务。',
     });
     try {
-      await this.lark.patchCard(evt.messageId, card);
+      await this.ingress.patchCard(evt.messageId, card);
     } catch (e) {
       this.log.error({ err: e, action: 'schedule.cancel' }, 'patchCard failed');
       await this.sendCardToChat(evt.chatId, card);
@@ -2852,7 +2881,7 @@ export class Dispatcher {
    */
   private async replaceWithCard(evt: CardActionEvent, card: object): Promise<void> {
     try {
-      await this.lark.patchCard(evt.messageId, card);
+      await this.ingress.patchCard(evt.messageId, card);
     } catch (e) {
       this.log.error({ err: e }, 'patchCard failed; fallback to send new card');
       await this.sendCardToChat(evt.chatId, card);
@@ -2949,7 +2978,7 @@ export class Dispatcher {
 
   private async replyErrorCard(msg: IncomingMessage, body: string, cwd: string): Promise<void> {
     const renderer = new CardRenderer({
-      lark: this.lark,
+      lark: this.larkClient!,
       chatId: msg.chatId,
       replyToMessageId: msg.messageId,
       intervalMs: this.config.preferences.cardUpdateIntervalMs,
@@ -3132,7 +3161,7 @@ export class Dispatcher {
       id: taskId,
       run: async (signal) => {
         const ctrlOpts: ConstructorParameters<typeof RunCardController>[0] = {
-          lark: this.lark,
+          lark: this.larkClient!,
           chatId: msg.chatId,
           replyToMessageId: msg.messageId,
           intervalMs: this.config.preferences.cardUpdateIntervalMs,
