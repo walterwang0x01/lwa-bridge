@@ -13,7 +13,7 @@
  *   finalize(terminal) → 立即取消节流，发最终态卡片
  */
 import type { Logger } from 'pino';
-import type { LarkClient } from '../lark/client.js';
+import type { IngressPort } from '../ingress/types.js';
 import { Debouncer } from '../lib/debounce.js';
 import { renderRunCard } from './runRenderer.js';
 import {
@@ -27,7 +27,7 @@ import {
 import type { SessionEvent } from '../kiro/acp/messages.js';
 
 export interface RunCardControllerOptions {
-  lark: LarkClient;
+  ingress: IngressPort;
   chatId: string;
   /** 让卡片作为对原消息的 reply（挂在用户消息下面，体验好） */
   replyToMessageId?: string;
@@ -39,7 +39,7 @@ export interface RunCardControllerOptions {
 }
 
 export class RunCardController {
-  private readonly lark: LarkClient;
+  private readonly ingress: IngressPort;
   private readonly chatId: string;
   private readonly replyToMessageId?: string;
   private readonly debouncer: Debouncer;
@@ -57,7 +57,7 @@ export class RunCardController {
   private patchChain: Promise<void> = Promise.resolve();
 
   constructor(opts: RunCardControllerOptions) {
-    this.lark = opts.lark;
+    this.ingress = opts.ingress;
     this.chatId = opts.chatId;
     if (opts.replyToMessageId !== undefined) {
       this.replyToMessageId = opts.replyToMessageId;
@@ -71,9 +71,9 @@ export class RunCardController {
   async open(): Promise<void> {
     const card = renderRunCard(this.state);
     if (this.replyToMessageId) {
-      this.messageId = await this.lark.replyCard(this.replyToMessageId, card);
+      this.messageId = await this.ingress.replyCard(this.replyToMessageId, card);
     } else {
-      this.messageId = await this.lark.sendCard(this.chatId, card);
+      this.messageId = await this.ingress.sendCard(this.chatId, card);
     }
     this.log.debug({ messageId: this.messageId }, 'run card opened');
   }
@@ -195,7 +195,7 @@ export class RunCardController {
       // open 都没成功：兜底 sendText
       try {
         const text = this.fallbackText();
-        await this.lark.sendText(this.chatId, text.slice(0, 4000));
+        await this.ingress.sendText(this.chatId, text.slice(0, 4000));
       } catch (e) {
         this.log.error({ err: e }, 'fallback sendText failed');
       }
@@ -254,7 +254,7 @@ export class RunCardController {
     this.debouncer.cancel();
     if (!this.messageId) return;
     try {
-      await this.lark.recallMessage(this.messageId);
+      await this.ingress.recallMessage(this.messageId);
       this.log.debug({ messageId: this.messageId }, 'empty task card discarded');
     } catch (e) {
       this.log.warn({ err: e }, 'discard failed; leaving card as-is');
@@ -287,7 +287,7 @@ export class RunCardController {
       if (!isFinal && this.closed) return;
       const card = renderRunCard(this.state);
       try {
-        await this.lark.patchCard(this.messageId, card);
+        await this.ingress.patchCard(this.messageId, card);
       } catch (e) {
         if (isFinal) {
           this.log.error({ err: e }, 'finalize patchCard failed');

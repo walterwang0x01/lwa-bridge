@@ -9,6 +9,7 @@ import { loadConfig } from '../lib/config.js';
 import { getLogger, pruneOldLogs } from '../lib/logger.js';
 import { LarkClient } from '../lark/client.js';
 import { createLarkIngressChannel } from '../ingress/lark/channel.js';
+import { createSlackIngressChannel } from '../ingress/slack/channel.js';
 import { registerIngressChannel } from '../ingress/registry.js';
 import { pruneOldMedia } from '../lark/media.js';
 import { SessionStore } from '../store/sessions.js';
@@ -65,6 +66,16 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   });
   const ingressChannel = createLarkIngressChannel(lark);
   registerIngressChannel(ingressChannel);
+  registerIngressChannel(
+    createSlackIngressChannel({
+      botToken: config.ingress?.slack?.botToken,
+      appToken: config.ingress?.slack?.appToken,
+      signingSecret: config.ingress?.slack?.signingSecret,
+    }),
+  );
+  if (config.ingress?.channel === 'slack') {
+    log.warn('ingress.channel=slack is not production-ready; falling back to lark event loop');
+  }
 
   // 启动时主动查一次 bot 的 open_id，后续群消息 @判定不再依赖名字字符串
   // 失败也不阻塞启动，dispatcher 会降级到"等第一次 @bot 学习"的旧路径
@@ -81,7 +92,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   // 启动时扫描遗留的"进行中卡片"——上次 bridge 被杀时还没 finalize 的任务。
   // 把它们 patch 成"已中断"卡片，避免飞书侧永远显示 loading。
   // 失败不阻塞启动；遗留太多时控制并发避免压垮飞书 API。
-  void recoverOrphanCards(activeCards, lark, log);
+  void recoverOrphanCards(activeCards, ingressChannel.port, log);
 
   // 当前实现里 lark 实例不会被替换（reconnect 复用同一实例），所以是 const。
   // 如果未来需要在 reconnect 时换新实例（比如换 appId），把这里改成 let 即可。
@@ -112,7 +123,6 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   const dispatcher = new Dispatcher({
     config,
     ingress: ingressChannel.port,
-    lark,
     sessions,
     workspaces,
     logger: log,
@@ -206,7 +216,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
  */
 async function recoverOrphanCards(
   store: ActiveCardsStore,
-  lark: LarkClient,
+  ingress: IngressPort,
   log: ReturnType<typeof getLogger>,
 ): Promise<void> {
   let orphans: ActiveCard[];
@@ -229,7 +239,7 @@ async function recoverOrphanCards(
   for (const card of orphans) {
     const ageSec = Math.round((Date.now() - card.startedAt) / 1000);
     try {
-      await lark.patchCard(
+      await ingress.patchCard(
         card.messageId,
         buildAckCard({
           state: 'aborted',

@@ -111,6 +111,18 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  ingress: z
+    .object({
+      channel: z.enum(['lark', 'slack']).default('lark'),
+      slack: z
+        .object({
+          botToken: z.string().optional(),
+          appToken: z.string().optional(),
+          signingSecret: z.string().optional(),
+        })
+        .optional(),
+    })
+    .default({ channel: 'lark' }),
   lark: z.object({
     appId: z.string().min(1),
     appSecret: z.string().min(1),

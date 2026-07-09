@@ -6,6 +6,7 @@ import type {
   NormalizedMessage,
   NormalizedReply,
 } from '../types.js';
+import { createMockIngressPort } from './port.js';
 
 export interface MockOutboundRecord {
   at: number;
@@ -23,30 +24,32 @@ export class MockIngressChannel implements IngressChannel {
 
   private handlers: IngressInboundHandlers | null = null;
   private connected = false;
-  private botPrincipalId = 'mock-bot';
 
   constructor() {
-    this.port = {
-      channel: 'mock',
-      getCachedBotPrincipalId: () => this.botPrincipalId,
-      setBotPrincipalId: (id) => {
-        this.botPrincipalId = id;
-      },
+    const base = createMockIngressPort({
+      getCachedBotPrincipalId: () => 'mock-bot',
+      setBotPrincipalId: () => undefined,
       isConnected: () => this.connected,
-      getMessageContent: async () => [],
+    });
+    this.port = {
+      ...base,
       replyCard: async (replyToMessageId, card) => {
+        const id = await base.replyCard(replyToMessageId, card);
         this.record({ kind: 'reply_card', replyToMessageId, card });
-        return `mock-reply-${this.outbound.length}`;
+        return id;
       },
       sendText: async (conversationId, text) => {
+        const id = await base.sendText(conversationId, text);
         this.record({ kind: 'text', conversationId, text });
-        return `mock-text-${this.outbound.length}`;
+        return id;
       },
       sendCard: async (conversationId, card) => {
+        const id = await base.sendCard(conversationId, card);
         this.record({ kind: 'card', conversationId, card });
-        return `mock-card-${this.outbound.length}`;
+        return id;
       },
       patchCard: async (messageId, card) => {
+        await base.patchCard(messageId, card);
         this.record({ kind: 'patch_card', messageId, card });
       },
     };

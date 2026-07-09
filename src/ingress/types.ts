@@ -3,7 +3,7 @@
  * core/dispatcher 只依赖本模块，不直接依赖飞书 SDK。
  */
 
-export type ChannelId = 'lark' | 'mock';
+export type ChannelId = 'lark' | 'mock' | 'slack';
 
 export type ConversationKind = 'p2p' | 'group' | 'topic_group' | 'unknown';
 
@@ -59,8 +59,22 @@ export type NormalizedReply =
   | { kind: 'reply_card'; replyToMessageId: string; card: object }
   | { kind: 'patch_card'; messageId: string; card: object };
 
+export type IngressTranscribeResult =
+  | { ok: true; text: string }
+  | {
+      ok: false;
+      reason:
+        | 'ffmpeg-missing'
+        | 'ffmpeg-failed'
+        | 'too-long'
+        | 'api-failed'
+        | 'empty'
+        | 'unsupported';
+      detail?: string;
+    };
+
 /**
- * 出站端口：dispatcher 通过此接口回发消息，不感知具体 IM SDK。
+ * 出站端口：dispatcher / CardRenderer 通过此接口回发消息，不感知具体 IM SDK。
  */
 export interface IngressPort {
   readonly channel: ChannelId;
@@ -72,6 +86,9 @@ export interface IngressPort {
   sendText(conversationId: string, text: string): Promise<string>;
   sendCard(conversationId: string, card: object): Promise<string>;
   patchCard(messageId: string, card: object): Promise<void>;
+  recallMessage(messageId: string): Promise<void>;
+  downloadInboundMedia(msg: NormalizedMessage): Promise<string[]>;
+  transcribeInboundAudio(audioPath: string): Promise<IngressTranscribeResult>;
 }
 
 export interface IngressChannel {

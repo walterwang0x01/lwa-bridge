@@ -14,12 +14,12 @@
  *   - finalize 时立即取消 debounce，立刻发终态
  */
 import type { Logger } from 'pino';
-import type { LarkClient } from '../lark/client.js';
+import type { IngressPort } from '../ingress/types.js';
 import { Debouncer } from '../lib/debounce.js';
 import { buildCard, truncateForCard, type CardContext, type CardState } from './schema.js';
 
 export interface CardRendererOptions {
-  lark: LarkClient;
+  ingress: IngressPort;
   chatId: string;
   /** 用于把卡片作为对原消息的 reply（更友好，挂在用户消息下面） */
   replyToMessageId?: string;
@@ -30,7 +30,7 @@ export interface CardRendererOptions {
 }
 
 export class CardRenderer {
-  private readonly lark: LarkClient;
+  private readonly ingress: IngressPort;
   private readonly chatId: string;
   private readonly replyToMessageId?: string;
   private readonly debouncer: Debouncer;
@@ -46,7 +46,7 @@ export class CardRenderer {
   private closed = false;
 
   constructor(opts: CardRendererOptions) {
-    this.lark = opts.lark;
+    this.ingress = opts.ingress;
     this.chatId = opts.chatId;
     if (opts.replyToMessageId !== undefined) {
       this.replyToMessageId = opts.replyToMessageId;
@@ -62,9 +62,9 @@ export class CardRenderer {
     this.accText = initialText;
     const card = buildCard(initialState, truncateForCard(this.accText), this.ctx, this.traces);
     if (this.replyToMessageId) {
-      this.messageId = await this.lark.replyCard(this.replyToMessageId, card);
+      this.messageId = await this.ingress.replyCard(this.replyToMessageId, card);
     } else {
-      this.messageId = await this.lark.sendCard(this.chatId, card);
+      this.messageId = await this.ingress.sendCard(this.chatId, card);
     }
     this.log.debug({ messageId: this.messageId, state: initialState }, 'card opened');
   }
@@ -100,7 +100,7 @@ export class CardRenderer {
     if (!this.messageId || this.closed) return;
     const card = buildCard(this.currentState, truncateForCard(this.accText), this.ctx, this.traces);
     try {
-      await this.lark.patchCard(this.messageId, card);
+      await this.ingress.patchCard(this.messageId, card);
     } catch (e) {
       this.log.warn({ err: e }, 'patchCard failed; will retry on next chunk');
     }
@@ -120,7 +120,7 @@ export class CardRenderer {
     if (!this.messageId) {
       // 罕见情况：open 都没成功，直接 sendText 兜底
       try {
-        await this.lark.sendText(this.chatId, this.accText.slice(0, 4000));
+        await this.ingress.sendText(this.chatId, this.accText.slice(0, 4000));
       } catch (e) {
         this.log.error({ err: e }, 'fallback sendText failed');
       }
@@ -128,7 +128,7 @@ export class CardRenderer {
     }
     const card = buildCard(state, truncateForCard(this.accText), this.ctx, this.traces);
     try {
-      await this.lark.patchCard(this.messageId, card);
+      await this.ingress.patchCard(this.messageId, card);
     } catch (e) {
       this.log.error({ err: e }, 'finalize patchCard failed');
     }

@@ -1,6 +1,8 @@
 import type { LarkClient } from '../../lark/client.js';
+import { transcribeAudio } from '../../lark/asr.js';
+import { downloadMessageMedia } from '../../lark/media.js';
 import type { IngressPort } from '../types.js';
-import { fromLarkMessageItem } from './normalize.js';
+import { fromLarkMessageItem, toIncomingMessage } from './normalize.js';
 
 export function createLarkIngressPort(client: LarkClient): IngressPort {
   return {
@@ -16,5 +18,11 @@ export function createLarkIngressPort(client: LarkClient): IngressPort {
     sendText: (conversationId, text) => client.sendText(conversationId, text),
     sendCard: (conversationId, card) => client.sendCard(conversationId, card),
     patchCard: (messageId, card) => client.patchCard(messageId, card),
+    recallMessage: (messageId) => client.recallMessage(messageId),
+    downloadInboundMedia: async (msg) => {
+      if (msg.channel !== 'lark') return [];
+      return downloadMessageMedia(client, toIncomingMessage(msg));
+    },
+    transcribeInboundAudio: async (audioPath) => transcribeAudio(client, audioPath),
   };
 }

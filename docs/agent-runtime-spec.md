@@ -93,4 +93,5 @@ kiro-conduit report --quota-only
 ## 演进
 
 - 季度路线图（第三 runtime、Ingress 抽象、配额 fallback）：[`ROADMAP-LWA.md`](./ROADMAP-LWA.md)
+- Ingress 抽象（Q4）：[`spikes/ingress-abstraction.md`](./spikes/ingress-abstraction.md)
 - 配额探测设计草案：[`spikes/quota-probe.md`](./spikes/quota-probe.md)

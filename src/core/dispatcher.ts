@@ -13,15 +13,12 @@
 import type { Logger } from 'pino';
 import type { Config } from '../lib/config.js';
 import { patchAndSaveConfig } from '../lib/config.js';
-import type { LarkClient } from '../lark/client.js';
 import type { IngressPort } from '../ingress/types.js';
-import { createLarkIngressPort } from '../ingress/lark/port.js';
+import { fromLarkMessage } from '../ingress/lark/normalize.js';
 import type { NormalizedCardAction, NormalizedMessage } from '../ingress/types.js';
 import { toCardActionEvent, toIncomingMessage } from '../ingress/lark/normalize.js';
 import type { IncomingMessage, CardActionEvent } from '../lark/types.js';
 import { stripMentions, larkItemToText } from '../lark/parse.js';
-import { downloadMessageMedia } from '../lark/media.js';
-import { transcribeAudio } from '../lark/asr.js';
 import { parseCommand, type ParsedCommand } from '../commands/parse.js';
 import { readRecentLogLines } from '../lib/logger.js';
 import { SessionStore } from '../store/sessions.js';
@@ -100,10 +97,7 @@ import { listPersonaLibrary } from '../kiro/personaLibrary/index.js';
 
 export interface DispatcherOptions {
   config: Config;
-  /** 出站端口（推荐）。与 lark 二选一，优先 ingress。 */
-  ingress?: IngressPort;
-  /** @deprecated 请改用 ingress；保留兼容，内部会包装为 Lark IngressPort */
-  lark?: LarkClient;
+  ingress: IngressPort;
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   logger: Logger;
@@ -121,8 +115,6 @@ export interface DispatcherOptions {
 export class Dispatcher {
   private config: Config;
   private readonly ingress: IngressPort;
-  /** 媒体下载 / CardRenderer 仍依赖 LarkClient，待迁入 ingress。 */
-  private readonly larkClient?: LarkClient;
   private readonly sessions: SessionStore;
   private readonly workspaces: WorkspaceStore;
   private readonly log: Logger;
@@ -140,14 +132,7 @@ export class Dispatcher {
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config;
-    if (opts.ingress) {
-      this.ingress = opts.ingress;
-    } else if (opts.lark) {
-      this.ingress = createLarkIngressPort(opts.lark);
-    } else {
-      throw new Error('Dispatcher requires ingress or lark');
-    }
-    this.larkClient = opts.lark;
+    this.ingress = opts.ingress;
     this.sessions = opts.sessions;
     this.workspaces = opts.workspaces;
     this.log = opts.logger.child({ module: 'dispatcher' });
@@ -475,7 +460,7 @@ export class Dispatcher {
     let asrText = ''; // 语音转写出来的文本，会被拼到 cleanText 前面
     if (supportedMedia) {
       try {
-        mediaPaths = await downloadMessageMedia(this.larkClient!, msg);
+        mediaPaths = await this.ingress.downloadInboundMedia(fromLarkMessage(msg));
       } catch (e) {
         this.log.warn({ err: e }, 'media download error, will skip');
       }
@@ -483,7 +468,7 @@ export class Dispatcher {
       // 失败则把音频当成普通"文件附件"留给 Kiro，Kiro 起码能告诉用户"这是个音频文件"。
       if (msg.messageType === 'audio' && mediaPaths.length > 0) {
         const audioPath = mediaPaths[0]!;
-        const r = await transcribeAudio(this.larkClient!, audioPath);
+        const r = await this.ingress.transcribeInboundAudio(audioPath);
         if (r.ok) {
           asrText = r.text;
           mediaPaths = mediaPaths.filter((p) => p !== audioPath);
@@ -2978,7 +2963,7 @@ export class Dispatcher {
 
   private async replyErrorCard(msg: IncomingMessage, body: string, cwd: string): Promise<void> {
     const renderer = new CardRenderer({
-      lark: this.larkClient!,
+      ingress: this.ingress,
       chatId: msg.chatId,
       replyToMessageId: msg.messageId,
       intervalMs: this.config.preferences.cardUpdateIntervalMs,
@@ -3161,7 +3146,7 @@ export class Dispatcher {
       id: taskId,
       run: async (signal) => {
         const ctrlOpts: ConstructorParameters<typeof RunCardController>[0] = {
-          lark: this.larkClient!,
+          ingress: this.ingress,
           chatId: msg.chatId,
           replyToMessageId: msg.messageId,
           intervalMs: this.config.preferences.cardUpdateIntervalMs,

@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Logger } from 'pino';
 import { RunCardController } from './runCardController.js';
-import type { LarkClient } from '../lark/client.js';
+import { createMockIngressPort } from '../ingress/mock/port.js';
 import type { RunState } from '../kiro/runState.js';
 
 const controllers: RunCardController[] = [];
@@ -25,9 +25,8 @@ function makeController(): RunCardController {
     error: noop,
     trace: noop,
   } as unknown as Logger;
-  const lark = {} as unknown as LarkClient;
-  // intervalMs 设大；测试不触发真实 patch（无 messageId），结束时 discard 清理定时器
-  const ctrl = new RunCardController({ lark, chatId: 'c1', intervalMs: 100_000, logger });
+  const ingress = createMockIngressPort();
+  const ctrl = new RunCardController({ ingress, chatId: 'c1', intervalMs: 100_000, logger });
   controllers.push(ctrl);
   return ctrl;
 }
@@ -55,7 +54,7 @@ function makeRacingController(patchDelayMs: number): {
     trace: noop,
   } as unknown as Logger;
   const patched: Array<{ streaming: boolean; template: string }> = [];
-  const lark = {
+  const ingress = createMockIngressPort({
     patchCard: async (_id: string, card: unknown) => {
       const c = card as {
         config?: { streaming_mode?: boolean };
@@ -67,8 +66,8 @@ function makeRacingController(patchDelayMs: number): {
         template: c.header?.template ?? '',
       });
     },
-  } as unknown as LarkClient;
-  const ctrl = new RunCardController({ lark, chatId: 'c1', intervalMs: 5, logger });
+  });
+  const ctrl = new RunCardController({ ingress, chatId: 'c1', intervalMs: 5, logger });
   (ctrl as unknown as { messageId: string }).messageId = 'om_test';
   controllers.push(ctrl);
   return { ctrl, patched };
