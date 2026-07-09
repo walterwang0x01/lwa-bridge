@@ -19,7 +19,7 @@ import { CONFIG_FILE, ensureDataDirs } from './paths.js';
 
 /** 单个 Agent CLI runtime profile（kiro-cli-acp / cursor-agent-cli 等）。 */
 export const RuntimeProfileSchema = z.object({
-  kind: z.enum(['kiro-cli-acp', 'cursor-agent-cli']),
+  kind: z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
   bin: z.string().optional(),
   model: z.string().optional(),
   agent: z.string().optional(),

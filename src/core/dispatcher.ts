@@ -29,7 +29,11 @@ import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
 import { runKiro } from '../kiro/runner.js';
 import { runAgentTurn } from '../runtime/runner.js';
-import { listRuntimeProfileNames, resolveRuntimeProfile } from '../runtime/config.js';
+import {
+  listRuntimeProfileNames,
+  profileNameForRuntimeKind,
+  resolveRuntimeProfile,
+} from '../runtime/config.js';
 import {
   chooseModelForProfile,
   chooseRuntimeProfile,
@@ -233,8 +237,7 @@ export class Dispatcher {
         adaptiveMode === 'apply-aggressive' ||
         (adaptiveMode === 'apply-safe' && applyGates.canApplyModel);
       if (adaptiveMode !== 'off' && adaptive?.preferredRuntimeKind && canApplyRuntime) {
-        const adaptiveProfileName =
-          adaptive.preferredRuntimeKind === 'cursor-agent-cli' ? 'cursor' : 'kiro';
+        const adaptiveProfileName = profileNameForRuntimeKind(adaptive.preferredRuntimeKind);
         picked = {
           profileName: adaptiveProfileName,
           profile: resolveRuntimeProfile(this.config, adaptiveProfileName),
@@ -1081,7 +1084,7 @@ export class Dispatcher {
             '可用 profile：',
             ...lines,
             '',
-            '切换：`/runtime cursor` 或 `/runtime kiro`',
+            '切换：`/runtime cursor` · `/runtime gemini` · `/runtime kiro`',
           ].join('\n'),
         }),
       );

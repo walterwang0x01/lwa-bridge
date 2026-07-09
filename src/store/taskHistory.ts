@@ -92,6 +92,7 @@ function clamp01(value: number): number {
 
 function costScoreFor(runtimeKind: string, model: string): number {
   if (runtimeKind === 'cursor-agent-cli') return 1;
+  if (runtimeKind === 'gemini-cli') return 0.92;
   const lower = model.toLowerCase();
   if (lower.includes('opus')) return 0.35;
   if (lower.includes('sonnet')) return 0.65;

@@ -8,6 +8,7 @@
 |------|--------|------|
 | `kiro-cli-acp` | `kiro-cli` | ACP JSON-RPC over stdio |
 | `cursor-agent-cli` | `agent` | NDJSON `stream-json` via `--print` |
+| `gemini-cli` | `gemini` | NDJSON `stream-json` via `-p`（headless） |
 
 ## Session ID
 

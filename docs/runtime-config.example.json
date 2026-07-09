@@ -20,6 +20,12 @@
         "bin": "agent",
         "force": true,
         "model": "Auto"
+      },
+      "gemini": {
+        "kind": "gemini-cli",
+        "bin": "gemini",
+        "force": true,
+        "model": "auto"
       }
     },
     "router": {

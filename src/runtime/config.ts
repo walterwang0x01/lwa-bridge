@@ -7,11 +7,27 @@ import type { RuntimeKind, RuntimeProfile } from './types.js';
 const DEFAULT_BINS: Record<RuntimeKind, string> = {
   'kiro-cli-acp': 'kiro-cli',
   'cursor-agent-cli': 'agent',
+  'gemini-cli': 'gemini',
 };
+
+export function profileNameForRuntimeKind(kind: string): string {
+  switch (kind) {
+    case 'cursor-agent-cli':
+      return 'cursor';
+    case 'gemini-cli':
+      return 'gemini';
+    case 'kiro-cli-acp':
+    default:
+      return 'kiro';
+  }
+}
 
 export function defaultRuntimeProfiles(
   cfg: Config,
-): { kiro: RuntimeProfile; cursor: RuntimeProfile } & Record<string, RuntimeProfile> {
+): { kiro: RuntimeProfile; cursor: RuntimeProfile; gemini: RuntimeProfile } & Record<
+  string,
+  RuntimeProfile
+> {
   const kiro: RuntimeProfile = {
     kind: 'kiro-cli-acp',
     bin: cfg.kiro.binPath,
@@ -31,7 +47,16 @@ export function defaultRuntimeProfiles(
     idleTimeoutMinutes: cfg.kiro.idleTimeoutMinutes,
     systemPromptPrefix: cfg.kiro.systemPromptPrefix,
   };
-  return { kiro, cursor };
+  const gemini: RuntimeProfile = {
+    kind: 'gemini-cli',
+    bin: DEFAULT_BINS['gemini-cli'],
+    model: 'auto',
+    force: true,
+    timeoutMs: cfg.kiro.timeoutMs,
+    idleTimeoutMinutes: cfg.kiro.idleTimeoutMinutes,
+    systemPromptPrefix: cfg.kiro.systemPromptPrefix,
+  };
+  return { kiro, cursor, gemini };
 }
 
 export function listRuntimeProfileNames(cfg: Config): string[] {

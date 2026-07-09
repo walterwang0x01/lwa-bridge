@@ -157,6 +157,15 @@ export async function chooseModelForProfile(
       availableModelCount: 1,
     };
   }
+  if (profile.kind === 'gemini-cli') {
+    return {
+      mode: 'fixed',
+      selectedModel: profile.model ?? 'auto',
+      reason: 'gemini-fixed-model',
+      complexityScore: complexityScore(cfg, ctx),
+      availableModelCount: 1,
+    };
+  }
 
   const score = complexityScore(cfg, ctx);
   if (cfg.modelRouting.kiro.mode === 'fixed') {

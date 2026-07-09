@@ -77,17 +77,18 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 
 **主题**：降低成本天花板，并为多 IM 做结构准备。
 
-### 第三 Runtime：`gemini-cli`（P0）
+### 第三 Runtime：`gemini-cli`（P0） — 🚧 适配器已接入（需本机安装 `gemini`）
 
 | 步骤 | 内容 |
 |------|------|
 | 协议调研 | Gemini CLI 输出格式、OAuth / API key、日配额 |
-| Bridge 适配器 | 新 `RuntimeKind` + NDJSON/自有协议适配（参考 `cursor-agent-cli`） |
-| Conduit 适配器 | implementor 可选 `gemini-cli`；planner/reviewer 仍默认 Kiro |
-| 路由策略 | `simple + high-volume → gemini`；`complex → kiro`；`cheap-local → cursor` |
-| metrics | cost proxy 三档分列 |
+| Bridge 适配器 | ✅ `RuntimeKind` + `geminiCliRuntime` + stream parser |
+| Conduit 适配器 | ✅ `gemini_cli.py` implementor / reviewer / planner |
+| 路由策略 | `simple + high-volume → gemini`（配置 `profiles.gemini` + `/runtime gemini`） |
+| metrics | ✅ cost proxy 三档分列 |
+| 配额探测 | 见 `spikes/quota-probe.md`（待实现） |
 
-**验收**：同一 spec 片段，三 runtime 均可跑通；adaptive 分桶出现 gemini 推荐行。
+**验收（剩余）**：本机 `npm i -g @google/gemini-cli` 后跑通一条 chat turn；adaptive 分桶出现 gemini 推荐行。
 
 ### 配额感知路由（P0）
 
