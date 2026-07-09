@@ -308,6 +308,7 @@ lark-kiro-bridge kill <id> [--force] # Kill a process
 
 | Doc | Content |
 |---|---|
+| [docs/ROADMAP-LWA.md](./docs/ROADMAP-LWA.md) | **LWA cross-project quarterly roadmap** |
 | [docs/PITCH.md](./docs/PITCH.md) | **External pitch**: 30-second intro, audience fit, copy-paste one-liner |
 | [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA overview**: Bridge + Conduit roles, multi-CLI strategy, bucketed adaptive routing |
 | [docs/runtime-routing-production.md](./docs/runtime-routing-production.md) | Production runtime routing, adaptive modes, Dashboard metrics |

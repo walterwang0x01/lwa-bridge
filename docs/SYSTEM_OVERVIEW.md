@@ -117,6 +117,7 @@
 
 ## 阅读路径
 
+- 想看季度规划与待办优先级：看 [ROADMAP-LWA.md](./ROADMAP-LWA.md)
 - 想对外介绍或写 README：看 `PITCH.md`
 - 想知道怎么落地配置：看 `runtime-routing-production.md`
 - 想知道跨项目契约：看 `agent-runtime-spec.md`

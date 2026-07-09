@@ -318,6 +318,7 @@ lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
 
 | 文档 | 内容 |
 |---|---|
+| [docs/ROADMAP-LWA.md](./docs/ROADMAP-LWA.md) | **LWA 跨项目季度路线图**（Ingress / Gemini / 配额 / v1.0） |
 | [docs/REPO_RENAME_PLAN.md](./docs/REPO_RENAME_PLAN.md) | 阶段 B 迁移规划（B3 GitHub 已完成） |
 | [docs/PITCH.md](./docs/PITCH.md) | **对外介绍**：30 秒 pitch、适合谁、一句话可复制 |
 | [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA 体系总览**：Bridge + Conduit 分工、多 CLI 策略、分桶自适应 |

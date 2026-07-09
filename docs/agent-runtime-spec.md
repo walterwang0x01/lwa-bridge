@@ -69,3 +69,8 @@ kiro-conduit report --base-repo .
 - reviewer：`execution_ok` 与 `verdict_pass` 分开；审查 FAIL 不算 runtime 失败
 - `lark-kiro-bridge` Dashboard 展示按桶 metrics / score / adaptive 推荐
 - `kiro-conduit report` 打印分桶 metrics、avg_duration、score、推荐
+
+## 演进
+
+- 季度路线图（第三 runtime、Ingress 抽象、配额 fallback）：[`ROADMAP-LWA.md`](./ROADMAP-LWA.md)
+- 配额探测设计草案：[`spikes/quota-probe.md`](./spikes/quota-probe.md)
