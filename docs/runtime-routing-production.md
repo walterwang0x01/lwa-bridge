@@ -1,13 +1,13 @@
 # 多 CLI 生产实践（完整版）
 
-这套方案不是做一个“万能 Agent 平台”，而是把本地多 CLI 编排做成一条**成本优先、角色分桶、可观测、可自适应**的生产链路。
+**Lark Local Agent Workbench（LWA）** 的生产路由方案：成本优先、角色分桶、可观测、可自适应。对外介绍见 [`PITCH.md`](./PITCH.md)。
 
 核心产品约定：
 
 | 组件 | 角色 |
 |------|------|
-| `lark-kiro-bridge` | 飞书交互入口、低延迟对话、任务路由与观测面板 |
-| `kiro-conduit` | DAG / 并行编排、无人值守执行、角色级 runtime 选择 |
+| **Bridge**（lark-kiro-bridge） | 飞书交互入口、低延迟对话、任务路由与观测面板 |
+| **Conduit**（kiro-conduit） | DAG / 并行编排、无人值守执行、角色级 runtime 选择 |
 | `cursor-agent-cli` (`agent`) | 便宜、快，适合简单实现与轻量任务（`Auto`） |
 | `kiro-cli-acp` (`kiro-cli`) | 更强能力，适合复杂实现、规划、审查 |
 
@@ -215,4 +215,4 @@ kiro-conduit report --base-repo .
 相关规范：[`agent-runtime-spec.md`](./agent-runtime-spec.md)  
 Conduit 侧同主题：`kiro-conduit` 仓库的 `docs/runtime-routing.md`
 
-面向团队/开源读者的总览：[`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)
+面向团队/开源读者：[`PITCH.md`](./PITCH.md) · [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)

@@ -318,6 +318,7 @@ lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
 
 | 文档 | 内容 |
 |---|---|
+| [docs/PITCH.md](./docs/PITCH.md) | **对外介绍**：30 秒 pitch、适合谁、一句话可复制 |
 | [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA 体系总览**：Bridge + Conduit 分工、多 CLI 策略、分桶自适应 |
 | [docs/runtime-routing-production.md](./docs/runtime-routing-production.md) | 生产级 runtime 路由、adaptive 模式与 Dashboard 指标 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 整体数据流、卡片渲染体系、工作目录方案 B、设计取舍 |

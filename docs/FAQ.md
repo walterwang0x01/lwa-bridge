@@ -1,5 +1,7 @@
 # FAQ & 故障排查
 
+> **LWA（Lark Local Agent Workbench）** 飞书入口是 **Bridge（lark-kiro-bridge）**；大 spec 编排见 **Conduit（kiro-conduit）**。体系介绍：[PITCH.md](./PITCH.md) · [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)
+
 ## FAQ — 用之前你可能想问的
 
 ### Q: 我没有飞书企业账号，免费版能用吗
@@ -22,9 +24,9 @@
 1. **碰不到你本机的项目目录**——你不可能把所有私密 repo 都丢上云
 2. **没有飞书 API 调度能力**——没法直接帮你删日程、查邮件、改文档
 
-lark-kiro-bridge + kiro-cli + lark-* 技能集 = 在飞书里跑本地命令 + 操作飞书 API 的统一入口。
+**Bridge** + `kiro-cli` / `cursor-agent-cli` + `lark-*` 技能集 = 在飞书里跑本地命令 + 操作飞书 API 的统一入口。
 
-如果你想看这套系统为什么要做成“bridge + conduit + 多 CLI 路由”的完整设计，先读 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)。
+如果你想看这套系统为什么要做成“Bridge + Conduit + 多 CLI 路由”的完整设计，先读 [`PITCH.md`](./PITCH.md) 或 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)。
 
 ### Q: 安全吗？把 shell 工具开了不会被滥用？
 
