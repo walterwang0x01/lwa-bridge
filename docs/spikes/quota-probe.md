@@ -1,6 +1,6 @@
 # Spike：CLI 配额探测与 Fallback（设计草案）
 
-> 状态：**设计 only**（2026 Q3）— 实现见 [ROADMAP-LWA.md](./ROADMAP-LWA.md) 2026 Q4。
+> 状态：**Bridge 已实现（2026-07）** — Conduit 支持 env 覆盖与 fallback；厂商 API 探测待补。
 >
 > 政策与额度以各厂商**官方文档为准**；接入前必须再核实。
 
@@ -63,9 +63,10 @@ reviewer **永不**因省钱 fallback 到弱模型，除非用户显式配置。
 
 ## 验收（Q4 实现时）
 
-- [ ] 模拟 Kiro depleted，chat 自动切 Cursor，日志含 `quota_fallback`
-- [ ] Dashboard / `report` 展示各 runtime 最近 probe 状态
-- [ ] 单元测试：depleted + 全 depleted 时的错误提示友好
+- [x] 配置 `overrides` 或 `monthlyLimits` 时 depleted runtime 被跳过，reason 含 `quota_fallback`
+- [x] Dashboard 展示 `quotaStatuses`
+- [x] 单元测试：depleted + fallback 链
+- [ ] 厂商原生 quota API 探测（kiro/cursor/gemini）
 
 ## 开放问题
 

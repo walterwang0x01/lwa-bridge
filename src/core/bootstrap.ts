@@ -140,6 +140,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
         port: config.dashboard.port,
         appId: config.lark.appId,
         startedAt: Date.now(),
+        config,
         sessions,
         cronStore,
         taskHistory,

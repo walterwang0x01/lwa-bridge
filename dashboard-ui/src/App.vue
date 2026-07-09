@@ -34,6 +34,7 @@ const connected = computed(() => data.value !== null && error.value === null);
         :recommendation="data?.adaptiveRecommendation ?? null"
         :readiness="data?.adaptiveReadiness ?? []"
         :alerts="data?.metricsAlerts ?? []"
+        :quotas="data?.quotaStatuses ?? []"
       />
       <div class="lg:col-span-2">
         <TaskHistoryPanel :tasks="data?.taskHistory ?? []" />

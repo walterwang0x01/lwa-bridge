@@ -41,6 +41,16 @@
         "complexityThreshold": 4,
         "complexKeywords": ["review", "monorepo", "重构", "架构", "多文件"]
       }
+    },
+    "quota": {
+      "cacheTtlMs": 600000,
+      "monthlyLimits": {
+        "kiro-cli-acp": 50
+      },
+      "fallbackByBucket": {
+        "chat": ["cursor", "gemini", "kiro"],
+        "review": ["kiro", "gemini", "cursor"]
+      }
     }
   },
   "modelRouting": {

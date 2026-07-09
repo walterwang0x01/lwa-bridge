@@ -4,7 +4,8 @@
 import type { Config } from '../lib/config.js';
 import { resolveRuntimeProfile } from './config.js';
 import { discoverRuntimeRegistry } from './registry.js';
-import type { ModelRouteDecision, RuntimeProfile } from './types.js';
+import { fallbackProfilesForBucket, pickFirstQuotaOkProfile, uniqueProfileOrder } from './quota.js';
+import type { RuntimeKind, ModelRouteDecision, RuntimeProfile } from './types.js';
 
 export type TaskBucket = 'chat' | 'review' | 'plan' | 'edit' | 'conduit';
 
@@ -54,12 +55,39 @@ export async function chooseRuntimeProfile(
   cfg: Config,
   ctx: RuntimeRouteContext,
   explicitProfileName?: string,
+  options?: {
+    taskBucket?: TaskBucket;
+    monthUsageByKind?: Partial<Record<RuntimeKind, number>>;
+  },
 ): Promise<RuntimeDecision> {
+  const taskBucket = options?.taskBucket ?? classifyTaskBucket(ctx);
+  const monthUsageByKind = options?.monthUsageByKind;
+
   if (explicitProfileName) {
+    const profile = resolveRuntimeProfile(cfg, explicitProfileName);
+    const available = [{ name: explicitProfileName, profile }];
+    const quotaPick = await pickFirstQuotaOkProfile(
+      [explicitProfileName],
+      available,
+      cfg,
+      monthUsageByKind,
+    );
+    if (!quotaPick) {
+      return {
+        profileName: explicitProfileName,
+        profile,
+        reason: 'explicit-profile-quota-depleted',
+        complexityScore: complexityScore(cfg, ctx),
+      };
+    }
+    const reason =
+      quotaPick.quota.state === 'unknown'
+        ? 'explicit-profile'
+        : `explicit-profile;quota=${quotaPick.quota.state}`;
     return {
       profileName: explicitProfileName,
-      profile: resolveRuntimeProfile(cfg, explicitProfileName),
-      reason: 'explicit-profile',
+      profile,
+      reason,
       complexityScore: complexityScore(cfg, ctx),
     };
   }
@@ -97,27 +125,35 @@ export async function chooseRuntimeProfile(
   const preferredName = score >= threshold ? complexName : simpleName;
   const fallbackName = preferredName === simpleName ? complexName : simpleName;
 
-  for (const candidate of [
-    preferredName,
-    fallbackName,
-    ...(cfg.runtime?.router?.fallbackProfiles ?? []),
-  ]) {
-    const hit = available.find((p) => p.name === candidate);
-    if (hit) {
-      return {
-        profileName: hit.name,
-        profile: hit.profile,
-        reason:
-          score >= threshold ? `smart-complex(score=${score})` : `smart-simple(score=${score})`,
-        complexityScore: score,
-      };
-    }
+  const profileOrder = uniqueProfileOrder(
+    [preferredName, fallbackName],
+    fallbackProfilesForBucket(taskBucket, cfg),
+    cfg.runtime?.router?.fallbackProfiles ?? [],
+    ['kiro', 'cursor', 'gemini'],
+  );
+
+  const quotaPick = await pickFirstQuotaOkProfile(profileOrder, available, cfg, monthUsageByKind);
+  if (quotaPick) {
+    const baseReason =
+      score >= threshold ? `smart-complex(score=${score})` : `smart-simple(score=${score})`;
+    const quotaNote =
+      quotaPick.name !== preferredName
+        ? `;quota_fallback(${preferredName}->${quotaPick.name})`
+        : quotaPick.quota.state !== 'unknown'
+          ? `;quota=${quotaPick.quota.state}`
+          : '';
+    return {
+      profileName: quotaPick.name,
+      profile: quotaPick.profile,
+      reason: `${baseReason}${quotaNote}`,
+      complexityScore: score,
+    };
   }
 
   return {
     profileName: 'kiro',
     profile: resolveRuntimeProfile(cfg, 'kiro'),
-    reason: 'smart-hard-fallback',
+    reason: available.length > 0 ? 'quota-all-depleted' : 'smart-hard-fallback',
     complexityScore: score,
   };
 }

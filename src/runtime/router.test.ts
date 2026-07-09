@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigSchema } from '../lib/config.js';
 import { chooseModelForProfile, chooseRuntimeProfile, complexityScore } from './router.js';
 import * as registry from './registry.js';
+import { clearQuotaProbeCache } from './quota.js';
 
 function makeConfig() {
   return ConfigSchema.parse({
@@ -19,6 +20,7 @@ function makeConfig() {
 describe('chooseRuntimeProfile', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearQuotaProbeCache();
   });
 
   it('显式 profile 优先', async () => {
@@ -56,6 +58,37 @@ describe('chooseRuntimeProfile', () => {
     const cfg = makeConfig();
     const picked = await chooseRuntimeProfile(cfg, { prompt: '帮我总结这段话' });
     expect(picked.profileName).toBe('cursor');
+  });
+
+  it('cursor 配额耗尽时 fallback 到 gemini', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'cursor',
+        profile: { kind: 'cursor-agent-cli', bin: 'agent', force: true },
+        available: true,
+        models: [],
+      },
+      {
+        profileName: 'gemini',
+        profile: { kind: 'gemini-cli', bin: 'gemini', force: true },
+        available: true,
+        models: [],
+      },
+    ]);
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+      runtime: {
+        default: 'auto',
+        router: {
+          mode: 'smart',
+          lark: { simpleProfile: 'cursor', complexProfile: 'kiro', conduitProfile: 'kiro' },
+        },
+        quota: { overrides: { 'cursor-agent-cli': 'depleted' } },
+      },
+    });
+    const picked = await chooseRuntimeProfile(cfg, { prompt: '帮我总结这段话' });
+    expect(picked.profileName).toBe('gemini');
+    expect(picked.reason).toContain('quota_fallback');
   });
 
   it('复杂任务优先 kiro', async () => {

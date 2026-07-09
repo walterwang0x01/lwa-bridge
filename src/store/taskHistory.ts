@@ -312,4 +312,22 @@ export class TaskHistoryStore {
       }))
       .sort((a, b) => a.successRate - b.successRate || b.failed - a.failed);
   }
+
+  /** 当月各 runtimeKind 任务计数（用于配额 monthlyLimits）。 */
+  async countMonthUsageByKind(): Promise<Record<string, number>> {
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const since = startOfMonth.getTime();
+    return withLock(() => {
+      const data = readFile();
+      const counts = new Map<string, number>();
+      for (const record of data.records) {
+        if (record.startedAt < since) continue;
+        const kind = record.runtimeKind ?? 'unknown';
+        counts.set(kind, (counts.get(kind) ?? 0) + 1);
+      }
+      return Object.fromEntries(counts);
+    });
+  }
 }

@@ -26,9 +26,12 @@ import type { CronStore } from '../cron/store.js';
 import type { TaskHistoryStore } from '../store/taskHistory.js';
 import { listProcesses } from '../daemon/registry.js';
 import { readRecentLogLines } from '../lib/logger.js';
+import type { Config } from '../lib/config.js';
 import { listGlobalSkills } from './skills.js';
 import { listGlobalAgents } from '../kiro/agents.js';
 import { listInstalls } from '../assets/gitSource.js';
+import { discoverRuntimeRegistry } from '../runtime/registry.js';
+import { probeAllRuntimeQuotas } from '../runtime/quota.js';
 
 // tsup 把整个包打成单文件 bundle（dist/cli.js / dist/index.js），不保留 src/
 // 的目录结构——所以运行时 import.meta.url 指向的是 dist/cli.js，HERE 算出来
@@ -54,6 +57,7 @@ export interface DashboardDeps {
   port: number;
   appId: string;
   startedAt: number;
+  config: Config;
   sessions: SessionStore;
   cronStore?: CronStore;
   taskHistory?: TaskHistoryStore;
@@ -107,6 +111,17 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     ? await deps.taskHistory.evaluateApplySafeReadiness(200)
     : [];
   const metricsAlerts = deps.taskHistory ? await deps.taskHistory.listMetricsAlerts(200) : [];
+  const monthUsageByKind = deps.taskHistory
+    ? await deps.taskHistory.countMonthUsageByKind().catch(() => ({}))
+    : {};
+  const registry = await discoverRuntimeRegistry(deps.config);
+  const quotaStatuses = await probeAllRuntimeQuotas(
+    registry
+      .filter((e) => e.available)
+      .map((e) => ({ profileName: e.profileName, profile: e.profile })),
+    deps.config,
+    monthUsageByKind,
+  );
 
   return {
     bridge: {
@@ -127,6 +142,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     adaptiveRecommendation,
     adaptiveReadiness,
     metricsAlerts,
+    quotaStatuses,
     logs,
   };
 }

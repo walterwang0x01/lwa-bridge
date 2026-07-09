@@ -64,6 +64,26 @@ export const ConfigSchema = z.object({
             .default({}),
         })
         .default({}),
+      quota: z
+        .object({
+          cacheTtlMs: z.number().int().positive().optional(),
+          overrides: z
+            .record(
+              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
+              z.enum(['healthy', 'depleted', 'unknown', 'error']),
+            )
+            .optional(),
+          monthlyLimits: z
+            .record(
+              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
+              z.number().int().nonnegative(),
+            )
+            .optional(),
+          fallbackByBucket: z
+            .record(z.enum(['chat', 'review', 'plan', 'edit', 'conduit']), z.array(z.string()))
+            .optional(),
+        })
+        .optional(),
     })
     .optional(),
   modelRouting: z

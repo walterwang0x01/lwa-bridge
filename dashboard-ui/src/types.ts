@@ -110,6 +110,15 @@ export interface MetricsAlertRow {
   reason: 'low-success-rate';
 }
 
+export interface QuotaStatusRow {
+  runtimeKind: string;
+  profileName?: string;
+  state: 'healthy' | 'depleted' | 'unknown' | 'error';
+  remainingRatio?: number;
+  detail?: string;
+  checkedAt: string;
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -131,5 +140,6 @@ export interface Overview {
   adaptiveRecommendation: AdaptiveRecommendation;
   adaptiveReadiness: AdaptiveBucketReadiness[];
   metricsAlerts: MetricsAlertRow[];
+  quotaStatuses: QuotaStatusRow[];
   logs: string[];
 }

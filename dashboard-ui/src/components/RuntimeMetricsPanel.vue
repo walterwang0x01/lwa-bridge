@@ -3,6 +3,7 @@ import type {
   AdaptiveBucketReadiness,
   AdaptiveRecommendation,
   MetricsAlertRow,
+  QuotaStatusRow,
   RuntimeMetricsRow,
 } from '../types';
 import Panel from './Panel.vue';
@@ -13,6 +14,7 @@ defineProps<{
   recommendation?: AdaptiveRecommendation | null;
   readiness?: AdaptiveBucketReadiness[];
   alerts?: MetricsAlertRow[];
+  quotas?: QuotaStatusRow[];
 }>();
 
 function percent(v: number): string {
@@ -41,6 +43,29 @@ function isDegraded(row: RuntimeMetricsRow, alerts: MetricsAlertRow[] | undefine
 
 <template>
   <Panel title="Runtime 指标" subtitle="METRICS" :count="rows.length">
+    <div
+      v-if="quotas && quotas.length > 0"
+      class="border-b border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-neutral-400"
+    >
+      <div class="mb-1 font-medium text-neutral-500">配额探测</div>
+      <div class="flex flex-wrap gap-2">
+        <span
+          v-for="q in quotas"
+          :key="`${q.runtimeKind}-${q.profileName}`"
+          class="rounded border px-2 py-0.5"
+          :class="
+            q.state === 'depleted' || q.state === 'error'
+              ? 'border-red-500/40 text-red-300'
+              : q.state === 'healthy'
+                ? 'border-emerald-500/40 text-emerald-300'
+                : 'border-white/10 text-neutral-500'
+          "
+        >
+          {{ q.profileName || q.runtimeKind }}: {{ q.state }}
+          <template v-if="q.detail"> · {{ q.detail }}</template>
+        </span>
+      </div>
+    </div>
     <div
       v-if="readiness && readiness.some((r) => r.sampleSize > 0)"
       class="border-b border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-neutral-400"

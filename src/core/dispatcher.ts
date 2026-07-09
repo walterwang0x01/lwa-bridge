@@ -197,10 +197,14 @@ export class Dispatcher {
   }> {
     const taskBucket = classifyTaskBucket({ prompt, mediaCount, commandName });
     const explicitProfileName = await this.sessions.getRuntimeProfile(chatId);
+    const monthUsageByKind = this.taskHistory
+      ? await this.taskHistory.countMonthUsageByKind().catch(() => undefined)
+      : undefined;
     let picked = await chooseRuntimeProfile(
       this.config,
       { prompt, mediaCount, commandName },
       explicitProfileName,
+      { taskBucket, monthUsageByKind },
     );
     if (!explicitProfileName && this.taskHistory) {
       const adaptive = await this.taskHistory
