@@ -1,6 +1,8 @@
-# lark-kiro-bridge
+# Bridge（lark-kiro-bridge）
 
-> 把 **Kiro CLI** 接到飞书 / Lark — 在飞书里聊代码、跑命令、操作飞书自己。
+> **Lark Local Agent Workbench（LWA）** 的飞书入口 — 在本机项目上跑多 CLI Agent（Cursor / Kiro），带智能路由与可观测性。
+>
+> 把 **本地 Agent CLI** 接到飞书 / Lark — 在飞书里聊代码、跑命令、操作飞书自己。简单任务走 Cursor Auto，复杂任务自动升级 Kiro。
 
 [![npm version](https://img.shields.io/npm/v/lark-kiro-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
@@ -14,7 +16,9 @@
 
 群里 `@bot` 或私聊机器人，消息经 **ACP（Agent Client Protocol）** 对接本地 `kiro-cli acp`，回复以**结构化卡片 + 流式打字光标**实时刷新。每个 chat 独立 session，切目录不丢上下文。
 
-**核心价值**：云端 AI 编程助手（Cursor / Copilot / Devin）碰不到你本机的项目目录，也没有飞书 API 调度能力。lark-kiro-bridge **=** 在飞书里跑本地命令 **+** 操作飞书自己，一个机器人解决两件事。
+**核心价值**：云端 AI 编程助手（Cursor / Copilot / Devin）碰不到你本机的项目目录，也没有飞书 API 调度能力。Bridge **=** 在飞书里跑本地命令 **+** 操作飞书自己，一个机器人解决两件事。
+
+**LWA 体系**：Bridge 负责飞书对话与轻量任务；长任务与并行编排交给 [Conduit（kiro-conduit）](https://github.com/walterwang0x01/kiro-conduit)。详见 [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md)。
 
 ```
 ┌───────────────────────────────────────┐
@@ -314,6 +318,8 @@ lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
 
 | 文档 | 内容 |
 |---|---|
+| [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA 体系总览**：Bridge + Conduit 分工、多 CLI 策略、分桶自适应 |
+| [docs/runtime-routing-production.md](./docs/runtime-routing-production.md) | 生产级 runtime 路由、adaptive 模式与 Dashboard 指标 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 整体数据流、卡片渲染体系、工作目录方案 B、设计取舍 |
 | [docs/FAQ.md](./docs/FAQ.md) | 常见疑问 + 故障排查（机器人不响应 / 200340 / 卡片卡死 / …） |
 | [SECURITY.md](./SECURITY.md) | 安全策略、漏洞披露、加固指南 |

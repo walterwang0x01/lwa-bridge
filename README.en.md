@@ -1,6 +1,8 @@
-# lark-kiro-bridge
+# Bridge (lark-kiro-bridge)
 
-> Bridge **Kiro CLI** to Feishu / Lark — chat code, run commands, and operate Feishu itself.
+> **Lark Local Agent Workbench (LWA)** — Feishu entry for local multi-CLI agents (Cursor / Kiro), with smart routing and observability.
+>
+> Bridge local **Agent CLIs** to Feishu / Lark — chat code, run commands, and operate Feishu itself. Simple tasks use Cursor Auto; complex tasks upgrade to Kiro automatically.
 
 [![npm version](https://img.shields.io/npm/v/lark-kiro-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
@@ -14,7 +16,9 @@
 
 `@bot` in a group chat or DM the bot directly. Your message goes to local `kiro-cli acp` over **ACP (Agent Client Protocol)**. Replies stream back as **structured cards with native typing cursor**. Each chat keeps an isolated session, and switching directories doesn't lose context.
 
-**Why this exists**: cloud AI coding assistants (Cursor / Copilot / Devin) can't touch your local project directories, and have no way to operate Feishu's own APIs. lark-kiro-bridge **=** running local commands inside Feishu **+** orchestrating Feishu APIs from chat — one bot for both.
+**Why this exists**: cloud AI coding assistants (Cursor / Copilot / Devin) can't touch your local project directories, and have no way to operate Feishu's own APIs. Bridge **=** running local commands inside Feishu **+** orchestrating Feishu APIs from chat — one bot for both.
+
+**LWA stack**: Bridge handles Feishu chat and light tasks; long-running parallel work goes to [Conduit (kiro-conduit)](https://github.com/walterwang0x01/kiro-conduit). See [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md).
 
 ```
 ┌───────────────────────────────────────┐
@@ -304,6 +308,8 @@ lark-kiro-bridge kill <id> [--force] # Kill a process
 
 | Doc | Content |
 |---|---|
+| [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA overview**: Bridge + Conduit roles, multi-CLI strategy, bucketed adaptive routing |
+| [docs/runtime-routing-production.md](./docs/runtime-routing-production.md) | Production runtime routing, adaptive modes, Dashboard metrics |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Data flow, card rendering, workspace plan B, design trade-offs |
 | [docs/FAQ.md](./docs/FAQ.md) | Common questions + troubleshooting |
 | [SECURITY.md](./SECURITY.md) | Security policy, vulnerability disclosure, hardening |
