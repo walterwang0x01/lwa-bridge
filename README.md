@@ -8,7 +8,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![license](https://img.shields.io/npm/l/lark-kiro-bridge.svg)](./LICENSE)
 [![node](https://img.shields.io/node/v/lark-kiro-bridge.svg)](https://nodejs.org/)
-[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lark-kiro-bridge)
+[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lwa-bridge)
 
 🇨🇳 中文 | [🇺🇸 English](./README.en.md)
 
@@ -18,7 +18,7 @@
 
 **核心价值**：云端 AI 编程助手（Cursor / Copilot / Devin）碰不到你本机的项目目录，也没有飞书 API 调度能力。Bridge **=** 在飞书里跑本地命令 **+** 操作飞书自己，一个机器人解决两件事。
 
-**LWA 体系**：Bridge 负责飞书对话与轻量任务；长任务与并行编排交给 [Conduit（kiro-conduit）](https://github.com/walterwang0x01/kiro-conduit)。详见 [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md)。
+**LWA 体系**：Bridge 负责飞书对话与轻量任务；长任务与并行编排交给 [Conduit（kiro-conduit）](https://github.com/walterwang0x01/lwa-conduit)。详见 [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md)。
 
 ```
 ┌───────────────────────────────────────┐
@@ -74,7 +74,7 @@
 - 🖥️ **`/ps` `/exit` 进程管理** — 飞书内列出本机所有 bridge 进程，按按钮停止
 - 📊 **`/doctor` 自诊断** — 让 Kiro 看日志自己分析故障
 - 🖥️ **Web Dashboard** — 本机 `http://127.0.0.1:5180` 只读控制台（会话/定时任务/进程/技能/日志），Vue 3 构建，浏览器打开即用，可配合 Tailscale 手机访问
-- 🚦 **`/conduit`** — 串联 [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) 多 agent 并行编排器，飞书里一句话跑大 spec（plan 拆分 / run 执行 / --merge 二次确认）
+- 🚦 **`/conduit`** — 串联 [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) 多 agent 并行编排器，飞书里一句话跑大 spec（plan 拆分 / run 执行 / --merge 二次确认）
 
 ## 🚀 快速上手
 
@@ -192,7 +192,7 @@ tailscale serve 5180
 | `/schedule new` | 弹一张表单卡片，0 cron 表达式建任务（小白入口；当前覆盖「每天 H:M」频率） |
 | `/exit <id\|#>` | 停止指定 bridge 进程（自己 / 他人） |
 | `/reconnect` | 强制重连飞书 WebSocket |
-| `/conduit run [--merge]` | 跑 [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片 |
+| `/conduit run [--merge]` | 跑 [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片 |
 | `/conduit plan <spec.md>` | 让 Kiro 把 markdown spec 拆成 `dag.yaml` 工作区 |
 | `/skill source add <name> <git-url>` | 注册一个 Skill 来源（Git 仓库） |
 | `/skill sync <name>` | clone/pull 来源，列出可安装的 Skill（含供应链风险提示） |
@@ -318,7 +318,7 @@ lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
 
 | 文档 | 内容 |
 |---|---|
-| [docs/REPO_RENAME_PLAN.md](./docs/REPO_RENAME_PLAN.md) | 阶段 B 仓库/包名重命名规划（未执行） |
+| [docs/REPO_RENAME_PLAN.md](./docs/REPO_RENAME_PLAN.md) | 阶段 B 迁移规划（B3 GitHub 已完成） |
 | [docs/PITCH.md](./docs/PITCH.md) | **对外介绍**：30 秒 pitch、适合谁、一句话可复制 |
 | [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md) | **LWA 体系总览**：Bridge + Conduit 分工、多 CLI 策略、分桶自适应 |
 | [docs/runtime-routing-production.md](./docs/runtime-routing-production.md) | 生产级 runtime 路由、adaptive 模式与 Dashboard 指标 |
@@ -332,7 +332,7 @@ lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
 PR / Issue 都欢迎。开发流程：
 
 ```bash
-git clone https://github.com/walterwang0x01/lark-kiro-bridge.git
+git clone https://github.com/walterwang0x01/lwa-bridge.git
 cd lark-kiro-bridge
 pnpm install                                # pnpm workspace，会顺带装 dashboard-ui 依赖
 pnpm typecheck && pnpm lint && pnpm test    # 提交前必跑

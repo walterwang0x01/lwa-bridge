@@ -263,7 +263,7 @@ description: >-
 
 ## `/conduit`：串联 kiro-conduit
 
-[kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) 是同作者的另一个项目——多 agent DAG 并行编排器（把大 spec 拆成任务图，多个 worktree 并行跑 Kiro，CIV 三角色 + 4 层验证，串行 merge）。lark-kiro-bridge 不重新实现这套编排逻辑，只是把它接进飞书交互。
+[kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) 是同作者的另一个项目——多 agent DAG 并行编排器（把大 spec 拆成任务图，多个 worktree 并行跑 Kiro，CIV 三角色 + 4 层验证，串行 merge）。lark-kiro-bridge 不重新实现这套编排逻辑，只是把它接进飞书交互。
 
 ### 串联方式：spawn 子进程，不是库依赖
 
@@ -418,4 +418,4 @@ webhook 适合云上部署多实例集群——这不是 lark-kiro-bridge 的目
 
 - [飞书卡片 JSON 2.0](https://open.feishu.cn/document/feishu-cards/feishu-card-overview)
 - [飞书卡片回传交互](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks)
-- [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) —— `/conduit` 串联的多 agent 并行编排器，架构细节见其自己的 `docs/ARCHITECTURE.md`
+- [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) —— `/conduit` 串联的多 agent 并行编排器，架构细节见其自己的 `docs/ARCHITECTURE.md`

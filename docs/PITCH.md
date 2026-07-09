@@ -70,7 +70,7 @@ kiro-conduit run --workspace my-workspace/ --adaptive-mode suggest
 |------|------|
 | [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md) | 体系总览、分工、分桶学习原理 |
 | [runtime-routing-production.md](./runtime-routing-production.md) | Bridge 侧生产调参 |
-| [Conduit runtime-routing](https://github.com/walterwang0x01/kiro-conduit/blob/main/docs/runtime-routing.md) | Conduit 侧角色路由与 adaptive |
+| [Conduit runtime-routing](https://github.com/walterwang0x01/lwa-conduit/blob/main/docs/runtime-routing.md) | Conduit 侧角色路由与 adaptive |
 | [README](../README.md) | Bridge 安装与飞书命令 |
 | [REPO_RENAME_PLAN.md](./REPO_RENAME_PLAN.md) | 阶段 B 仓库/包名迁移规划（未执行，供决策参考） |
 

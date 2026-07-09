@@ -215,5 +215,5 @@ node bin/lark-kiro-bridge.mjs run
 ## 还没解决？
 
 1. 用 **`/doctor [问题描述]`** 让 Kiro 看日志自己分析
-2. [GitHub Issues](https://github.com/walterwang0x01/lark-kiro-bridge/issues) 提单（带：bridge 版本 + kiro-cli 版本 + 关键日志片段）
+2. [GitHub Issues](https://github.com/walterwang0x01/lwa-bridge/issues) 提单（带：bridge 版本 + kiro-cli 版本 + 关键日志片段）
 3. 安全相关问题走 [SECURITY.md](../SECURITY.md) 的私密渠道，不要发公开 issue

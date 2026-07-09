@@ -84,12 +84,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/walterwang0x01/lark-kiro-bridge.git"
+    "url": "git+https://github.com/walterwang0x01/lwa-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/walterwang0x01/lark-kiro-bridge/issues"
+    "url": "https://github.com/walterwang0x01/lwa-bridge/issues"
   },
-  "homepage": "https://github.com/walterwang0x01/lark-kiro-bridge#readme",
+  "homepage": "https://github.com/walterwang0x01/lwa-bridge#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

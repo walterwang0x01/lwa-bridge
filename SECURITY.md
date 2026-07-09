@@ -5,7 +5,7 @@
 If you discover a security issue in `lark-kiro-bridge`, please **do not** open a
 public issue or pull request. Instead:
 
-1. Open a [private security advisory](https://github.com/walterwang0x01/lark-kiro-bridge/security/advisories/new)
+1. Open a [private security advisory](https://github.com/walterwang0x01/lwa-bridge/security/advisories/new)
    on GitHub, or
 2. Email the maintainer with the subject line `[lark-kiro-bridge security]` and a
    reproduction case.

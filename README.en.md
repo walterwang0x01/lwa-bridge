@@ -8,7 +8,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![license](https://img.shields.io/npm/l/lark-kiro-bridge.svg)](./LICENSE)
 [![node](https://img.shields.io/node/v/lark-kiro-bridge.svg)](https://nodejs.org/)
-[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lark-kiro-bridge)
+[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lwa-bridge)
 
 [🇨🇳 中文](./README.md) | 🇺🇸 English
 
@@ -18,7 +18,7 @@
 
 **Why this exists**: cloud AI coding assistants (Cursor / Copilot / Devin) can't touch your local project directories, and have no way to operate Feishu's own APIs. Bridge **=** running local commands inside Feishu **+** orchestrating Feishu APIs from chat — one bot for both.
 
-**LWA stack**: Bridge handles Feishu chat and light tasks; long-running parallel work goes to [Conduit (kiro-conduit)](https://github.com/walterwang0x01/kiro-conduit). See [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md).
+**LWA stack**: Bridge handles Feishu chat and light tasks; long-running parallel work goes to [Conduit (kiro-conduit)](https://github.com/walterwang0x01/lwa-conduit). See [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md).
 
 ```
 ┌───────────────────────────────────────┐
@@ -74,7 +74,7 @@
 - 🖥️ **`/ps` `/exit` process management** — List host bridge processes from Feishu, stop with one button
 - 📊 **`/doctor` self-diagnosis** — Feed logs back to Kiro to analyze its own failures
 - 🖥️ **Web Dashboard** — Read-only local console at `http://127.0.0.1:5180` (sessions/cron/processes/skills/logs), built with Vue 3, ships pre-built — open in a browser, no setup. Pair with Tailscale for phone access.
-- 🚦 **`/conduit`** — Bridges to [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit), a multi-agent parallel orchestrator: run a big spec from Feishu in one line (`plan` to decompose, `run` to execute, `--merge` with confirmation)
+- 🚦 **`/conduit`** — Bridges to [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit), a multi-agent parallel orchestrator: run a big spec from Feishu in one line (`plan` to decompose, `run` to execute, `--merge` with confirmation)
 
 ## 🚀 Quick Start
 
@@ -190,7 +190,7 @@ Install [Tailscale](https://tailscale.com/) and open the URL it gives you from y
 | `/schedule new` | Open a form card to create a scheduled task without cron syntax (covers "every day H:M") |
 | `/exit <id\|#>` | Stop a bridge process (self / others) |
 | `/reconnect` | Force reconnect Feishu WebSocket |
-| `/conduit run [--merge]` | Run [kiro-conduit](https://github.com/walterwang0x01/kiro-conduit) (current directory needs a `dag.yaml`); `--merge` triggers a confirmation card |
+| `/conduit run [--merge]` | Run [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) (current directory needs a `dag.yaml`); `--merge` triggers a confirmation card |
 | `/conduit plan <spec.md>` | Have Kiro decompose a markdown spec into a `dag.yaml` workspace |
 
 > By default everyone is admin (`access.admins` empty). Tighten before sharing with a team.
@@ -323,7 +323,7 @@ lark-kiro-bridge kill <id> [--force] # Kill a process
 PRs and issues welcome. Dev flow:
 
 ```bash
-git clone https://github.com/walterwang0x01/lark-kiro-bridge.git
+git clone https://github.com/walterwang0x01/lwa-bridge.git
 cd lark-kiro-bridge
 pnpm install                                # pnpm workspace, installs dashboard-ui deps too
 pnpm typecheck && pnpm lint && pnpm test    # required before commit

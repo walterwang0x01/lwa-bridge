@@ -273,10 +273,10 @@
 - 飞书免费版租户不支持 ASR，语音输入在路线图
 - 群里 `@all` 永不响应（设计行为）
 
-[Unreleased]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.3.1...v0.4.0
-[0.3.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/walterwang0x01/lark-kiro-bridge/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/walterwang0x01/lark-kiro-bridge/releases/tag/v0.1.0
+[Unreleased]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.3.1...v0.4.0
+[0.3.0]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/walterwang0x01/lwa-bridge/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/walterwang0x01/lwa-bridge/releases/tag/v0.1.0

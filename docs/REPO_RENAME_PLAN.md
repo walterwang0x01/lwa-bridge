@@ -1,8 +1,8 @@
-# 阶段 B：仓库与包名重命名规划（未执行）
+# 阶段 B：仓库与包名重命名规划
 
-> **状态：规划文档 only。** 方案 A（LWA 对外品牌 + 保留技术名）已完成；本文供品牌稳定后决定是否进入阶段 B。
+> **状态：B3 已执行（2026-07-09）** — GitHub 仓库已改为 `lwa-bridge` / `lwa-conduit`；npm / PyPI / CLI **未改**。旧 URL 由 GitHub 自动重定向。
 >
-> 执行前必须：**明确选定新名字 + 确认可接受 breaking change 窗口**。
+> 全量 B1（包名 + CLI 改名）仍待决策，见文末决策门。
 
 ## 当前状态（方案 A，已落地）
 
@@ -10,7 +10,7 @@
 |------|------|----------|
 | 体系品牌 | **LWA**（Lark Local Agent Workbench） | ✅ 文档 / README / GitHub 描述 |
 | 产品名 | **Bridge** / **Conduit** | ✅ 对外话术 |
-| GitHub 仓库 | `lark-kiro-bridge` / `kiro-conduit` | ❌ 未改 |
+| GitHub 仓库 | `lwa-bridge` / `lwa-conduit`（原 `lark-kiro-bridge` / `kiro-conduit` 重定向） | ✅ B3 已改 |
 | npm 包 | `lark-kiro-bridge` | ❌ 未改 |
 | PyPI 包 | `kiro-conduit` | ❌ 未改 |
 | CLI 命令 | `lark-kiro-bridge` / `kiro-conduit` | ❌ 未改 |
@@ -57,7 +57,7 @@
 
 优点：零用户 breaking change；缺点：品牌与技术名长期分裂。
 
-**推荐默认**：先 **B3 观察 1–2 个 release 周期**，再决定是否做 B1 全量迁移。
+**推荐默认**：B3 已执行；观察 1–2 个 release 周期后，再决定是否做 B1 全量迁移（npm/PyPI/CLI）。
 
 ## 迁移检查清单（执行时用）
 
@@ -119,4 +119,4 @@
 
 - [PITCH.md](./PITCH.md) — 对外介绍（方案 A）
 - [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md) — 体系总览
-- Conduit 侧镜像：[kiro-conduit/docs/REPO_RENAME_PLAN.md](https://github.com/walterwang0x01/kiro-conduit/blob/main/docs/REPO_RENAME_PLAN.md)
+- Conduit 侧镜像：[lwa-conduit/docs/REPO_RENAME_PLAN.md](https://github.com/walterwang0x01/lwa-conduit/blob/main/docs/REPO_RENAME_PLAN.md)
