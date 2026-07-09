@@ -11,6 +11,7 @@ import { LarkClient } from '../lark/client.js';
 import { createLarkIngressChannel } from '../ingress/lark/channel.js';
 import { createSlackIngressChannel } from '../ingress/slack/channel.js';
 import { registerIngressChannel } from '../ingress/registry.js';
+import type { IngressPort } from '../ingress/types.js';
 import { pruneOldMedia } from '../lark/media.js';
 import { SessionStore } from '../store/sessions.js';
 import { WorkspaceStore } from '../store/workspaces.js';
