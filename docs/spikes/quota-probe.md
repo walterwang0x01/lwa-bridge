@@ -66,7 +66,7 @@ reviewer **永不**因省钱 fallback 到弱模型，除非用户显式配置。
 - [x] 配置 `overrides` 或 `monthlyLimits` 时 depleted runtime 被跳过，reason 含 `quota_fallback`
 - [x] Dashboard 展示 `quotaStatuses`
 - [x] 单元测试：depleted + fallback 链
-- [ ] 厂商原生 quota API 探测（kiro/cursor/gemini）
+- [x] 厂商原生 quota API 探测（kiro/cursor/gemini）
 
 ## 开放问题
 

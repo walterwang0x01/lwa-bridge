@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { ConfigSchema } from '../lib/config.js';
 import {
   clearQuotaProbeCache,
@@ -7,6 +7,10 @@ import {
   pickFirstQuotaOkProfile,
   probeRuntimeQuota,
 } from './quota.js';
+
+vi.mock('./nativeQuotaProbe.js', () => ({
+  probeNativeCliQuota: vi.fn(async () => null),
+}));
 
 function cfgWithQuota(overrides: Record<string, 'healthy' | 'depleted' | 'unknown' | 'error'>) {
   return ConfigSchema.parse({

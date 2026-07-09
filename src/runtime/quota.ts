@@ -4,6 +4,7 @@
 import type { Config } from '../lib/config.js';
 import type { RuntimeKind, RuntimeProfile } from './types.js';
 import type { TaskBucket } from './router.js';
+import { probeNativeCliQuota } from './nativeQuotaProbe.js';
 
 export type QuotaState = 'healthy' | 'depleted' | 'unknown' | 'error';
 
@@ -105,6 +106,19 @@ export async function probeRuntimeQuota(
       'healthy',
       `monthly usage ${usage}/${limit}`,
       Math.max(0, 1 - usage / limit),
+      profileName,
+    );
+    probeCache.set(cacheKey, { status, expiresAt: Date.now() + ttl });
+    return status;
+  }
+
+  const native = await probeNativeCliQuota(profile);
+  if (native) {
+    const status = buildStatus(
+      profile.kind,
+      native.state,
+      native.detail,
+      native.remainingRatio,
       profileName,
     );
     probeCache.set(cacheKey, { status, expiresAt: Date.now() + ttl });
