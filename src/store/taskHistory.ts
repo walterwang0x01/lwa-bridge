@@ -20,6 +20,9 @@ const MAX_RECORDS = 200;
 
 const TaskHistoryRecordSchema = z.object({
   taskId: z.string(),
+  /** 渠道无关主键；飞书里等价于 chatId。 */
+  conversationId: z.string().optional(),
+  /** @deprecated 兼容历史数据；新逻辑请优先读 conversationId。 */
   chatId: z.string(),
   cwd: z.string(),
   startedAt: z.number().int().nonnegative(),
@@ -166,7 +169,10 @@ export class TaskHistoryStore {
   async add(record: TaskHistoryRecord): Promise<void> {
     await withLock(() => {
       const data = readFile();
-      data.records.push(record);
+      data.records.push({
+        ...record,
+        conversationId: record.conversationId ?? record.chatId,
+      });
       if (data.records.length > MAX_RECORDS) {
         data.records.splice(0, data.records.length - MAX_RECORDS);
       }
@@ -178,7 +184,13 @@ export class TaskHistoryStore {
   async listRecent(limit = 50): Promise<TaskHistoryRecord[]> {
     return withLock(() => {
       const data = readFile();
-      return [...data.records].reverse().slice(0, limit);
+      return [...data.records]
+        .reverse()
+        .slice(0, limit)
+        .map((record) => ({
+          ...record,
+          conversationId: record.conversationId ?? record.chatId,
+        }));
     });
   }
 

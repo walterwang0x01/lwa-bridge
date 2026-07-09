@@ -3433,6 +3433,7 @@ export class Dispatcher {
             });
             const record: Parameters<TaskHistoryStore['add']>[0] = {
               taskId,
+              conversationId,
               chatId: conversationId,
               cwd,
               startedAt: taskStartedAt,

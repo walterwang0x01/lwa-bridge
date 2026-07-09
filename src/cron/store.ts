@@ -5,14 +5,14 @@
  *
  * 数据模型：每条任务一个 CronTask，包含：
  *   - id：8 位短 hex（创建时随机生成）
- *   - chatId / cwd：触发时把卡片发回这个 chat、cwd 跑 Kiro
+ *   - conversationId(chatId) / cwd：触发时把卡片发回该会话、cwd 跑 Kiro
  *   - expression：标准 cron 5 段（已规范化）
  *   - prompt：触发时喂给 Kiro 的 prompt
  *   - description：用户可读的描述（来自关键词预设或用户填）
  *   - enabled：暂停/恢复
  *
  * 安全限制：
- *   - 单 chat 任务数 ≤ 20
+ *   - 单会话任务数 ≤ 20
  *   - 全局任务数 ≤ 100
  *   - prompt ≤ 1000 字符
  *
@@ -27,6 +27,9 @@ import { getLogger } from '../lib/logger.js';
 
 const CronTaskSchema = z.object({
   id: z.string().length(8),
+  /** 渠道无关主键；飞书里等价于 chatId。 */
+  conversationId: z.string().optional(),
+  /** @deprecated 兼容历史数据；新逻辑请优先读 conversationId。 */
   chatId: z.string().min(1),
   cwd: z.string().min(1),
   /** 标准 cron 5 段表达式（已规范化）*/
@@ -111,13 +114,24 @@ function newId(): string {
 
 export class CronStore {
   /**
-   * 列出所有任务（按 chatId 过滤可选）。
+   * 列出所有任务（按 conversationId/chatId 过滤可选）。
    */
   async list(filterChatId?: string): Promise<CronTask[]> {
     return withLock(() => {
       const data = readFile();
-      return filterChatId ? data.tasks.filter((t) => t.chatId === filterChatId) : data.tasks;
+      return (
+        filterChatId
+          ? data.tasks.filter((t) => (t.conversationId ?? t.chatId) === filterChatId)
+          : data.tasks
+      ).map((task) => ({
+        ...task,
+        conversationId: task.conversationId ?? task.chatId,
+      }));
     });
+  }
+
+  async listByConversation(conversationId?: string): Promise<CronTask[]> {
+    return this.list(conversationId);
   }
 
   /** 按 id 找任务（前缀匹配也支持，因为 id 是 8 位 hex）。 */
@@ -142,7 +156,7 @@ export class CronStore {
    * 创建新任务。返回创建好的 task。
    * 校验：
    *   - prompt ≤ 1000
-   *   - 单 chat 上限
+   *   - 单会话上限
    *   - 全局上限
    */
   async create(opts: {
@@ -168,6 +182,7 @@ export class CronStore {
       }
       const task: CronTask = {
         id: newId(),
+        conversationId: opts.chatId,
         chatId: opts.chatId,
         cwd: opts.cwd,
         expression: opts.expression,
@@ -182,7 +197,13 @@ export class CronStore {
       data.tasks.push(task);
       writeFile(data);
       log().info(
-        { id: task.id, chatId: task.chatId, expression: task.expression, runOnce: task.runOnce },
+        {
+          id: task.id,
+          conversationId: task.conversationId,
+          chatId: task.chatId,
+          expression: task.expression,
+          runOnce: task.runOnce,
+        },
         'cron task created',
       );
       return task;
