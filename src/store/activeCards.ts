@@ -13,7 +13,7 @@
  *
  * 数据模型：
  *   {
- *     "<chatId>:<messageId>": { chatId, messageId, taskId, startedAt, replyToMessageId? }
+ *     "<conversationId>:<messageId>": { chatId, messageId, taskId, startedAt, replyToMessageId? }
  *   }
  *
  * 文件锁：proper-lockfile，跟 sessions/cron 一致的并发模式。
@@ -108,6 +108,10 @@ export class ActiveCardsStore {
     });
   }
 
+  async removeConversation(conversationId: string, messageId: string): Promise<void> {
+    await this.remove(conversationId, messageId);
+  }
+
   /** 列出所有遗留卡片（bootstrap 启动时扫描用）。 */
   async list(): Promise<ActiveCard[]> {
     return await withLock(() => {
@@ -122,6 +126,13 @@ export class ActiveCardsStore {
       const data = readFile();
       return data.cards[key(chatId, messageId)];
     });
+  }
+
+  async getConversation(
+    conversationId: string,
+    messageId: string,
+  ): Promise<ActiveCard | undefined> {
+    return this.get(conversationId, messageId);
   }
 
   /** 一次性清空（启动时遗留卡片处理完后调用）。 */

@@ -281,13 +281,29 @@ export class Dispatcher {
     };
   }
 
-  private getPipeline(chatId: string): ChatPipeline {
-    let p = this.pipelines.get(chatId);
+  private getPipeline(conversationId: string): ChatPipeline {
+    let p = this.pipelines.get(conversationId);
     if (!p) {
-      p = new ChatPipeline(chatId, this.log);
-      this.pipelines.set(chatId, p);
+      p = new ChatPipeline(conversationId, this.log);
+      this.pipelines.set(conversationId, p);
     }
     return p;
+  }
+
+  private conversationIdOfMessage(msg: IncomingMessage): string {
+    return msg.chatId;
+  }
+
+  private conversationIdOfAction(evt: CardActionEvent): string {
+    return evt.chatId;
+  }
+
+  private senderPrincipalIdOfMessage(msg: IncomingMessage): string {
+    return msg.senderOpenId;
+  }
+
+  private senderPrincipalIdOfAction(evt: CardActionEvent): string {
+    return evt.senderOpenId;
   }
 
   /** eventId 去重缓存：飞书 at-least-once 投递保险 */
@@ -394,9 +410,11 @@ export class Dispatcher {
     }
 
     // 2) 访问控制
-    if (!isUserAllowed(msg.senderOpenId, msg.chatId, msg.chatType, this.config)) {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const senderPrincipalId = this.senderPrincipalIdOfMessage(msg);
+    if (!isUserAllowed(senderPrincipalId, conversationId, msg.chatType, this.config)) {
       this.log.debug(
-        { user: msg.senderOpenId, chat: msg.chatId, chatType: msg.chatType },
+        { user: senderPrincipalId, chat: conversationId, chatType: msg.chatType },
         'message dropped by access control',
       );
       return;
@@ -545,7 +563,10 @@ export class Dispatcher {
 
     // 5) 解析命令
     const cmd = parseCommand(cleanText);
-    const session = await this.sessions.get(msg.chatId, this.config.workspace.defaultCwd);
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
 
     // 命令需要管理员权限的判断
     const needAdmin = (() => {
@@ -578,7 +599,7 @@ export class Dispatcher {
           return false;
       }
     })();
-    if (needAdmin && !isAdmin(msg.senderOpenId, this.config)) {
+    if (needAdmin && !isAdmin(senderPrincipalId, this.config)) {
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
@@ -596,7 +617,7 @@ export class Dispatcher {
         case 'help':
           await this.sendInteractiveCard(
             msg,
-            buildHelpCard({ skills: this.chatSkills.get(msg.chatId) }),
+            buildHelpCard({ skills: this.chatSkills.get(conversationId) }),
           );
           return;
         case 'pwd': {
@@ -611,13 +632,16 @@ export class Dispatcher {
           return;
         }
         case 'status': {
-          const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
-          const agentSid = await this.sessions.getAgentSession(msg.chatId, session.currentCwd);
+          const { profileName, profile } = await this.resolveChatRuntime(conversationId);
+          const agentSid = await this.sessions.getConversationAgentSession(
+            conversationId,
+            session.currentCwd,
+          );
           const wsName = await this.workspaceNameOf(session.currentCwd);
           const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
           const cardOpts: Parameters<typeof buildStatusCard>[0] = {
             cwd: session.currentCwd,
-            hasActiveTask: this.getPipeline(msg.chatId).hasActiveTask(),
+            hasActiveTask: this.getPipeline(conversationId).hasActiveTask(),
             idleMinutes: idleMin,
             isPerChatOverride: session.idleTimeoutMinutes !== undefined,
             runtimeProfile: profileName,
@@ -636,8 +660,8 @@ export class Dispatcher {
           return;
         }
         case 'new': {
-          await this.sessions.clearKiroSession(msg.chatId, session.currentCwd);
-          await this.evictChatFromAllPools(msg.chatId);
+          await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
+          await this.evictChatFromAllPools(conversationId);
           await this.sendInteractiveCard(
             msg,
             buildAckCard({
@@ -649,7 +673,7 @@ export class Dispatcher {
           return;
         }
         case 'stop': {
-          const ok = this.getPipeline(msg.chatId).abortCurrent();
+          const ok = this.getPipeline(conversationId).abortCurrent();
           await this.sendInteractiveCard(
             msg,
             buildAckCard({
@@ -665,7 +689,11 @@ export class Dispatcher {
         case 'cd': {
           try {
             const abs = validateCwd(cmd.path, this.config, session.currentCwd);
-            await this.sessions.setCwd(msg.chatId, abs, this.config.workspace.defaultCwd);
+            await this.sessions.setConversationCwd(
+              conversationId,
+              abs,
+              this.config.workspace.defaultCwd,
+            );
             const wsName = await this.workspaceNameOf(abs);
             await this.sendInteractiveCard(
               msg,
@@ -719,7 +747,11 @@ export class Dispatcher {
           }
           try {
             const abs = validateCwd(target, this.config, session.currentCwd);
-            await this.sessions.setCwd(msg.chatId, abs, this.config.workspace.defaultCwd);
+            await this.sessions.setConversationCwd(
+              conversationId,
+              abs,
+              this.config.workspace.defaultCwd,
+            );
             await this.sendInteractiveCard(
               msg,
               buildAckCard({
@@ -956,6 +988,7 @@ export class Dispatcher {
     session: { idleTimeoutMinutes?: number; currentCwd: string },
     cmd: Extract<ParsedCommand, { kind: 'timeout' }>,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     if (cmd.mode === 'show') {
       const eff = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
       const body = [
@@ -975,7 +1008,11 @@ export class Dispatcher {
       return;
     }
     if (cmd.mode === 'set') {
-      await this.sessions.setIdleTimeout(msg.chatId, cmd.minutes, this.config.workspace.defaultCwd);
+      await this.sessions.setConversationIdleTimeout(
+        conversationId,
+        cmd.minutes,
+        this.config.workspace.defaultCwd,
+      );
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
@@ -987,7 +1024,11 @@ export class Dispatcher {
       return;
     }
     if (cmd.mode === 'off') {
-      await this.sessions.setIdleTimeout(msg.chatId, 0, this.config.workspace.defaultCwd);
+      await this.sessions.setConversationIdleTimeout(
+        conversationId,
+        0,
+        this.config.workspace.defaultCwd,
+      );
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
@@ -999,7 +1040,11 @@ export class Dispatcher {
       return;
     }
     // default
-    await this.sessions.setIdleTimeout(msg.chatId, undefined, this.config.workspace.defaultCwd);
+    await this.sessions.setConversationIdleTimeout(
+      conversationId,
+      undefined,
+      this.config.workspace.defaultCwd,
+    );
     const eff = this.effectiveIdleMinutes(undefined);
     await this.sendInteractiveCard(
       msg,
@@ -1021,6 +1066,7 @@ export class Dispatcher {
     description: string,
     cwd: string,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     const lines = readRecentLogLines(200);
     const userDesc = description.trim() || '（无）';
     const prompt = [
@@ -1036,7 +1082,10 @@ export class Dispatcher {
       lines.length > 0 ? lines.join('\n') : '（无日志）',
       '```',
     ].join('\n');
-    const session = await this.sessions.get(msg.chatId, this.config.workspace.defaultCwd);
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
     await this.runKiroTask(msg, prompt, cwd, [], session.idleTimeoutMinutes);
   }
 
@@ -1077,8 +1126,9 @@ export class Dispatcher {
     cmd: Extract<ParsedCommand, { kind: 'runtime' }>,
     _cwd: string,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     if (cmd.mode === 'show') {
-      const { profileName, profile } = await this.resolveChatRuntime(msg.chatId);
+      const { profileName, profile } = await this.resolveChatRuntime(conversationId);
       const names = listRuntimeProfileNames(this.config);
       const lines = names.map((n) => {
         const p = resolveRuntimeProfile(this.config, n);
@@ -1121,8 +1171,12 @@ export class Dispatcher {
       return;
     }
 
-    await this.sessions.setRuntimeProfile(msg.chatId, name, this.config.workspace.defaultCwd);
-    await this.evictChatFromAllPools(msg.chatId);
+    await this.sessions.setConversationRuntimeProfile(
+      conversationId,
+      name,
+      this.config.workspace.defaultCwd,
+    );
+    await this.evictChatFromAllPools(conversationId);
     const profile = resolveRuntimeProfile(this.config, name);
     await this.sendInteractiveCard(
       msg,
@@ -1293,13 +1347,13 @@ export class Dispatcher {
    * cardAction handler 用这个——按钮触发时不 reply 那条卡片本身（嵌套体验差），
    * 而是发新消息。
    */
-  private async sendCardToChat(chatId: string, card: object): Promise<void> {
+  private async sendCardToConversation(conversationId: string, card: object): Promise<void> {
     try {
-      await this.ingress.sendCard(chatId, card);
+      await this.ingress.sendCard(conversationId, card);
     } catch (e) {
-      this.log.error({ err: e }, 'sendCardToChat failed; falling back to text');
+      this.log.error({ err: e }, 'sendCardToConversation failed; falling back to text');
       try {
-        await this.ingress.sendText(chatId, '❌ 卡片发送失败，请检查日志');
+        await this.ingress.sendText(conversationId, '❌ 卡片发送失败，请检查日志');
       } catch {
         // ignore
       }
@@ -1317,14 +1371,16 @@ export class Dispatcher {
    * 安全：button 触发的命令也会经过 admin 校验（调用 needAdminForAction）。
    */
   async handleCardAction(evt: CardActionEvent): Promise<void> {
+    const conversationId = this.conversationIdOfAction(evt);
+    const senderPrincipalId = this.senderPrincipalIdOfAction(evt);
     // 访问控制：cardAction 没有 chatType 字段（飞书 SDK 不给），所以**只校验 senderOpenId**。
     // 这是合理的：卡片是 bridge 自己发出去的，飞书已经做了"消息可见性"的访问控制；
     // 我们再用 allowedChats 校验会误伤私聊（chatId 不在群白名单里 → 私聊按钮永远点不动）。
     // 安全性：senderOpenId 校验已经能挡住租户外用户；admin 写操作另有 isAdmin 校验。
     const { allowedUsers } = this.config.access;
-    if (allowedUsers.length > 0 && !allowedUsers.includes(evt.senderOpenId)) {
+    if (allowedUsers.length > 0 && !allowedUsers.includes(senderPrincipalId)) {
       this.log.warn(
-        { user: evt.senderOpenId, chat: evt.chatId },
+        { user: senderPrincipalId, chat: conversationId },
         'card action dropped by access control (sender not in allowedUsers)',
       );
       return;
@@ -1336,28 +1392,31 @@ export class Dispatcher {
     }
 
     // admin 校验：写操作要管理员
-    if (this.actionNeedsAdmin(action) && !isAdmin(evt.senderOpenId, this.config)) {
-      await this.sendCardToChat(
-        evt.chatId,
+    if (this.actionNeedsAdmin(action) && !isAdmin(senderPrincipalId, this.config)) {
+      await this.sendCardToConversation(
+        conversationId,
         buildAckCard({ state: 'error', body: '此操作仅管理员可用' }),
       );
       return;
     }
 
-    const session = await this.sessions.get(evt.chatId, this.config.workspace.defaultCwd);
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
 
     switch (action) {
       case 'model.show': {
         const list = await listModels(this.config.kiro.binPath);
         const current = this.config.kiro.model ?? list?.defaultModel ?? 'auto';
         if (!list) {
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({ state: 'error', body: '无法获取模型列表' }),
           );
           return;
         }
-        await this.sendCardToChat(evt.chatId, buildModelPickerCard({ current, list }));
+        await this.sendCardToConversation(evt.chatId, buildModelPickerCard({ current, list }));
         return;
       }
       case 'model.refresh': {
@@ -1365,10 +1424,13 @@ export class Dispatcher {
         const list = await listModels(this.config.kiro.binPath);
         const current = this.config.kiro.model ?? list?.defaultModel ?? 'auto';
         if (!list) {
-          await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: '刷新失败' }));
+          await this.sendCardToConversation(
+            evt.chatId,
+            buildAckCard({ state: 'error', body: '刷新失败' }),
+          );
           return;
         }
-        await this.sendCardToChat(evt.chatId, buildModelPickerCard({ current, list }));
+        await this.sendCardToConversation(evt.chatId, buildModelPickerCard({ current, list }));
         return;
       }
       case 'model.set': {
@@ -1377,7 +1439,7 @@ export class Dispatcher {
         const list = await listModels(this.config.kiro.binPath);
         const target = this.resolveModelName(name, list);
         if (list && target === undefined) {
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({ state: 'error', body: `没有名为 \`${name}\` 的模型` }),
           );
@@ -1387,7 +1449,7 @@ export class Dispatcher {
         this.config = patchAndSaveConfig(this.config, (draft) => {
           draft.kiro.model = finalName;
         });
-        await this.sendCardToChat(
+        await this.sendCardToConversation(
           evt.chatId,
           buildAckCard({
             state: 'done',
@@ -1403,7 +1465,7 @@ export class Dispatcher {
         clearModelCache();
         const list = await listModels(this.config.kiro.binPath);
         const fallback = list?.defaultModel ?? 'auto';
-        await this.sendCardToChat(
+        await this.sendCardToConversation(
           evt.chatId,
           buildAckCard({
             state: 'done',
@@ -1413,8 +1475,8 @@ export class Dispatcher {
         return;
       }
       case 'session.new': {
-        await this.sessions.clearKiroSession(evt.chatId, session.currentCwd);
-        await this.sendCardToChat(
+        await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
+        await this.sendCardToConversation(
           evt.chatId,
           buildAckCard({
             state: 'done',
@@ -1424,8 +1486,8 @@ export class Dispatcher {
         return;
       }
       case 'session.stop': {
-        const ok = this.getPipeline(evt.chatId).abortCurrent();
-        await this.sendCardToChat(
+        const ok = this.getPipeline(conversationId).abortCurrent();
+        await this.sendCardToConversation(
           evt.chatId,
           buildAckCard({
             state: ok ? 'aborted' : 'done',
@@ -1438,27 +1500,27 @@ export class Dispatcher {
         // 用户在超时卡片上点了"继续未完成的部分"
         // 用同一 chat 的 sessionId 续接，给 kiro-cli 一条简短的"继续"指令
         // sessionId 在 storage 里，这里走 fireContinue 触发 executeKiroTask
-        await this.fireContinue(evt.chatId);
+        await this.fireContinue(conversationId);
         return;
       }
       case 'session.status': {
-        const kiroSid = await this.sessions.getKiroSession(evt.chatId, session.currentCwd);
+        const kiroSid = await this.sessions.getKiroSession(conversationId, session.currentCwd);
         const wsName = await this.workspaceNameOf(session.currentCwd);
         const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
         const cardOpts: Parameters<typeof buildStatusCard>[0] = {
           cwd: session.currentCwd,
-          hasActiveTask: this.getPipeline(evt.chatId).hasActiveTask(),
+          hasActiveTask: this.getPipeline(conversationId).hasActiveTask(),
           idleMinutes: idleMin,
           isPerChatOverride: session.idleTimeoutMinutes !== undefined,
         };
         if (wsName !== undefined) cardOpts.workspaceName = wsName;
         if (kiroSid !== undefined) cardOpts.kiroSessionId = kiroSid;
-        await this.sendCardToChat(evt.chatId, buildStatusCard(cardOpts));
+        await this.sendCardToConversation(evt.chatId, buildStatusCard(cardOpts));
         return;
       }
       case 'ws.list': {
         const all = await this.workspaces.list();
-        await this.sendCardToChat(
+        await this.sendCardToConversation(
           evt.chatId,
           buildWorkspaceListCard({
             workspaces: all,
@@ -1472,7 +1534,7 @@ export class Dispatcher {
         if (!name) return;
         const target = await this.workspaces.get(name);
         if (!target) {
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({ state: 'error', body: `没有名为 \`${name}\` 的工作区` }),
           );
@@ -1480,8 +1542,12 @@ export class Dispatcher {
         }
         try {
           const abs = validateCwd(target, this.config, session.currentCwd);
-          await this.sessions.setCwd(evt.chatId, abs, this.config.workspace.defaultCwd);
-          await this.sendCardToChat(
+          await this.sessions.setConversationCwd(
+            conversationId,
+            abs,
+            this.config.workspace.defaultCwd,
+          );
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({
               state: 'done',
@@ -1490,7 +1556,7 @@ export class Dispatcher {
           );
         } catch (e) {
           const m = e instanceof SecurityError ? e.message : String((e as Error).message);
-          await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: m }));
+          await this.sendCardToConversation(evt.chatId, buildAckCard({ state: 'error', body: m }));
         }
         return;
       }
@@ -1514,7 +1580,7 @@ export class Dispatcher {
               cardUpdateIntervalMs: this.config.preferences.cardUpdateIntervalMs,
               isAdmin: isAdmin(evt.senderOpenId, this.config),
             });
-        await this.sendCardToChat(evt.chatId, card);
+        await this.sendCardToConversation(evt.chatId, card);
         return;
       }
       case 'config.submit': {
@@ -1526,7 +1592,7 @@ export class Dispatcher {
         if (!target) return;
         const proc = await findProcess(target);
         if (!proc) {
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({ state: 'error', body: `没找到进程 \`${target}\`` }),
           );
@@ -1534,7 +1600,7 @@ export class Dispatcher {
         }
         try {
           process.kill(proc.pid, 'SIGTERM');
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({
               state: 'done',
@@ -1545,7 +1611,7 @@ export class Dispatcher {
             }),
           );
         } catch (e) {
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({
               state: 'error',
@@ -1559,7 +1625,7 @@ export class Dispatcher {
         const scope = (evt.value['scope'] === 'global' ? 'global' : 'project') as
           | 'global'
           | 'project';
-        await this.sendCardToChat(
+        await this.sendCardToConversation(
           evt.chatId,
           this.buildSteeringListCard(scope, session.currentCwd, evt.senderOpenId),
         );
@@ -1572,7 +1638,7 @@ export class Dispatcher {
         const name = String(evt.value['name'] ?? '');
         try {
           const content = this.memory.get(scope, session.currentCwd, name);
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildMemoryViewCard({
               scope,
@@ -1583,7 +1649,7 @@ export class Dispatcher {
           );
         } catch (e) {
           const m = e instanceof MemoryError ? e.message : (e as Error).message;
-          await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: m }));
+          await this.sendCardToConversation(evt.chatId, buildAckCard({ state: 'error', body: m }));
         }
         return;
       }
@@ -1595,7 +1661,7 @@ export class Dispatcher {
         try {
           const content = this.memory.get(scope, session.currentCwd, name);
           if (content.length > 5000) {
-            await this.sendCardToChat(
+            await this.sendCardToConversation(
               evt.chatId,
               buildAckCard({
                 state: 'error',
@@ -1605,13 +1671,13 @@ export class Dispatcher {
             );
             return;
           }
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildMemoryEditFormCard({ scope, name, content, isNew: false }),
           );
         } catch (e) {
           const m = e instanceof MemoryError ? e.message : (e as Error).message;
-          await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: m }));
+          await this.sendCardToConversation(evt.chatId, buildAckCard({ state: 'error', body: m }));
         }
         return;
       }
@@ -1619,7 +1685,7 @@ export class Dispatcher {
         const scope = (evt.value['scope'] === 'global' ? 'global' : 'project') as
           | 'global'
           | 'project';
-        await this.sendCardToChat(evt.chatId, buildMemoryNewFormCard({ scope }));
+        await this.sendCardToConversation(evt.chatId, buildMemoryNewFormCard({ scope }));
         return;
       }
       case 'steering.rm': {
@@ -1629,7 +1695,7 @@ export class Dispatcher {
         const name = String(evt.value['name'] ?? '');
         try {
           const ok = this.memory.delete(scope, session.currentCwd, name);
-          await this.sendCardToChat(
+          await this.sendCardToConversation(
             evt.chatId,
             buildAckCard({
               state: ok ? 'done' : 'error',
@@ -1638,14 +1704,14 @@ export class Dispatcher {
           );
           // 删完顺便刷新列表
           if (ok) {
-            await this.sendCardToChat(
+            await this.sendCardToConversation(
               evt.chatId,
               this.buildSteeringListCard(scope, session.currentCwd, evt.senderOpenId),
             );
           }
         } catch (e) {
           const m = e instanceof MemoryError ? e.message : (e as Error).message;
-          await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: m }));
+          await this.sendCardToConversation(evt.chatId, buildAckCard({ state: 'error', body: m }));
         }
         return;
       }
@@ -1654,7 +1720,7 @@ export class Dispatcher {
         return;
       }
       case 'cron.list': {
-        await this.sendCardToChat(
+        await this.sendCardToConversation(
           evt.chatId,
           await this.buildCronListCardForChat(evt.chatId, evt.senderOpenId),
         );
@@ -1707,9 +1773,9 @@ export class Dispatcher {
         try {
           await this.ingress.patchCard(evt.messageId, runningCard);
         } catch {
-          await this.sendCardToChat(evt.chatId, runningCard);
+          await this.sendCardToConversation(evt.chatId, runningCard);
         }
-        const pipeline = this.getPipeline(evt.chatId);
+        const pipeline = this.getPipeline(conversationId);
         await pipeline.submit({
           id: `conduit-merge-${Date.now()}`,
           run: async (signal) => {
@@ -1724,7 +1790,7 @@ export class Dispatcher {
             try {
               await this.ingress.patchCard(evt.messageId, card);
             } catch {
-              await this.sendCardToChat(evt.chatId, card);
+              await this.sendCardToConversation(evt.chatId, card);
             }
           },
         });
@@ -1735,7 +1801,7 @@ export class Dispatcher {
         try {
           await this.ingress.patchCard(evt.messageId, card);
         } catch {
-          await this.sendCardToChat(evt.chatId, card);
+          await this.sendCardToConversation(evt.chatId, card);
         }
         return;
       }
@@ -1813,7 +1879,7 @@ export class Dispatcher {
     const idleRaw = String(fv['idleTimeoutMinutes'] ?? '5').trim();
     const idleMin = Number(idleRaw);
     if (!Number.isFinite(idleMin) || idleMin < 0 || idleMin > 600) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -1829,7 +1895,7 @@ export class Dispatcher {
       next: { allowedUsers, allowedChats, admins },
     });
     if (accessErrors.length > 0) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -1861,7 +1927,7 @@ export class Dispatcher {
     );
 
     // 回执 + 新的 view 卡片
-    await this.sendCardToChat(
+    await this.sendCardToConversation(
       evt.chatId,
       buildAckCard({
         state: 'done',
@@ -1869,7 +1935,7 @@ export class Dispatcher {
         body: '改动立即生效，无需重启。',
       }),
     );
-    await this.sendCardToChat(
+    await this.sendCardToConversation(
       evt.chatId,
       buildConfigViewCard({
         allowedUsers: this.config.access.allowedUsers,
@@ -2117,7 +2183,7 @@ export class Dispatcher {
       name = normalizeFilename(String(fv['name']));
     }
     if (!name) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({ state: 'error', body: '❌ 缺少文件名' }),
       );
@@ -2125,7 +2191,7 @@ export class Dispatcher {
     }
     const validErrors = validateFilename(name);
     if (validErrors.length > 0) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -2149,7 +2215,7 @@ export class Dispatcher {
         },
         'steering saved',
       );
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'done',
@@ -2158,13 +2224,13 @@ export class Dispatcher {
         }),
       );
       // 刷新列表卡片
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         this.buildSteeringListCard(scope, cwd, evt.senderOpenId),
       );
     } catch (e) {
       const m = e instanceof MemoryError ? e.message : (e as Error).message;
-      await this.sendCardToChat(evt.chatId, buildAckCard({ state: 'error', body: m }));
+      await this.sendCardToConversation(evt.chatId, buildAckCard({ state: 'error', body: m }));
     }
   }
 
@@ -2292,7 +2358,7 @@ export class Dispatcher {
   ): Promise<void> {
     const id = String(evt.value['id'] ?? '');
     if (!id) return;
-    await this.applyCronAction((card) => this.sendCardToChat(evt.chatId, card), id, mode);
+    await this.applyCronAction((card) => this.sendCardToConversation(evt.chatId, card), id, mode);
   }
 
   /**
@@ -2389,7 +2455,7 @@ export class Dispatcher {
   ): Promise<void> {
     if (!this.cronStore || !this.cronScheduler) return;
     // 先发占位卡片
-    await this.sendCardToChat(
+    await this.sendCardToConversation(
       evt.chatId,
       buildLoadingCard(`正在让 Kiro 把 \`${raw}\` 翻译成 cron 表达式…`, '🤔 翻译中'),
     );
@@ -2416,7 +2482,7 @@ export class Dispatcher {
         signal: new AbortController().signal,
       });
     } catch (e) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -2430,7 +2496,7 @@ export class Dispatcher {
     const text = (result.text ?? '').trim();
     const m = text.match(/(\S+\s+\S+\s+\S+\s+\S+\s+\S+)/);
     if (!m) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -2443,7 +2509,7 @@ export class Dispatcher {
     const expression = (m[1] as string).trim();
     const parsed = parseExpression(expression);
     if (parsed.kind === 'unknown') {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -2454,7 +2520,7 @@ export class Dispatcher {
       return;
     }
     // 弹二次确认卡
-    await this.sendCardToChat(
+    await this.sendCardToConversation(
       evt.chatId,
       buildCronTranslatedConfirmCard({
         raw,
@@ -2477,7 +2543,7 @@ export class Dispatcher {
     if (!this.cronStore || !this.cronScheduler) return;
     const parsed = parseExpression(expression);
     if (parsed.kind === 'unknown') {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({ state: 'error', body: `非法表达式 \`${expression}\`` }),
       );
@@ -2493,7 +2559,7 @@ export class Dispatcher {
         createdBy: evt.senderOpenId,
       });
       this.cronScheduler.register(task);
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'done',
@@ -2502,7 +2568,7 @@ export class Dispatcher {
         }),
       );
     } catch (e) {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         evt.chatId,
         buildAckCard({
           state: 'error',
@@ -2762,7 +2828,7 @@ export class Dispatcher {
       await this.ingress.patchCard(evt.messageId, card);
     } catch (e) {
       this.log.error({ err: e, action: 'schedule.cancel' }, 'patchCard failed');
-      await this.sendCardToChat(evt.chatId, card);
+      await this.sendCardToConversation(evt.chatId, card);
     }
   }
 
@@ -2869,7 +2935,7 @@ export class Dispatcher {
       await this.ingress.patchCard(evt.messageId, card);
     } catch (e) {
       this.log.error({ err: e }, 'patchCard failed; fallback to send new card');
-      await this.sendCardToChat(evt.chatId, card);
+      await this.sendCardToConversation(evt.chatId, card);
     }
   }
 
@@ -2897,7 +2963,7 @@ export class Dispatcher {
     };
     // 触发时给一张提示卡片，让用户知道是定时任务
     try {
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         task.chatId,
         buildAckCard({
           state: 'done',
@@ -2927,7 +2993,7 @@ export class Dispatcher {
     const resumeId = await this.sessions.getKiroSession(chatId, session.currentCwd);
     if (!resumeId) {
       // 没有 sessionId 说明上次根本没跑成功；提示一下就行
-      await this.sendCardToChat(
+      await this.sendCardToConversation(
         chatId,
         buildAckCard({
           state: 'error',
@@ -2990,6 +3056,7 @@ export class Dispatcher {
     perChatIdleMin?: number,
     quoteSourceId?: string,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     // 命令型场景（doctor 等）prompt 极长且不该合并，跳过合并直接执行
     // 这里用启发式：prompt > 500 字符或 包含 "**最近日志**" 视为命令型
     const skipMerge = prompt.length > 500 || prompt.includes('**最近日志');
@@ -3096,7 +3163,8 @@ export class Dispatcher {
     mediaPaths: string[] = [],
     perChatIdleMin?: number,
   ): Promise<void> {
-    const pipeline = this.getPipeline(msg.chatId);
+    const conversationId = this.conversationIdOfMessage(msg);
+    const pipeline = this.getPipeline(conversationId);
     const taskId = `${msg.eventId || msg.messageId}-${Date.now().toString(36)}`;
     const taskStartedAt = Date.now();
 
@@ -3195,7 +3263,11 @@ export class Dispatcher {
           selectedProfileName = profileName;
           selectedProfile = profile;
           selectedComplexityScore = complexityScore;
-          const storedSid = await this.sessions.getAgentSession(msg.chatId, cwd, sessionTtlMs);
+          const storedSid = await this.sessions.getConversationAgentSession(
+            conversationId,
+            cwd,
+            sessionTtlMs,
+          );
           const resumeId = storedSid
             ? decodeSessionId(storedSid, profile.kind)
               ? storedSid
@@ -3287,10 +3359,14 @@ export class Dispatcher {
 
           // 成功：保存新 sessionId 用于续接
           if (result.newSessionId && result.newSessionId !== resumeId) {
-            await this.sessions.setKiroSession(msg.chatId, cwd, result.newSessionId);
+            await this.sessions.setConversationKiroSession(
+              conversationId,
+              cwd,
+              result.newSessionId,
+            );
           }
           // 刷新 lastActiveAt，防止 TTL 误过期
-          await this.sessions.touch(msg.chatId);
+          await this.sessions.touchConversation(conversationId);
           // 缓存 Kiro 推送的当前 agent 可用 skills（供 /help 动态展示）
           if (result.availableSkills && result.availableSkills.length > 0) {
             this.chatSkills.set(msg.chatId, result.availableSkills);
@@ -3300,7 +3376,7 @@ export class Dispatcher {
           // 任务终结（任何路径）后清理资源
           planSource.stop();
           if (this.activeCards && cardMessageId) {
-            await this.activeCards.remove(msg.chatId, cardMessageId).catch((e) => {
+            await this.activeCards.removeConversation(conversationId, cardMessageId).catch((e) => {
               this.log.warn({ err: e, taskId }, 'active-cards remove failed (non-fatal)');
             });
           }
@@ -3467,6 +3543,7 @@ export class Dispatcher {
     msg: IncomingMessage,
     cmd: Extract<ParsedCommand, { kind: 'agent' }>,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
     switch (cmd.mode) {
       case 'show': {
         const agents = listGlobalAgents();
@@ -3518,7 +3595,7 @@ export class Dispatcher {
           draft.kiro.agent = cmd.name;
         });
         // 确保下一条消息用新 agent：evict 当前 chat 的池化进程
-        await this.evictChatFromAllPools(msg.chatId);
+        await this.evictChatFromAllPools(conversationId);
         await this.sendInteractiveCard(
           msg,
           buildAckCard({
@@ -3533,7 +3610,7 @@ export class Dispatcher {
         this.config = patchAndSaveConfig(this.config, (draft) => {
           delete draft.kiro.agent;
         });
-        await this.evictChatFromAllPools(msg.chatId);
+        await this.evictChatFromAllPools(conversationId);
         await this.sendInteractiveCard(
           msg,
           buildAckCard({

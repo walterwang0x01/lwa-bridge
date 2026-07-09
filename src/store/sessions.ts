@@ -2,11 +2,11 @@
  * 会话状态持久化
  *
  * 数据模型：
- *   每个飞书 chatId 维护一个 ChatSession：
+ *   每个会话 conversationId（飞书里等价于 chatId）维护一个 ChatSession：
  *     - currentCwd: 当前工作目录
  *     - sessionsByCwd: cwd → kiroSessionId 的映射
  *
- * 切换工作目录时，该 chat 之前在新 cwd 下的 kiroSessionId 会被自动恢复（如果有），
+ * 切换工作目录时，该会话之前在新 cwd 下的 kiroSessionId 会被自动恢复（如果有），
  * 否则下次跑 Kiro 时新建。
  *
  * 这是工作目录方案 B 的核心数据结构。
@@ -114,6 +114,11 @@ export class SessionStore {
     });
   }
 
+  /** 渠道无关别名：conversationId 在飞书里等价于 chatId。 */
+  async getConversation(conversationId: string, defaultCwd: string): Promise<ChatSession> {
+    return this.get(conversationId, defaultCwd);
+  }
+
   /**
    * 切换 chat 的当前 cwd。该 cwd 下若已有 kiro session 会被自动延用。
    */
@@ -133,6 +138,14 @@ export class SessionStore {
     });
   }
 
+  async setConversationCwd(
+    conversationId: string,
+    cwd: string,
+    defaultCwd: string,
+  ): Promise<ChatSession> {
+    return this.setCwd(conversationId, cwd, defaultCwd);
+  }
+
   /**
    * 关联当前 (chatId, cwd) 到一个 kiroSessionId（Kiro CLI 跑完返回的 sid）。
    */
@@ -147,6 +160,14 @@ export class SessionStore {
     });
   }
 
+  async setConversationKiroSession(
+    conversationId: string,
+    cwd: string,
+    kiroSessionId: string,
+  ): Promise<void> {
+    await this.setKiroSession(conversationId, cwd, kiroSessionId);
+  }
+
   /**
    * 清空当前 cwd 下的 kiro session（用于 /new 命令）。
    */
@@ -159,6 +180,10 @@ export class SessionStore {
       session.lastActiveAt = Date.now();
       writeFile(data);
     });
+  }
+
+  async clearConversationKiroSession(conversationId: string, cwd: string): Promise<void> {
+    await this.clearKiroSession(conversationId, cwd);
   }
 
   /**
@@ -208,11 +233,23 @@ export class SessionStore {
     });
   }
 
+  async getConversationAgentSession(
+    conversationId: string,
+    cwd: string,
+    maxAgeMs?: number,
+  ): Promise<string | undefined> {
+    return this.getAgentSession(conversationId, cwd, maxAgeMs);
+  }
+
   async getRuntimeProfile(chatId: string): Promise<string | undefined> {
     return withLock(() => {
       const data = readFile();
       return data.chats[chatId]?.runtimeProfile;
     });
+  }
+
+  async getConversationRuntimeProfile(conversationId: string): Promise<string | undefined> {
+    return this.getRuntimeProfile(conversationId);
   }
 
   async setRuntimeProfile(chatId: string, profileName: string, defaultCwd: string): Promise<void> {
@@ -232,6 +269,14 @@ export class SessionStore {
     });
   }
 
+  async setConversationRuntimeProfile(
+    conversationId: string,
+    profileName: string,
+    defaultCwd: string,
+  ): Promise<void> {
+    await this.setRuntimeProfile(conversationId, profileName, defaultCwd);
+  }
+
   /**
    * 更新 chat 的 lastActiveAt 时间戳（每次成功 turn 后调用）。
    */
@@ -243,6 +288,10 @@ export class SessionStore {
       session.lastActiveAt = Date.now();
       writeFile(data);
     });
+  }
+
+  async touchConversation(conversationId: string): Promise<void> {
+    await this.touch(conversationId);
   }
 
   /**
@@ -274,5 +323,13 @@ export class SessionStore {
       data.chats[chatId] = session;
       writeFile(data);
     });
+  }
+
+  async setConversationIdleTimeout(
+    conversationId: string,
+    minutes: number | undefined,
+    defaultCwd: string,
+  ): Promise<void> {
+    await this.setIdleTimeout(conversationId, minutes, defaultCwd);
   }
 }
