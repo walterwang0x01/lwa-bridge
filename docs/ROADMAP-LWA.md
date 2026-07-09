@@ -88,7 +88,7 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 | metrics | ✅ cost proxy 三档分列 |
 | 配额探测 | ✅ `quota.ts` + Dashboard + native CLI JSON |
 
-**验收（剩余）**：本机 `npm i -g @google/gemini-cli` 后跑通一条 chat turn；adaptive 分桶出现 gemini 推荐行。
+**验收（剩余）**：本机 `npm i -g @google/gemini-cli` 后跑通一条 chat turn；adaptive 分桶出现 gemini 推荐行。见 `docs/spikes/gemini-cli-verify.md`。
 
 ### 配额感知路由（P0）
 
@@ -135,7 +135,7 @@ src/
 
 | 优先级 | 渠道 | 理由 |
 |--------|------|------|
-| P0 候选 A | **Slack** | 开发者多、Bot API 成熟、卡片类似 |
+| P0 候选 A | **Slack** | 开发者多、Bot API 成熟、卡片类似 | — 🚧 Socket Mode 已实装 |
 | P0 候选 B | **Microsoft Teams** | 企业客户多 |
 | P1 | Telegram | 个人开发者 / 通知型 |
 | P2 | 企业微信 / 钉钉 | 国内政企，合规与 API 成本高 |

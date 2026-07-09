@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createSlackIngressChannel } from './channel.js';
-import { createSlackIngressPort } from './port.js';
+import { createSlackIngressPortStub } from './port.js';
 
-describe('slack ingress skeleton', () => {
-  it('exposes slack channel id on port', () => {
-    expect(createSlackIngressPort().channel).toBe('slack');
+describe('slack ingress', () => {
+  it('exposes slack channel id on stub port', () => {
+    expect(createSlackIngressPortStub().channel).toBe('slack');
   });
 
   it('startInbound fails with guidance when tokens missing', async () => {

@@ -31,7 +31,7 @@
 - [x] 飞书行为无回归（`handle` 保留，`handleNormalized` 为推荐入口）
 - [x] `ingress/mock` 集成测试不依赖飞书凭据
 - [x] CardRenderer / RunCardController / 媒体下载经 `IngressPort`
-- [x] `ingress/slack` 骨架（registry 可发现，Socket Mode 待实现）
+- [x] `ingress/slack` Socket Mode + Block Kit 映射 + `ingress.channel=slack`
 - [ ] `lark/` 目录迁入（当前仍在 `src/lark/`，经 adapter 桥接）
 - [ ] 第二渠道生产可用（Slack Socket Mode）
 

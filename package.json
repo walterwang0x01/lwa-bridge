@@ -39,6 +39,9 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.65.0",
+    "@slack/bolt": "^4.7.3",
+    "@slack/types": "^2.22.0",
+    "@slack/web-api": "^7.19.0",
     "commander": "^14.0.3",
     "croner": "^9.0.0",
     "execa": "^9.5.2",

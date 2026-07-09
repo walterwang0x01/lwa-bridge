@@ -65,17 +65,25 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     appSecret: config.lark.appSecret,
     logger: log,
   });
-  const ingressChannel = createLarkIngressChannel(lark);
-  registerIngressChannel(ingressChannel);
-  registerIngressChannel(
-    createSlackIngressChannel({
-      botToken: config.ingress?.slack?.botToken,
-      appToken: config.ingress?.slack?.appToken,
-      signingSecret: config.ingress?.slack?.signingSecret,
-    }),
-  );
-  if (config.ingress?.channel === 'slack') {
-    log.warn('ingress.channel=slack is not production-ready; falling back to lark event loop');
+
+  const larkIngressChannel = createLarkIngressChannel(lark);
+  const slackIngressChannel = createSlackIngressChannel({
+    botToken: config.ingress?.slack?.botToken,
+    appToken: config.ingress?.slack?.appToken,
+    signingSecret: config.ingress?.slack?.signingSecret,
+    logger: log,
+  });
+  registerIngressChannel(larkIngressChannel);
+  registerIngressChannel(slackIngressChannel);
+
+  const wantSlack = config.ingress?.channel === 'slack';
+  const slackReady = Boolean(config.ingress?.slack?.botToken && config.ingress?.slack?.appToken);
+  const activeIngressChannel = wantSlack && slackReady ? slackIngressChannel : larkIngressChannel;
+
+  if (wantSlack && !slackReady) {
+    log.warn('ingress.channel=slack but tokens missing; falling back to lark');
+  } else if (wantSlack) {
+    log.info('ingress channel: slack (Socket Mode)');
   }
 
   // 启动时主动查一次 bot 的 open_id，后续群消息 @判定不再依赖名字字符串
@@ -93,17 +101,21 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   // 启动时扫描遗留的"进行中卡片"——上次 bridge 被杀时还没 finalize 的任务。
   // 把它们 patch 成"已中断"卡片，避免飞书侧永远显示 loading。
   // 失败不阻塞启动；遗留太多时控制并发避免压垮飞书 API。
-  void recoverOrphanCards(activeCards, ingressChannel.port, log);
+  void recoverOrphanCards(activeCards, activeIngressChannel.port, log);
 
   // 当前实现里 lark 实例不会被替换（reconnect 复用同一实例），所以是 const。
   // 如果未来需要在 reconnect 时换新实例（比如换 appId），把这里改成 let 即可。
   const larkRef = lark;
 
   const startEventLoop = async (): Promise<void> => {
-    await ingressChannel.startInbound({
+    await activeIngressChannel.startInbound({
       onMessage: (msg) => dispatcher.handleNormalized(msg),
       onCardAction: (evt) => dispatcher.handleNormalizedCardAction(evt),
-      onReady: () => log.info('🚀 lark-kiro-bridge ready, waiting for messages'),
+      onReady: () =>
+        log.info(
+          { channel: activeIngressChannel.id },
+          '🚀 lark-kiro-bridge ready, waiting for messages',
+        ),
     });
   };
 
@@ -123,7 +135,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
 
   const dispatcher = new Dispatcher({
     config,
-    ingress: ingressChannel.port,
+    ingress: activeIngressChannel.port,
     sessions,
     workspaces,
     logger: log,
@@ -134,7 +146,11 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     onReconnect: async () => {
       log.info('reconnect requested via /reconnect');
       try {
-        larkRef.close();
+        if (activeIngressChannel.id === 'lark') {
+          larkRef.close();
+        } else {
+          activeIngressChannel.close();
+        }
       } catch (e) {
         log.warn({ err: e }, 'close before reconnect failed (ignored)');
       }
@@ -183,7 +199,11 @@ export async function runBridge(): Promise<RunBridgeHandle> {
       await dashboard.close().catch(() => undefined);
     }
     try {
-      larkRef.close();
+      if (activeIngressChannel.id === 'lark') {
+        larkRef.close();
+      } else {
+        activeIngressChannel.close();
+      }
     } catch {
       // ignore
     }
