@@ -1,9 +1,10 @@
 /**
- * lark-kiro-bridge CLI 入口
+ * LWA CLI 入口（主命令 `lwa`；兼容 `lwa-bridge` / `lark-kiro-bridge`）
  *
  * 子命令：
- *   init         首次配置：填入飞书 App ID / Secret，生成 ~/.lark-kiro-bridge/config.json
- *   run          前台启动 bridge，监听飞书消息
+ *   init         首次配置：填入飞书 App ID / Secret，生成 ~/.lwa/config.json
+ *   run          前台启动 gateway，监听飞书消息
+ *   chat         本地终端对话
  *   config-show  打印当前配置（隐藏 secret）
  *   service ...  跨平台守护进程管理（launchd / systemd / Task Scheduler）
  */
@@ -13,9 +14,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { CONFIG_FILE, ensureDataDirs, LOGS_DIR } from './lib/paths.js';
+import { CLI_NAME, cliCommand } from './lib/branding.js';
 import { defaultConfig, loadConfig, saveConfig } from './lib/config.js';
 import { runQrWizard } from './lib/qrWizard.js';
 import { runBridge } from './core/bootstrap.js';
+import { discoverRuntimeRegistry } from './runtime/registry.js';
+import { formatModelTierSummary, suggestFastStrongModels } from './runtime/openaiModels.js';
 import { getLogger } from './lib/logger.js';
 import { getDaemonAdapter, DaemonError } from './daemon/index.js';
 import { listProcesses, findProcess } from './daemon/registry.js';
@@ -42,8 +46,8 @@ function readPackageVersion(): string {
 }
 
 program
-  .name('lark-kiro-bridge')
-  .description('Bridge Feishu/Lark messenger with local Kiro CLI')
+  .name(CLI_NAME)
+  .description('LWA gateway — Feishu/CLI entry for local multi-agent runtimes')
   .version(readPackageVersion());
 
 program
@@ -67,7 +71,7 @@ program
       if (opts.appId && opts.appSecret) {
         saveConfig(defaultConfig(opts.appId, opts.appSecret));
         console.log(`✅ Wrote config to ${CONFIG_FILE}`);
-        console.log('  Run: lark-kiro-bridge run');
+        console.log(`  Run: ${cliCommand('run')}`);
         return;
       }
 
@@ -77,11 +81,11 @@ program
           const { config } = await runQrWizard();
           saveConfig(config);
           console.log(`✅ 配置已保存到 ${CONFIG_FILE}`);
-          console.log('   下一步：lark-kiro-bridge run\n');
+          console.log(`   下一步：${cliCommand('run')}\n`);
           return;
         } catch (e) {
           console.error(`扫码向导失败：${(e as Error).message}`);
-          console.error('改用手动模式：lark-kiro-bridge init --manual\n');
+          console.error(`改用手动模式：${cliCommand('init --manual')}\n`);
           process.exit(1);
         }
       }
@@ -102,14 +106,15 @@ program
       }
       saveConfig(defaultConfig(appId, appSecret));
       console.log(`✅ Wrote config to ${CONFIG_FILE}`);
-      console.log('  Run: lark-kiro-bridge run');
+      console.log(`  Run: ${cliCommand('run')}`);
     },
   );
 
 program
   .command('run')
   .description('Run the bridge in foreground (auto-launch QR wizard if no config)')
-  .action(async () => {
+  .option('--chat', 'Attach local terminal chat alongside Feishu/Slack (requires TTY)')
+  .action(async (opts: { chat?: boolean }) => {
     try {
       // 没配置：自动跳起扫码向导（开箱即用）
       if (!existsSync(CONFIG_FILE) && process.stdin.isTTY) {
@@ -119,17 +124,66 @@ program
           console.log(`✅ 配置已保存到 ${CONFIG_FILE}\n`);
         } catch (e) {
           console.error(`扫码向导失败：${(e as Error).message}`);
-          console.error('改用手动模式：lark-kiro-bridge init --manual\n');
+          console.error(`改用手动模式：${cliCommand('init --manual')}\n`);
           process.exit(1);
         }
       }
-      await runBridge();
+      await runBridge({ attachCliChat: opts.chat });
       // 保持进程不退出，等信号
       await new Promise(() => undefined);
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);
       if (process.env['LARK_KIRO_DEBUG']) console.error(err.stack);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('chat')
+  .description('Local terminal chat (full bridge: cron, dashboard, routing)')
+  .action(async () => {
+    try {
+      if (!existsSync(CONFIG_FILE)) {
+        console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
+        process.exit(1);
+      }
+      await runBridge({ cliOnly: true });
+    } catch (e) {
+      const err = e as Error;
+      console.error(`❌ ${err.message}`);
+      if (process.env['LARK_KIRO_DEBUG']) console.error(err.stack);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('models')
+  .description('List models from OpenAI-compatible gateway profiles')
+  .action(async () => {
+    try {
+      const cfg = loadConfig();
+      const registry = await discoverRuntimeRegistry(cfg);
+      const openai = registry.filter((e) => e.profile.kind === 'openai-compatible');
+      if (openai.length === 0) {
+        console.log('No openai-compatible profiles in config.');
+        return;
+      }
+      for (const entry of openai) {
+        console.log(`\n## ${entry.profileName}`);
+        console.log(`configured model: ${entry.profile.model ?? '-'}`);
+        if (entry.models.length === 0) {
+          console.log(`models: ${entry.detail ?? 'unavailable'}`);
+          continue;
+        }
+        const { fast, strong } = suggestFastStrongModels(entry.models);
+        console.log(`gateway models (${entry.models.length}):`);
+        console.log(formatModelTierSummary(entry.models, 20));
+        console.log(`suggested fast: ${fast ?? '-'}`);
+        console.log(`suggested strong: ${strong ?? '-'}`);
+      }
+    } catch (e) {
+      console.error((e as Error).message);
       process.exit(1);
     }
   });
@@ -166,7 +220,7 @@ async function withDaemon<T>(
   } catch (e) {
     if (e instanceof DaemonError) {
       console.error(`❌ ${e.message}`);
-      console.error('   Use `lark-kiro-bridge run` to start in foreground instead.');
+      console.error(`   Use \`${cliCommand('run')}\` to start in foreground instead.`);
       process.exit(1);
     }
     throw e;

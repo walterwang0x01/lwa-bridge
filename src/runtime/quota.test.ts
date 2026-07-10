@@ -41,14 +41,23 @@ describe('quota', () => {
     const cfg = cfgWithQuota({ 'cursor-agent-cli': 'depleted' });
     const available = [
       { name: 'cursor', profile: { kind: 'cursor-agent-cli' as const, bin: 'agent' } },
-      { name: 'gemini', profile: { kind: 'gemini-cli' as const, bin: 'gemini' } },
+      {
+        name: 'openai-fast',
+        profile: {
+          kind: 'openai-compatible' as const,
+          bin: 'openai-compatible',
+          model: 'gpt-4o-mini',
+          apiBase: 'https://example.com/v1',
+          apiKey: 'test-key',
+        },
+      },
     ];
     const picked = await pickFirstQuotaOkProfile(
       fallbackProfilesForBucket('chat', cfg),
       available,
       cfg,
     );
-    expect(picked?.name).toBe('gemini');
+    expect(picked?.name).toBe('openai-fast');
   });
 
   it('uses monthly limits when configured', async () => {

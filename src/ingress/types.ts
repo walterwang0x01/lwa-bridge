@@ -3,7 +3,7 @@
  * core/dispatcher 只依赖本模块，不直接依赖飞书 SDK。
  */
 
-export type ChannelId = 'lark' | 'mock' | 'slack';
+export type ChannelId = 'lark' | 'mock' | 'slack' | 'cli';
 
 export type ConversationKind = 'p2p' | 'group' | 'topic_group' | 'unknown';
 

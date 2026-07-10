@@ -79,6 +79,7 @@ export type ParsedCommand =
   | { kind: 'model'; mode: 'set'; name: string }
   | { kind: 'model'; mode: 'reset' }
   | { kind: 'runtime'; mode: 'show' }
+  | { kind: 'runtime'; mode: 'check' }
   | { kind: 'runtime'; mode: 'set'; name: string }
   | { kind: 'help' }
   | { kind: 'kiro-internal'; name: string }
@@ -422,6 +423,10 @@ export function parseCommand(text: string): ParsedCommand | null {
     case 'runtime':
     case 'rt': {
       if (!tail) return { kind: 'runtime', mode: 'show' };
+      const lower = tail.toLowerCase();
+      if (lower === 'check' || lower === 'doctor' || lower === 'health') {
+        return { kind: 'runtime', mode: 'check' };
+      }
       const name = tail.trim();
       if (!/^[a-zA-Z0-9._-]{1,32}$/.test(name)) return { kind: 'unknown', raw: trimmed };
       return { kind: 'runtime', mode: 'set', name };

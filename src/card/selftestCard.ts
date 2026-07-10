@@ -49,7 +49,7 @@ export function buildSelftestCard(report: SelftestReport): object {
     summaryLine = `<font color='green'>**全部 ${summary.ok} 项 OK**</font>`;
   }
 
-  elements.push(md(`🔍 **lark-kiro-bridge 自检** — ${summaryLine}`));
+  elements.push(md(`🔍 **LWA 自检** — ${summaryLine}`));
   elements.push(hr());
 
   for (const r of results) {

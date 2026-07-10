@@ -1,13 +1,8 @@
 /**
  * macOS launchd 守护进程支持
  *
- * 安装目标：~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist
- *
- * install   生成 plist（指向 process.execPath + bin 路径）
- * uninstall 移除 plist 并 unload
- * start     bootstrap + kickstart
- * stop      bootout
- * status    打印 PID / 上次退出码 / 日志路径
+ * 安装目标：~/Library/LaunchAgents/ai.lwa.bot.plist
+ * 兼容旧标签 ai.lark-kiro-bridge.bot（stop/uninstall 会尝试卸载）
  */
 import { execa } from 'execa';
 import { writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
@@ -15,18 +10,23 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { LOGS_DIR, ensureDataDirs } from '../lib/paths.js';
 import { resolveBridgeBin } from './resolveBin.js';
+import { CLI_NEXT_HINT, LAUNCHD_LABEL, LEGACY_LAUNCHD_LABEL } from './names.js';
+import { cliCommand } from '../lib/branding.js';
 import type { DaemonAdapter } from './types.js';
 
-const LABEL = 'ai.lark-kiro-bridge.bot';
-const PLIST_PATH = join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
+const PLIST_PATH = join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+const LEGACY_PLIST_PATH = join(
+  homedir(),
+  'Library',
+  'LaunchAgents',
+  `${LEGACY_LAUNCHD_LABEL}.plist`,
+);
 
-/** UID for `launchctl bootstrap gui/<uid>` */
 function uid(): number {
-  // process.getuid 在 darwin 一定有
   return (process.getuid?.() ?? 0) | 0;
 }
 
-function buildPlist(program: string, args: string[]): string {
+function buildPlist(label: string, program: string, args: string[]): string {
   const programArgsXml = [program, ...args]
     .map((a) => `        <string>${escapeXml(a)}</string>`)
     .join('\n');
@@ -35,7 +35,7 @@ function buildPlist(program: string, args: string[]): string {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${LABEL}</string>
+    <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
 ${programArgsXml}
@@ -74,61 +74,71 @@ function escapeXml(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
+async function bootoutLabel(label: string): Promise<void> {
+  await execa('launchctl', ['bootout', `gui/${uid()}/${label}`], { reject: false });
+}
+
 export const launchdAdapter: DaemonAdapter = {
   platform: 'darwin',
 
   async install(): Promise<void> {
     ensureDataDirs();
     const { program, args } = await resolveBridgeBin();
-    const plist = buildPlist(program, args);
+    const plist = buildPlist(LAUNCHD_LABEL, program, args);
     writeFileSync(PLIST_PATH, plist, { mode: 0o644 });
     chmodSync(PLIST_PATH, 0o644);
     console.log(`✅ Installed: ${PLIST_PATH}`);
     console.log(`    Program: ${program} ${args.join(' ')}`);
     console.log('');
-    console.log('Next: lark-kiro-bridge start');
+    console.log(CLI_NEXT_HINT);
   },
 
   async uninstall(): Promise<void> {
     await this.stop().catch(() => undefined);
-    if (existsSync(PLIST_PATH)) {
-      unlinkSync(PLIST_PATH);
-      console.log(`✅ Removed: ${PLIST_PATH}`);
-    } else {
-      console.log(`Already removed: ${PLIST_PATH}`);
+    for (const path of [PLIST_PATH, LEGACY_PLIST_PATH]) {
+      if (existsSync(path)) {
+        unlinkSync(path);
+        console.log(`✅ Removed: ${path}`);
+      }
     }
   },
 
   async start(): Promise<void> {
     if (!existsSync(PLIST_PATH)) {
-      console.error(`No plist at ${PLIST_PATH}. Run 'lark-kiro-bridge install' first.`);
+      console.error(`No plist at ${PLIST_PATH}. Run '${cliCommand('service install')}' first.`);
       process.exit(1);
     }
     await execa('launchctl', ['bootstrap', `gui/${uid()}`, PLIST_PATH], { reject: false });
-    await execa('launchctl', ['kickstart', '-k', `gui/${uid()}/${LABEL}`], { reject: false });
-    console.log(`✅ Started ${LABEL}`);
+    await execa('launchctl', ['kickstart', '-k', `gui/${uid()}/${LAUNCHD_LABEL}`], {
+      reject: false,
+    });
+    console.log(`✅ Started ${LAUNCHD_LABEL}`);
     console.log(`    Logs: ${LOGS_DIR}/daemon-stdout.log`);
   },
 
   async stop(): Promise<void> {
-    await execa('launchctl', ['bootout', `gui/${uid()}/${LABEL}`], { reject: false });
-    console.log(`✅ Stopped ${LABEL}`);
+    await bootoutLabel(LAUNCHD_LABEL);
+    await bootoutLabel(LEGACY_LAUNCHD_LABEL);
+    console.log(`✅ Stopped ${LAUNCHD_LABEL} (and legacy label if loaded)`);
   },
 
   async status(): Promise<void> {
-    const r = await execa('launchctl', ['print', `gui/${uid()}/${LABEL}`], { reject: false });
-    if (r.exitCode === 0) {
-      const lines = r.stdout.split('\n');
-      const interesting = lines.filter((l) =>
-        /^\s*(state|pid|last exit code|program|stdout|stderr)/i.test(l),
-      );
-      console.log(`Status: ${LABEL}`);
-      interesting.forEach((l) => {
-        console.log(`  ${l.trim()}`);
-      });
-    } else {
-      console.log(`Service ${LABEL} not loaded.`);
+    for (const label of [LAUNCHD_LABEL, LEGACY_LAUNCHD_LABEL]) {
+      const r = await execa('launchctl', ['print', `gui/${uid()}/${label}`], { reject: false });
+      if (r.exitCode === 0) {
+        const lines = r.stdout.split('\n');
+        const interesting = lines.filter((l) =>
+          /^\s*(state|pid|last exit code|program|stdout|stderr)/i.test(l),
+        );
+        console.log(`Status: ${label}`);
+        interesting.forEach((l) => {
+          console.log(`  ${l.trim()}`);
+        });
+        console.log(`Logs: ${LOGS_DIR}/`);
+        return;
+      }
     }
+    console.log(`Service ${LAUNCHD_LABEL} not loaded.`);
     console.log(`Logs: ${LOGS_DIR}/`);
   },
 };

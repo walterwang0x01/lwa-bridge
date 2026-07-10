@@ -925,9 +925,7 @@ export function buildConfigFormCard(opts: {
         }),
         column({
           width: 'auto',
-          elements: [
-            md('<font color="grey">💡 找 open_id：发条消息后查 `~/.lark-kiro-bridge/logs/`</font>'),
-          ],
+          elements: [md(`<font color="grey">💡 找 open_id：发条消息后查 \`~/.lwa/logs/\`</font>`)],
         }),
       ],
     }),

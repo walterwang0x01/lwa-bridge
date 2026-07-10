@@ -7,7 +7,7 @@
  *   - taskScheduler.ts  Windows（schtasks ONLOGON 任务 + .cmd 启动器）
  *
  * 设计原则：
- *   - 用户感知的命令统一（lark-kiro-bridge start/stop/status/restart/unregister）
+ *   - 用户感知的命令统一（`lwa start/stop/status/restart/unregister`；兼容 `lark-kiro-bridge`）
  *   - 平台细节封装在 adapter 内部
  *   - install + start / stop + uninstall 是基本 4 个操作；status 用于诊断
  *

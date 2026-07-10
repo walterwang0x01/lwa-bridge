@@ -8,6 +8,7 @@ const DEFAULT_BINS: Record<RuntimeKind, string> = {
   'kiro-cli-acp': 'kiro-cli',
   'cursor-agent-cli': 'agent',
   'gemini-cli': 'gemini',
+  'openai-compatible': 'openai-compatible',
 };
 
 export function profileNameForRuntimeKind(kind: string): string {
@@ -16,18 +17,20 @@ export function profileNameForRuntimeKind(kind: string): string {
       return 'cursor';
     case 'gemini-cli':
       return 'gemini';
+    case 'openai-compatible':
+      return 'openai';
     case 'kiro-cli-acp':
     default:
       return 'kiro';
   }
 }
 
-export function defaultRuntimeProfiles(
-  cfg: Config,
-): { kiro: RuntimeProfile; cursor: RuntimeProfile; gemini: RuntimeProfile } & Record<
-  string,
-  RuntimeProfile
-> {
+export function defaultRuntimeProfiles(cfg: Config): {
+  kiro: RuntimeProfile;
+  cursor: RuntimeProfile;
+  gemini: RuntimeProfile;
+  openai: RuntimeProfile;
+} & Record<string, RuntimeProfile> {
   const kiro: RuntimeProfile = {
     kind: 'kiro-cli-acp',
     bin: cfg.kiro.binPath,
@@ -56,7 +59,17 @@ export function defaultRuntimeProfiles(
     idleTimeoutMinutes: cfg.kiro.idleTimeoutMinutes,
     systemPromptPrefix: cfg.kiro.systemPromptPrefix,
   };
-  return { kiro, cursor, gemini };
+  const openai: RuntimeProfile = {
+    kind: 'openai-compatible',
+    bin: DEFAULT_BINS['openai-compatible'],
+    model: process.env['OPENAI_MODEL'] ?? 'gpt-4o-mini',
+    apiBase: process.env['OPENAI_API_BASE'],
+    apiKey: process.env['OPENAI_API_KEY'],
+    timeoutMs: cfg.kiro.timeoutMs,
+    idleTimeoutMinutes: cfg.kiro.idleTimeoutMinutes,
+    systemPromptPrefix: cfg.kiro.systemPromptPrefix,
+  };
+  return { kiro, cursor, gemini, openai };
 }
 
 export function listRuntimeProfileNames(cfg: Config): string[] {

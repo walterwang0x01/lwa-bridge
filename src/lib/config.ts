@@ -1,7 +1,7 @@
 /**
  * 配置文件 schema 与加载逻辑
  *
- * 配置文件路径：~/.lark-kiro-bridge/config.json
+ * 配置文件路径：~/.lwa/config.json
  *
  * 字段：
  *  - lark.appId / lark.appSecret：飞书自建应用凭证
@@ -16,14 +16,17 @@
 import { readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { z } from 'zod';
 import { CONFIG_FILE, ensureDataDirs } from './paths.js';
+import { cliCommand } from './branding.js';
 
 /** 单个 Agent CLI runtime profile（kiro-cli-acp / cursor-agent-cli 等）。 */
 export const RuntimeProfileSchema = z.object({
-  kind: z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
+  kind: z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli', 'openai-compatible']),
   bin: z.string().optional(),
   model: z.string().optional(),
   agent: z.string().optional(),
   force: z.boolean().optional(),
+  apiBase: z.string().optional(),
+  apiKey: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
   idleTimeoutMinutes: z.number().int().nonnegative().optional(),
   systemPromptPrefix: z.string().optional(),
@@ -69,13 +72,13 @@ export const ConfigSchema = z.object({
           cacheTtlMs: z.number().int().positive().optional(),
           overrides: z
             .record(
-              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
+              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli', 'openai-compatible']),
               z.enum(['healthy', 'depleted', 'unknown', 'error']),
             )
             .optional(),
           monthlyLimits: z
             .record(
-              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli']),
+              z.enum(['kiro-cli-acp', 'cursor-agent-cli', 'gemini-cli', 'openai-compatible']),
               z.number().int().nonnegative(),
             )
             .optional(),
@@ -113,7 +116,7 @@ export const ConfigSchema = z.object({
     .default({}),
   ingress: z
     .object({
-      channel: z.enum(['lark', 'slack']).default('lark'),
+      channel: z.enum(['lark', 'slack', 'cli']).default('lark'),
       slack: z
         .object({
           botToken: z.string().optional(),
@@ -208,7 +211,7 @@ export function loadConfig(): Config {
   ensureDataDirs();
   if (!existsSync(CONFIG_FILE)) {
     throw new ConfigError(
-      `Config file not found at ${CONFIG_FILE}. Run \`lark-kiro-bridge init\` to create one.`,
+      `Config file not found at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` to create one.`,
     );
   }
   const raw = readFileSync(CONFIG_FILE, 'utf-8');

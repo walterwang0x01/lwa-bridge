@@ -1,8 +1,10 @@
-# Bridge (lark-kiro-bridge)
+# LWA (`lwa` CLI)
 
-> **Lark Local Agent Workbench (LWA)** — Feishu entry for local multi-CLI agents (Cursor / Kiro), with smart routing and observability.
+> **Lark Local Agent Workbench (LWA)** — local multi-agent gateway (Feishu / terminal), with smart routing and observability.
 >
 > Bridge local **Agent CLIs** to Feishu / Lark — chat code, run commands, and operate Feishu itself. Simple tasks use Cursor Auto; complex tasks upgrade to Kiro automatically.
+
+> **CLI**: primary command **`lwa`** (aliases: `lwa-bridge`, `lark-kiro-bridge`). Data dir **`~/.lwa`** (auto-migrates from `~/.lark-kiro-bridge`). See [docs/MIGRATION_LWA.md](./docs/MIGRATION_LWA.md).
 
 [![npm version](https://img.shields.io/npm/v/lark-kiro-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
@@ -93,7 +95,7 @@
 npm i -g lark-kiro-bridge
 
 # 2. Run (first launch shows a QR — scan, approve, done)
-lark-kiro-bridge run
+lwa run
 ```
 
 > **That's it** — scanning the QR in Feishu auto-creates the app, writes credentials, and grants required permissions.
@@ -105,14 +107,14 @@ DM the bot "hi" — you should see a streaming card immediately.
 If you've manually created an app on the Feishu Open Platform and want to reuse the App ID/Secret:
 
 ```bash
-lark-kiro-bridge init --manual
+lwa init --manual
 # Interactive prompts for App ID and Secret
 ```
 
 Or one-line:
 
 ```bash
-lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
+lwa init --app-id cli_xxx --app-secret xxx
 ```
 
 > Manual Feishu console setup (subscribe `im.message.receive_v1` + `card.action.trigger`) → [docs/FAQ.md](./docs/FAQ.md)
@@ -120,18 +122,18 @@ lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
 ### Background daemon (recommended for production)
 
 ```bash
-lark-kiro-bridge start          # Install platform service and start
-lark-kiro-bridge status         # Check status
-lark-kiro-bridge restart        # Restart
+lwa start          # Install platform service and start
+lwa status         # Check status
+lwa restart        # Restart
 ```
 
 Platform mapping:
 
 | Platform | Implementation | Service path |
 |---|---|---|
-| **macOS** | launchd user agent | `~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist` |
-| **Linux** | systemd user unit | `~/.config/systemd/user/lark-kiro-bridge.service` |
-| **Windows** | Task Scheduler ONLOGON | Task `LarkKiroBridge.Bot`, launcher `~/.lark-kiro-bridge/daemon-launcher.cmd` |
+| **macOS** | launchd user agent | `~/Library/LaunchAgents/ai.lwa.bot.plist` |
+| **Linux** | systemd user unit | `~/.config/systemd/user/lwa.service` |
+| **Windows** | Task Scheduler ONLOGON | Task `LWA.Bot`, launcher `~/.lwa/daemon-launcher.cmd` |
 
 > Linux: to keep the daemon running after logout (servers), run once:
 > `loginctl enable-linger $USER`
@@ -170,6 +172,8 @@ Install [Tailscale](https://tailscale.com/) and open the URL it gives you from y
 | `/pwd` | `/cwd` | Current working directory |
 | `/ws list` | — | List named workspaces with switch buttons |
 | `/timeout [N\|off]` | `/to` | Idle watchdog threshold (minutes) |
+| `/runtime [profile]` | — | View / switch runtime profile (`kiro` / `cursor` / `gemini` / `openai`) |
+| `/runtime check` | — | Check availability, missing config, and quota state for all runtime profiles |
 | `/ps` | — | List all bridge processes on this host |
 | `/steering` | `/memory` `/mem` | List Kiro steering files for current project (card + buttons) |
 | `/cron` | `/schedule` | List scheduled tasks for current chat (card + buttons) |
@@ -220,7 +224,7 @@ You: [drops a design mockup image] evaluate technical feasibility
 
 ### Minimum (auto-generated)
 
-`lark-kiro-bridge init` writes `~/.lark-kiro-bridge/config.json`:
+`lwa init` writes `~/.lark-kiro-bridge/config.json`:
 
 ```json
 {
@@ -288,16 +292,16 @@ All other fields have sensible defaults.
 ### CLI
 
 ```bash
-lark-kiro-bridge init                # Scan QR to create Feishu app (recommended)
-lark-kiro-bridge init --manual       # Manually enter existing App ID/Secret
-lark-kiro-bridge init --app-id <id> --app-secret <s>   # One-shot (CI-friendly)
-lark-kiro-bridge run                 # Foreground (auto-launches QR if no config)
+lwa init                # Scan QR to create Feishu app (recommended)
+lwa init --manual       # Manually enter existing App ID/Secret
+lwa init --app-id <id> --app-secret <s>   # One-shot (CI-friendly)
+lwa run                 # Foreground (auto-launches QR if no config)
 lark-kiro-bridge config-show         # Show current config (redacted)
 
-lark-kiro-bridge start               # Install and start daemon
+lwa start               # Install and start daemon
 lark-kiro-bridge stop                # Stop daemon
-lark-kiro-bridge restart             # Restart
-lark-kiro-bridge status              # Daemon status
+lwa restart             # Restart
+lwa status              # Daemon status
 lark-kiro-bridge unregister          # Uninstall
 
 lark-kiro-bridge ps                  # List all bridge processes on this host

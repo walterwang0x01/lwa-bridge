@@ -4,6 +4,7 @@ import type {
   AdaptiveRecommendation,
   MetricsAlertRow,
   QuotaStatusRow,
+  RuntimeProfileRow,
   RuntimeMetricsRow,
 } from '../types';
 import Panel from './Panel.vue';
@@ -14,6 +15,7 @@ defineProps<{
   recommendation?: AdaptiveRecommendation | null;
   readiness?: AdaptiveBucketReadiness[];
   alerts?: MetricsAlertRow[];
+  profiles?: RuntimeProfileRow[];
   quotas?: QuotaStatusRow[];
 }>();
 
@@ -43,6 +45,30 @@ function isDegraded(row: RuntimeMetricsRow, alerts: MetricsAlertRow[] | undefine
 
 <template>
   <Panel title="Runtime 指标" subtitle="METRICS" :count="rows.length">
+    <div
+      v-if="profiles && profiles.length > 0"
+      class="border-b border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-neutral-400"
+    >
+      <div class="mb-1 font-medium text-neutral-500">已注册 Runtime Profiles</div>
+      <div class="flex flex-wrap gap-2">
+        <span
+          v-for="p in profiles"
+          :key="`${p.profileName}-${p.runtimeKind}`"
+          class="rounded border px-2 py-0.5"
+          :class="
+            p.available
+              ? 'border-emerald-500/30 text-emerald-300'
+              : 'border-white/10 text-neutral-500'
+          "
+        >
+          {{ p.profileName }} · {{ p.runtimeKind }}
+          <template v-if="p.model"> · {{ p.model }}</template>
+          <template v-if="p.bin"> · {{ p.bin }}</template>
+          <template v-else-if="p.apiBaseHost"> · {{ p.apiBaseHost }}</template>
+          <template v-if="!p.available"> · unavailable</template>
+        </span>
+      </div>
+    </div>
     <div
       v-if="quotas && quotas.length > 0"
       class="border-b border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-neutral-400"

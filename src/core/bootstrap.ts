@@ -10,6 +10,8 @@ import { getLogger, pruneOldLogs } from '../lib/logger.js';
 import { LarkClient } from '../lark/client.js';
 import { createLarkIngressChannel } from '../ingress/lark/channel.js';
 import { createSlackIngressChannel } from '../ingress/slack/channel.js';
+import { CliIngressChannel } from '../ingress/cli/channel.js';
+import { ConversationIngressRouter } from '../ingress/multiplex/port.js';
 import { registerIngressChannel } from '../ingress/registry.js';
 import type { IngressPort } from '../ingress/types.js';
 import { pruneOldMedia } from '../lark/media.js';
@@ -29,7 +31,14 @@ export interface RunBridgeHandle {
   stop: () => Promise<void>;
 }
 
-export async function runBridge(): Promise<RunBridgeHandle> {
+export interface RunBridgeOptions {
+  /** 与飞书/Slack 并行挂载本地终端（需 TTY） */
+  attachCliChat?: boolean;
+  /** 仅本地 CLI 入口，不连飞书 WebSocket */
+  cliOnly?: boolean;
+}
+
+export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandle> {
   const log = getLogger().child({ module: 'bridge' });
   const config = loadConfig();
   log.info(
@@ -40,7 +49,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
       trustedTools: config.kiro.trustedTools,
       idleTimeoutMinutes: config.kiro.idleTimeoutMinutes,
     },
-    'lark-kiro-bridge starting',
+    'lwa starting',
   );
 
   // 启动清理：日志（覆盖 logger 里的默认 7 天） + 24h 前的媒体
@@ -76,11 +85,27 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   registerIngressChannel(larkIngressChannel);
   registerIngressChannel(slackIngressChannel);
 
-  const wantSlack = config.ingress?.channel === 'slack';
-  const slackReady = Boolean(config.ingress?.slack?.botToken && config.ingress?.slack?.appToken);
-  const activeIngressChannel = wantSlack && slackReady ? slackIngressChannel : larkIngressChannel;
+  const cliIngressChannel = new CliIngressChannel();
+  registerIngressChannel(cliIngressChannel);
 
-  if (wantSlack && !slackReady) {
+  const wantCli = opts?.cliOnly || config.ingress?.channel === 'cli';
+  const wantSlack = !wantCli && config.ingress?.channel === 'slack';
+  const slackReady = Boolean(config.ingress?.slack?.botToken && config.ingress?.slack?.appToken);
+  const activeIngressChannel = wantCli
+    ? cliIngressChannel
+    : wantSlack && slackReady
+      ? slackIngressChannel
+      : larkIngressChannel;
+
+  const attachCli = Boolean(opts?.attachCliChat && process.stdin.isTTY && !wantCli);
+  const ingressRouter = attachCli
+    ? new ConversationIngressRouter(activeIngressChannel.port)
+    : undefined;
+  const ingressPort: IngressPort = ingressRouter ?? activeIngressChannel.port;
+
+  if (wantCli) {
+    log.info('ingress channel: cli (terminal only)');
+  } else if (wantSlack && !slackReady) {
     log.warn('ingress.channel=slack but tokens missing; falling back to lark');
   } else if (wantSlack) {
     log.info('ingress channel: slack (Socket Mode)');
@@ -88,9 +113,11 @@ export async function runBridge(): Promise<RunBridgeHandle> {
 
   // 启动时主动查一次 bot 的 open_id，后续群消息 @判定不再依赖名字字符串
   // 失败也不阻塞启动，dispatcher 会降级到"等第一次 @bot 学习"的旧路径
-  void lark.getBotOpenId().catch((e) => {
-    log.warn({ err: e }, 'initial bot open_id resolution failed (non-fatal)');
-  });
+  if (!wantCli) {
+    void lark.getBotOpenId().catch((e) => {
+      log.warn({ err: e }, 'initial bot open_id resolution failed (non-fatal)');
+    });
+  }
 
   const sessions = new SessionStore();
   const workspaces = new WorkspaceStore();
@@ -101,21 +128,29 @@ export async function runBridge(): Promise<RunBridgeHandle> {
   // 启动时扫描遗留的"进行中卡片"——上次 bridge 被杀时还没 finalize 的任务。
   // 把它们 patch 成"已中断"卡片，避免飞书侧永远显示 loading。
   // 失败不阻塞启动；遗留太多时控制并发避免压垮飞书 API。
-  void recoverOrphanCards(activeCards, activeIngressChannel.port, log);
+  void recoverOrphanCards(activeCards, ingressPort, log);
 
   // 当前实现里 lark 实例不会被替换（reconnect 复用同一实例），所以是 const。
   // 如果未来需要在 reconnect 时换新实例（比如换 appId），把这里改成 let 即可。
   const larkRef = lark;
 
   const startEventLoop = async (): Promise<void> => {
+    if (wantCli) {
+      await cliIngressChannel.startInbound({
+        onMessage: (msg) => dispatcher.handleNormalized(msg),
+        onCardAction: (evt) => dispatcher.handleNormalizedCardAction(evt),
+        onReady: () => log.info({ channel: 'cli' }, '🚀 CLI ingress ready'),
+      });
+      return;
+    }
     await activeIngressChannel.startInbound({
-      onMessage: (msg) => dispatcher.handleNormalized(msg),
+      onMessage: (msg) => {
+        ingressRouter?.bind(msg.conversationId, activeIngressChannel.port);
+        return dispatcher.handleNormalized(msg);
+      },
       onCardAction: (evt) => dispatcher.handleNormalizedCardAction(evt),
       onReady: () =>
-        log.info(
-          { channel: activeIngressChannel.id },
-          '🚀 lark-kiro-bridge ready, waiting for messages',
-        ),
+        log.info({ channel: activeIngressChannel.id }, '🚀 LWA ready, waiting for messages'),
     });
   };
 
@@ -135,7 +170,7 @@ export async function runBridge(): Promise<RunBridgeHandle> {
 
   const dispatcher = new Dispatcher({
     config,
-    ingress: activeIngressChannel.port,
+    ingress: ingressPort,
     sessions,
     workspaces,
     logger: log,
@@ -185,6 +220,24 @@ export async function runBridge(): Promise<RunBridgeHandle> {
 
   await startEventLoop();
 
+  const cliChannelRef = attachCli || wantCli ? cliIngressChannel : undefined;
+  if (attachCli && ingressRouter) {
+    void cliIngressChannel
+      .startInbound({
+        onMessage: (msg) => {
+          ingressRouter.bind(msg.conversationId, cliIngressChannel.port);
+          return dispatcher.handleNormalized(msg);
+        },
+        onCardAction: (evt) => dispatcher.handleNormalizedCardAction(evt),
+        onReady: () =>
+          log.info('terminal chat attached — type in this console (conversation=cli-local)'),
+      })
+      .then(() => cliIngressChannel.promptLoop('cli-local', 'cli-user'))
+      .catch((e) => log.warn({ err: e }, 'cli chat attach failed'));
+  } else if (wantCli) {
+    await cliIngressChannel.promptLoop('cli-local', 'cli-user');
+  }
+
   let stopped = false;
   const stop = async () => {
     if (stopped) return;
@@ -198,14 +251,23 @@ export async function runBridge(): Promise<RunBridgeHandle> {
     if (dashboard) {
       await dashboard.close().catch(() => undefined);
     }
-    try {
-      if (activeIngressChannel.id === 'lark') {
-        larkRef.close();
-      } else {
-        activeIngressChannel.close();
+    if (cliChannelRef) {
+      try {
+        cliChannelRef.close();
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+    }
+    if (!wantCli) {
+      try {
+        if (activeIngressChannel.id === 'lark') {
+          larkRef.close();
+        } else {
+          activeIngressChannel.close();
+        }
+      } catch {
+        // ignore
+      }
     }
     await unregisterSelf().catch(() => undefined);
   };

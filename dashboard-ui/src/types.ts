@@ -119,6 +119,15 @@ export interface QuotaStatusRow {
   checkedAt: string;
 }
 
+export interface RuntimeProfileRow {
+  profileName: string;
+  runtimeKind: string;
+  available: boolean;
+  model?: string | null;
+  bin?: string;
+  apiBaseHost?: string | null;
+}
+
 export interface BridgeInfo {
   pid: number;
   appId: string;
@@ -140,6 +149,7 @@ export interface Overview {
   adaptiveRecommendation: AdaptiveRecommendation;
   adaptiveReadiness: AdaptiveBucketReadiness[];
   metricsAlerts: MetricsAlertRow[];
+  runtimeProfiles: RuntimeProfileRow[];
   quotaStatuses: QuotaStatusRow[];
   logs: string[];
 }

@@ -17,7 +17,7 @@ import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execa } from 'execa';
 import { getLogger } from '../lib/logger.js';
-import { ASSET_SOURCES_DIR } from '../lib/paths.js';
+import { ASSET_INSTALLS_FILE, ASSET_SOURCES_DIR } from '../lib/paths.js';
 import {
   type AssetKind,
   type AssetSourceEntry,
@@ -102,7 +102,7 @@ function discoverCandidates(entry: AssetSourceEntry, localDir: string): AssetCan
 
   // 同步读取安装记录——sync 不是高频操作，同步 IO 可接受
   try {
-    const raw = readFileSync(join(homedir(), '.lark-kiro-bridge', 'asset-installs.json'), 'utf-8');
+    const raw = readFileSync(ASSET_INSTALLS_FILE, 'utf-8');
     const data = JSON.parse(raw) as { installs?: AssetInstallRecord[] };
     if (data.installs) {
       for (const r of data.installs) {

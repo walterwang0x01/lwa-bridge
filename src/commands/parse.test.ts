@@ -274,6 +274,9 @@ describe('parseCommand', () => {
     it('/runtime', () => {
       expect(parseCommand('/runtime')).toEqual({ kind: 'runtime', mode: 'show' });
     });
+    it('/runtime check', () => {
+      expect(parseCommand('/runtime check')).toEqual({ kind: 'runtime', mode: 'check' });
+    });
     it('/runtime cursor', () => {
       expect(parseCommand('/runtime cursor')).toEqual({
         kind: 'runtime',

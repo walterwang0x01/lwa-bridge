@@ -17,6 +17,7 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import qrcode from 'qrcode-terminal';
 import type { Config } from './config.js';
 import { defaultConfig } from './config.js';
+import { configPathTilde } from './branding.js';
 
 export interface QrWizardResult {
   config: Config;
@@ -66,7 +67,7 @@ export async function runQrWizard(): Promise<QrWizardResult> {
   } else {
     console.log(
       '   ⚠️  未拿到扫码用户的 open_id，管理员列表留空 = 所有用户都能跑敏感命令。\n' +
-        '       可以稍后手动编辑 ~/.lark-kiro-bridge/config.json 的 access.admins',
+        `       可以稍后手动编辑 ${configPathTilde()} 的 access.admins`,
     );
   }
 

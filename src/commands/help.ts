@@ -3,7 +3,7 @@
  */
 export function helpMarkdown(): string {
   return [
-    '**🤖 lark-kiro-bridge** — 在飞书里调用本地 Kiro CLI',
+    '**🤖 LWA** — 本地多 Agent 网关（飞书 / 终端入口）',
     '',
     '**会话**',
     '`/new` 或 `/reset` — 重置当前会话',
@@ -23,7 +23,9 @@ export function helpMarkdown(): string {
     '**运维**',
     '`/timeout [N|off|default]` — idle watchdog 阈值（分钟）',
     '`/model [name|auto]` — 查看 / 切换 / 重置模型（kiro 引擎）',
-    '`/runtime [kiro|cursor|gemini]` — 查看 / 切换 Agent CLI 引擎',
+    '`/runtime` — 查看当前可用 runtime profiles',
+    '`/runtime check` — 检查 profile 可用性 / quota / 缺失配置',
+    '`/runtime [kiro|cursor|gemini|openai|openai-*]` — 切换 Agent CLI 引擎',
     '`/config` — 查看 / 编辑访问控制 + 偏好（管理员）',
     '`/steering [list|view|edit|new|rm] [--global]` — 管理 Kiro steering 文件',
     '`/cron [list|add|rm|pause|resume|run|next|translate]` — 定时任务',

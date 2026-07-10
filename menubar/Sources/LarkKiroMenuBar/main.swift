@@ -53,17 +53,22 @@ func runBridgeCommand(_ args: [String]) -> Bool {
     }
 }
 
-/// Dashboard 端口：读 ~/.lark-kiro-bridge/config.json 的 dashboard.port，没配置就用默认 5180。
+/// Dashboard 端口：读 ~/.lwa/config.json（回退 ~/.lark-kiro-bridge/config.json）的 dashboard.port，默认 5180。
 func dashboardPort() -> Int {
-    let configPath = "\(NSHomeDirectory())/.lark-kiro-bridge/config.json"
-    guard let data = FileManager.default.contents(atPath: configPath),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let dashboard = json["dashboard"] as? [String: Any],
-          let port = dashboard["port"] as? Int
-    else {
-        return 5180
+    let home = NSHomeDirectory()
+    let candidates = [
+        "\(home)/.lwa/config.json",
+        "\(home)/.lark-kiro-bridge/config.json",
+    ]
+    for configPath in candidates {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dashboard = json["dashboard"] as? [String: Any],
+              let port = dashboard["port"] as? Int
+        else { continue }
+        return port
     }
-    return port
+    return 5180
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -75,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusItem.system_statusBar_item()
         statusItem = item
         item.button?.title = "🌉"
-        item.button?.toolTip = "Lark-Kiro-Bridge"
+        item.button?.toolTip = "LWA"
 
         let menu = NSMenu()
 

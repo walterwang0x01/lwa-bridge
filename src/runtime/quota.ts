@@ -60,10 +60,12 @@ export function fallbackProfilesForBucket(bucket: TaskBucket, cfg: Config): stri
   switch (bucket) {
     case 'plan':
     case 'review':
+    case 'edit':
+      return ['openai-strong', 'openai-fast', 'kiro', 'cursor', 'gemini'];
     case 'conduit':
-      return ['kiro', 'gemini', 'cursor'];
+      return ['kiro', 'openai-strong', 'openai-fast', 'cursor', 'gemini'];
     default:
-      return ['cursor', 'gemini', 'kiro'];
+      return ['openai-fast', 'openai-strong', 'cursor', 'gemini', 'kiro'];
   }
 }
 

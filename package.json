@@ -1,10 +1,12 @@
 {
   "name": "lark-kiro-bridge",
   "version": "0.9.2",
-  "description": "LWA Bridge — Feishu/Lark entry for local multi-CLI agents (Cursor/Kiro). Streaming cards, smart routing, observability.",
+  "description": "LWA — Lark Local Agent Workbench gateway: Feishu/CLI entry, multi-runtime routing (Kiro/Cursor/Gemini/OpenAI). CLI: `lwa` (aliases: lwa-bridge, lark-kiro-bridge).",
   "type": "module",
   "bin": {
-    "lark-kiro-bridge": "bin/lark-kiro-bridge.mjs"
+    "lwa": "bin/lwa.mjs",
+    "lwa-bridge": "bin/lwa.mjs",
+    "lark-kiro-bridge": "bin/lwa.mjs"
   },
   "files": [
     "dist/**/*.js",
@@ -28,7 +30,7 @@
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish",
-    "start": "node bin/lark-kiro-bridge.mjs run",
+    "start": "node bin/lwa.mjs run",
     "prepublishOnly": "npx tsc --noEmit && npx biome check src && npx vitest run && pnpm build",
     "prepare": "husky"
   },

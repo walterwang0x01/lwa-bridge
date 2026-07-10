@@ -124,7 +124,7 @@ function checkDataDirs(): CheckResult {
         2,
         '数据目录',
         'warn',
-        `${DATA_DIR} 权限是 ${mode.toString(8)}，建议 700（chmod -R 700 ~/.lark-kiro-bridge）`,
+        `${DATA_DIR} 权限是 ${mode.toString(8)}，建议 700（chmod -R 700 ~/.lwa）`,
       );
     }
     return mk(2, '数据目录', 'ok', `${DATA_DIR} 可读可写，权限 700`);

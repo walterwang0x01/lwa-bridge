@@ -199,7 +199,7 @@ export class AcpClient {
     const result = (await this.call(Method.INITIALIZE, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {},
-      clientInfo: { name: 'lark-kiro-bridge', version: '0.0.1' },
+      clientInfo: { name: 'lwa', version: '0.0.1' },
     })) as Record<string, any> | undefined;
     return result?.agentCapabilities ?? result;
   }

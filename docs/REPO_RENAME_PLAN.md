@@ -1,6 +1,6 @@
 # 阶段 B：仓库与包名重命名规划
 
-> **状态：B3 已执行（2026-07-09）** — GitHub 仓库已改为 `lwa-bridge` / `lwa-conduit`；npm / PyPI / CLI **未改**。旧 URL 由 GitHub 自动重定向。
+> **状态：B1 部分已执行（2026-07-10）** — CLI 主命令改为 `lwa`，数据目录 `~/.lwa`（自动迁移）；npm 包名仍为 `lark-kiro-bridge`；PyPI `kiro-conduit` 未改。
 >
 > 全量 B1（包名 + CLI 改名）仍待决策，见文末决策门。
 

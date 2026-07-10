@@ -1,14 +1,16 @@
-# Bridge（lark-kiro-bridge）
+# LWA（`lwa` CLI）
 
-> **Lark Local Agent Workbench（LWA）** 的飞书入口 — 在本机项目上跑多 CLI Agent（Cursor / Kiro），带智能路由与可观测性。
+> **Lark Local Agent Workbench（LWA）** 本地多 Agent 网关 — 飞书 / 终端入口，在本机项目上跑多 CLI（Cursor / Kiro / Gemini / OpenAI 网关），带智能路由与可观测性。
 >
 > 把 **本地 Agent CLI** 接到飞书 / Lark — 在飞书里聊代码、跑命令、操作飞书自己。简单任务走 Cursor Auto，复杂任务自动升级 Kiro。
+
+> **CLI**：主命令 **`lwa`**（别名：`lwa-bridge`、`lark-kiro-bridge`）。数据目录 **`~/.lwa`**（首次启动自动从 `~/.lark-kiro-bridge` 迁移）。详见 [docs/MIGRATION_LWA.md](./docs/MIGRATION_LWA.md)。
 
 [![npm version](https://img.shields.io/npm/v/lark-kiro-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
 [![license](https://img.shields.io/npm/l/lark-kiro-bridge.svg)](./LICENSE)
 [![node](https://img.shields.io/node/v/lark-kiro-bridge.svg)](https://nodejs.org/)
-[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lwa-bridge)
+[![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lwa-bridge?style=social)](https://github.com/walterwang0x01/lwa-bridge)
 
 🇨🇳 中文 | [🇺🇸 English](./README.en.md)
 
@@ -93,7 +95,7 @@
 npm i -g lark-kiro-bridge
 
 # 2. 启动（首次会自动弹二维码 → 扫码同意 → 完成）
-lark-kiro-bridge run
+lwa run
 ```
 
 > **就这么简单**——飞书 App 扫码同意后，bridge 自动创建应用、配好凭证、开通必要权限。
@@ -105,14 +107,14 @@ lark-kiro-bridge run
 如果你已经在飞书开放平台手动建过应用，想复用已有的 App ID/Secret：
 
 ```bash
-lark-kiro-bridge init --manual
+lwa init --manual
 # 交互式输入 App ID 和 App Secret
 ```
 
 或一行搞定：
 
 ```bash
-lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
+lwa init --app-id cli_xxx --app-secret xxx
 ```
 
 > 飞书后台手动配置（订阅事件 `im.message.receive_v1` + `card.action.trigger`）→ [docs/FAQ.md](./docs/FAQ.md)
@@ -120,21 +122,33 @@ lark-kiro-bridge init --app-id cli_xxx --app-secret xxx
 ### 后台守护（推荐生产）
 
 ```bash
-lark-kiro-bridge start          # 装平台原生服务并启动
-lark-kiro-bridge status         # 看状态
-lark-kiro-bridge restart        # 重启
+lwa start          # 装平台原生服务并启动
+lwa status         # 看状态
+lwa restart        # 重启
 ```
 
 平台映射：
 
 | 平台 | 实现 | 服务定义路径 |
 |---|---|---|
-| **macOS** | launchd 用户代理 | `~/Library/LaunchAgents/ai.lark-kiro-bridge.bot.plist` |
-| **Linux** | systemd 用户单元 | `~/.config/systemd/user/lark-kiro-bridge.service` |
-| **Windows** | Task Scheduler ONLOGON | 任务名 `LarkKiroBridge.Bot`，启动器 `~/.lark-kiro-bridge/daemon-launcher.cmd` |
+| **macOS** | launchd 用户代理 | `~/Library/LaunchAgents/ai.lwa.bot.plist` |
+| **Linux** | systemd 用户单元 | `~/.config/systemd/user/lwa.service` |
+| **Windows** | Task Scheduler ONLOGON | 任务名 `LWA.Bot`，启动器 `~/.lwa/daemon-launcher.cmd` |
 
 > Linux 想让 daemon 在用户登出后还跑（比如服务器场景），跑一次：
 > `loginctl enable-linger $USER`
+
+### 本地终端直聊（CLI ingress）
+
+如果你暂时不想走飞书，也可以直接在本机终端把同一个 dispatcher 跑起来：
+
+```bash
+lwa chat
+```
+
+这会进入一个本地交互会话。你可以直接输入自然语言或斜杠命令（如 `/help`、`/status`、`/ws list`）；输入 `.exit` 退出。
+
+> 这是第一版 CLI ingress：重点是复用现有 bridge 能力做本地对话与调试，不依赖飞书收消息。
 
 ### 📊 Web Dashboard
 
@@ -170,6 +184,8 @@ tailscale serve 5180
 | `/pwd` | `/cwd` | 当前工作目录 |
 | `/ws list` | — | 列出命名工作区，按钮一键切 |
 | `/timeout [N\|off]` | `/to` | idle watchdog 阈值（分钟） |
+| `/runtime [profile]` | — | 查看 / 切换运行时 profile（如 `kiro` / `cursor` / `gemini` / `openai` / `openai-*`） |
+| `/runtime check` | — | 检查所有 runtime profiles 的可用性、缺失配置与 quota 状态 |
 | `/ps` | — | 列出本机所有 bridge 进程 |
 | `/steering` | `/memory` `/mem` | 列出当前项目的 Kiro 指令文件（卡片+按钮） |
 | `/cron` | `/schedule` | 列出当前 chat 的定时任务（卡片+按钮） |
@@ -230,7 +246,7 @@ tailscale serve 5180
 
 ### 最小可用（自动生成）
 
-`lark-kiro-bridge init` 写入 `~/.lark-kiro-bridge/config.json`：
+`lwa init` 写入 `~/.lwa/config.json`：
 
 ```json
 {
@@ -242,6 +258,16 @@ tailscale serve 5180
 ```
 
 其他字段都有合理默认值。
+
+如果你要接自建 OpenAI 兼容网关，也可以直接复用环境变量：
+
+```bash
+export OPENAI_API_KEY=llmgtwy_xxx
+export OPENAI_API_BASE=https://llm-gw.agenzo.com/v1
+export OPENAI_MODEL=aws-bedrock/claude-haiku-4-5
+```
+
+这样会自动提供一个内置的 `openai` runtime profile，可用于 CLI / Lark / Slack 共用路由。
 
 ### 完整配置参考
 
@@ -263,6 +289,20 @@ tailscale serve 5180
     "timeoutMs": 600000,
     "idleTimeoutMinutes": 5,
     "model": "claude-sonnet-4.6"
+  },
+  "runtime": {
+    "default": "auto",
+    "router": {
+      "mode": "smart"
+    },
+    "profiles": {
+      "openai": {
+        "kind": "openai-compatible",
+        "model": "aws-bedrock/claude-haiku-4-5",
+        "apiBase": "https://llm-gw.agenzo.com/v1",
+        "apiKey": "llmgtwy_xxx"
+      }
+    }
   },
   "workspace": {
     "defaultCwd": "/Users/you/Projects",
@@ -293,25 +333,57 @@ tailscale serve 5180
 
 `workspace.allowedRoots` — `/cd` 能去的根目录白名单，限制爆炸半径。
 
+`runtime.profiles.openai` — 直接对接 OpenAI 兼容接口；默认读取 `OPENAI_API_KEY` / `OPENAI_API_BASE` / `OPENAI_MODEL`，也可以显式写进配置。
+
+你也可以直接配置多个 OpenAI 兼容 profile，例如：
+
+```json
+{
+  "runtime": {
+    "default": "auto",
+    "profiles": {
+      "openai-fast": {
+        "kind": "openai-compatible",
+        "model": "aws-bedrock/claude-haiku-4-5",
+        "apiBase": "https://llm-gw.agenzo.com/v1",
+        "apiKey": "llmgtwy_xxx"
+      },
+      "openai-strong": {
+        "kind": "openai-compatible",
+        "model": "aws-bedrock/claude-sonnet-4-5",
+        "apiBase": "https://llm-gw.agenzo.com/v1",
+        "apiKey": "llmgtwy_xxx"
+      }
+    }
+  }
+}
+```
+
+然后：
+- 用 `/runtime openai-fast` 或 `/runtime openai-strong` 让用户手动切换
+- 用 `/runtime check` 查看每个 profile 当前是否可用
+- 把它们放进 `runtime.router` / `fallbackProfiles` 里交给自动路由
+
 </details>
 
 ### CLI
 
 ```bash
-lark-kiro-bridge init                # 扫码创建飞书应用（首选）
-lark-kiro-bridge init --manual       # 手动输入已有 App ID/Secret
-lark-kiro-bridge init --app-id <id> --app-secret <s>   # 一行搞定（CI 友好）
-lark-kiro-bridge run                 # 前台启动（首次自动跳扫码）
-lark-kiro-bridge config-show         # 显示当前配置（脱敏）
+lwa init                # 扫码创建飞书应用（首选）
+lwa init --manual       # 手动输入已有 App ID/Secret
+lwa init --app-id <id> --app-secret <s>   # 一行搞定（CI 友好）
+lwa run                 # 前台启动（首次自动跳扫码）
+lwa chat                # 本地终端直接对话（CLI ingress）
+lwa config-show         # 显示当前配置（脱敏）
 
-lark-kiro-bridge start               # 装并起 daemon
-lark-kiro-bridge stop                # 停 daemon
-lark-kiro-bridge restart             # 重启
-lark-kiro-bridge status              # 状态
-lark-kiro-bridge unregister          # 卸载
+lwa start               # 装并起 daemon
+lwa stop                # 停 daemon
+lwa restart             # 重启
+lwa status              # 状态
+lwa unregister          # 卸载
 
-lark-kiro-bridge ps                  # 列本机所有 bridge 进程
-lark-kiro-bridge kill <id> [--force] # 杀掉某个进程
+lwa ps                  # 列本机所有 bridge 进程
+lwa kill <id> [--force] # 杀掉某个进程
 ```
 
 ## 📚 进阶文档
@@ -334,11 +406,11 @@ PR / Issue 都欢迎。开发流程：
 
 ```bash
 git clone https://github.com/walterwang0x01/lwa-bridge.git
-cd lark-kiro-bridge
+cd lwa
 pnpm install                                # pnpm workspace，会顺带装 dashboard-ui 依赖
 pnpm typecheck && pnpm lint && pnpm test    # 提交前必跑
 pnpm build                                  # 先构建 dashboard-ui 再 tsup 主包
-node bin/lark-kiro-bridge.mjs run           # 本地跑（先 stop daemon）
+node bin/lwa.mjs run           # 本地跑（先 stop daemon）
 ```
 
 代码规范：TypeScript strict / Biome lint / vitest 测试 / commit 用 conventional commits。`dashboard-ui/`（Web Dashboard 前端）是独立的 Vue 3 + Vite 子项目，`.vue` 文件的类型检查走 `vue-tsc`（`pnpm typecheck` 里已级联），biome 只覆盖它的 `.ts` 文件。

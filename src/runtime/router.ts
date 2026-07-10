@@ -129,7 +129,7 @@ export async function chooseRuntimeProfile(
     [preferredName, fallbackName],
     fallbackProfilesForBucket(taskBucket, cfg),
     cfg.runtime?.router?.fallbackProfiles ?? [],
-    ['kiro', 'cursor', 'gemini'],
+    ['kiro', 'cursor', 'gemini', 'openai-fast', 'openai-strong'],
   );
 
   const quotaPick = await pickFirstQuotaOkProfile(profileOrder, available, cfg, monthUsageByKind);
@@ -198,6 +198,15 @@ export async function chooseModelForProfile(
       mode: 'fixed',
       selectedModel: profile.model ?? 'auto',
       reason: 'gemini-fixed-model',
+      complexityScore: complexityScore(cfg, ctx),
+      availableModelCount: 1,
+    };
+  }
+  if (profile.kind === 'openai-compatible') {
+    return {
+      mode: 'fixed',
+      selectedModel: profile.model,
+      reason: profile.model ? 'openai-fixed-model' : 'openai-fixed-default',
       complexityScore: complexityScore(cfg, ctx),
       availableModelCount: 1,
     };

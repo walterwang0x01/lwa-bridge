@@ -14,7 +14,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  rmSync(join(TMP, '.lark-kiro-bridge', 'task-history.json'), { force: true });
+  rmSync(join(TMP, '.lwa', 'task-history.json'), { force: true });
 });
 
 function makeRecord(taskId: string, finishedAt: number) {

@@ -144,4 +144,75 @@ describe('chooseRuntimeProfile', () => {
     );
     expect(decision.selectedModel).toBe('claude-sonnet-5');
   });
+
+  it('openai-compatible 返回固定模型选择', async () => {
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+    });
+    const decision = await chooseModelForProfile(
+      cfg,
+      {
+        kind: 'openai-compatible',
+        bin: 'openai-compatible',
+        model: 'aws-bedrock/claude-haiku-4-5',
+        apiBase: 'https://llm-gw.agenzo.com/v1',
+        apiKey: 'test-key',
+      },
+      { prompt: '帮我总结这段话' },
+    );
+    expect(decision.selectedModel).toBe('aws-bedrock/claude-haiku-4-5');
+    expect(decision.reason).toBe('openai-fixed-model');
+  });
+
+  it('smart 路由可把简单/复杂任务分流到 openai-fast/openai-strong', async () => {
+    vi.spyOn(registry, 'discoverRuntimeRegistry').mockResolvedValue([
+      {
+        profileName: 'openai-fast',
+        profile: {
+          kind: 'openai-compatible',
+          bin: 'openai-compatible',
+          model: 'aws-bedrock/claude-haiku-4-5',
+          apiBase: 'https://llm-gw.agenzo.com/v1',
+          apiKey: 'test-key',
+        },
+        available: true,
+        detail: 'gateway llm-gw.agenzo.com',
+        models: [],
+      },
+      {
+        profileName: 'openai-strong',
+        profile: {
+          kind: 'openai-compatible',
+          bin: 'openai-compatible',
+          model: 'aws-bedrock/claude-sonnet-4-5',
+          apiBase: 'https://llm-gw.agenzo.com/v1',
+          apiKey: 'test-key',
+        },
+        available: true,
+        detail: 'gateway llm-gw.agenzo.com',
+        models: [],
+      },
+    ]);
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+      runtime: {
+        default: 'auto',
+        router: {
+          mode: 'smart',
+          lark: {
+            simpleProfile: 'openai-fast',
+            complexProfile: 'openai-strong',
+            conduitProfile: 'kiro',
+          },
+          fallbackProfiles: ['openai-fast', 'openai-strong'],
+        },
+      },
+    });
+    const simple = await chooseRuntimeProfile(cfg, { prompt: '帮我总结这段话' });
+    const complex = await chooseRuntimeProfile(cfg, {
+      prompt: '请在 monorepo 里做跨模块重构，先分析架构，再修改多个文件，最后 review',
+    });
+    expect(simple.profileName).toBe('openai-fast');
+    expect(complex.profileName).toBe('openai-strong');
+  });
 });

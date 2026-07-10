@@ -68,6 +68,30 @@ export interface DashboardHandle {
   close: () => Promise<void>;
 }
 
+function summarizeRuntimeEntry(
+  entry: Awaited<ReturnType<typeof discoverRuntimeRegistry>>[number],
+): object {
+  const profile = entry.profile;
+  const base: Record<string, unknown> = {
+    profileName: entry.profileName,
+    runtimeKind: profile.kind,
+    available: entry.available,
+    model: profile.model ?? null,
+  };
+  if (profile.kind === 'openai-compatible') {
+    let apiBaseHost: string | null = null;
+    try {
+      apiBaseHost = profile.apiBase ? new URL(profile.apiBase).host : null;
+    } catch {
+      apiBaseHost = profile.apiBase ?? null;
+    }
+    base['apiBaseHost'] = apiBaseHost;
+    return base;
+  }
+  base['bin'] = profile.bin;
+  return base;
+}
+
 async function buildOverview(deps: DashboardDeps): Promise<object> {
   const chats = await deps.sessions.listAll();
   const sessions = Object.entries(chats).map(([chatId, s]) => ({
@@ -142,6 +166,7 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     adaptiveRecommendation,
     adaptiveReadiness,
     metricsAlerts,
+    runtimeProfiles: registry.map((entry) => summarizeRuntimeEntry(entry)),
     quotaStatuses,
     logs,
   };

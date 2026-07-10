@@ -66,10 +66,7 @@ describe('GitAssetSource', () => {
     expect(r.installed).toBe(true);
     expect(existsSync(join(TMP, '.kiro', 'skills', 'demo-skill', 'SKILL.md'))).toBe(true);
 
-    const installsRaw = readFileSync(
-      join(TMP, '.lark-kiro-bridge', 'asset-installs.json'),
-      'utf-8',
-    );
+    const installsRaw = readFileSync(join(TMP, '.lwa', 'asset-installs.json'), 'utf-8');
     const installs = JSON.parse(installsRaw) as {
       installs: Array<{ assetId: string; sourceGitUrl: string }>;
     };

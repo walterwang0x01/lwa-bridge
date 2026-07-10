@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import('./lwa.mjs').catch((err) => {
+import('../dist/cli.js').catch((err) => {
   console.error(err);
   process.exit(1);
 });

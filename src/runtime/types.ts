@@ -7,12 +7,13 @@
 import type { SessionEvent } from '../kiro/acp/messages.js';
 
 /** 支持的运行时种类。新增 CLI 时扩展此联合类型并实现对应适配器。 */
-export type RuntimeKind = 'kiro-cli-acp' | 'cursor-agent-cli' | 'gemini-cli';
+export type RuntimeKind = 'kiro-cli-acp' | 'cursor-agent-cli' | 'gemini-cli' | 'openai-compatible';
 
 export const RUNTIME_KINDS = new Set<RuntimeKind>([
   'kiro-cli-acp',
   'cursor-agent-cli',
   'gemini-cli',
+  'openai-compatible',
 ]);
 
 /** 与 ACP SessionEvent 对齐的统一事件（卡片渲染器直接消费）。 */
@@ -44,6 +45,10 @@ export interface RuntimeProfile {
   agent?: string;
   /** cursor-agent-cli：等同 --force / --yolo */
   force?: boolean;
+  /** openai-compatible：OpenAI 兼容 chat completions base URL */
+  apiBase?: string;
+  /** openai-compatible：API key；不填则回退到环境变量 */
+  apiKey?: string;
   timeoutMs?: number;
   idleTimeoutMinutes?: number;
   systemPromptPrefix?: string;

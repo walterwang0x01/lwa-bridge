@@ -40,6 +40,10 @@ import {
   chooseRuntimeProfile,
   classifyTaskBucket,
 } from '../runtime/router.js';
+import { cliCommand, configPathTilde } from '../lib/branding.js';
+import { discoverRuntimeRegistry } from '../runtime/registry.js';
+import { formatModelTierSummary, suggestFastStrongModels } from '../runtime/openaiModels.js';
+import { probeRuntimeQuota } from '../runtime/quota.js';
 import { decodeSessionId } from '../runtime/sessionId.js';
 import type { RuntimeProfile } from '../runtime/types.js';
 import { AcpPool } from '../kiro/acpPool.js';
@@ -857,7 +861,7 @@ export class Dispatcher {
             '',
             '**怎么办**',
             cmd.name === 'model' || cmd.name === 'agent'
-              ? `要切换 ${cmd.name === 'model' ? '模型' : 'agent'}，请编辑 \`~/.lark-kiro-bridge/config.json\` 里的 \`kiro.${cmd.name}\` 字段，然后 \`/reconnect\` 生效。`
+              ? `要切换 ${cmd.name === 'model' ? '模型' : 'agent'}，请编辑 \`${configPathTilde()}\` 里的 \`kiro.${cmd.name}\` 字段，然后 \`/reconnect\` 生效。`
               : `这条命令只在终端跑 \`kiro-cli\` 时可用，桥接器无法代理。`,
             '',
             '**桥接器自身的命令** 用 `/help` 查看。',
@@ -1070,7 +1074,7 @@ export class Dispatcher {
     const lines = readRecentLogLines(200);
     const userDesc = description.trim() || '（无）';
     const prompt = [
-      '你是 lark-kiro-bridge 的运维助手。下面是这个桥接器最近的结构化日志（NDJSON），',
+      '你是 LWA gateway 的运维助手。下面是这个网关最近的结构化日志（NDJSON），',
       '以及用户描述的问题。请基于日志找出可能的故障点，给出诊断结论和修复建议。',
       '只看日志，不要假设其他状态。',
       '',
@@ -1135,6 +1139,7 @@ export class Dispatcher {
         const cur = n === profileName ? ' ← 当前' : '';
         return `• \`${n}\` — ${p.kind} (\`${p.bin}\`)${cur}`;
       });
+      const hint = names.map((n) => `\`/runtime ${n}\``).join(' · ');
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
@@ -1146,7 +1151,69 @@ export class Dispatcher {
             '可用 profile：',
             ...lines,
             '',
-            '切换：`/runtime cursor` · `/runtime gemini` · `/runtime kiro`',
+            `切换：${hint}`,
+            '诊断：`/runtime check`',
+          ].join('\n'),
+        }),
+      );
+      return;
+    }
+
+    if (cmd.mode === 'check') {
+      const registry = await discoverRuntimeRegistry(this.config);
+      const currentProfileName = (await this.resolveChatRuntime(conversationId)).profileName;
+      const monthUsageByKind = this.taskHistory
+        ? await this.taskHistory.countMonthUsageByKind().catch(() => ({}) as Record<string, number>)
+        : ({} as Record<string, number>);
+      const lines: string[] = [];
+      for (const entry of registry) {
+        const curMark = currentProfileName === entry.profileName ? ' ← 当前' : '';
+        const base = `• \`${entry.profileName}\` — ${entry.profile.kind}${curMark}`;
+        if (!entry.available) {
+          lines.push(`${base}\n  - 状态：不可用\n  - 原因：${entry.detail ?? '未通过可用性检查'}`);
+          continue;
+        }
+        const quota = await probeRuntimeQuota(entry.profile, entry.profileName, this.config, {
+          monthUsage: monthUsageByKind[entry.profile.kind],
+        });
+        const modelLines: string[] = [];
+        if (entry.profile.kind === 'openai-compatible' && entry.models.length > 0) {
+          const { fast, strong } = suggestFastStrongModels(entry.models);
+          modelLines.push(
+            `  - 网关模型：${entry.models.length} 个（配置 model: \`${entry.profile.model ?? '-'}\`）`,
+            `  - 启发式建议：fast=\`${fast ?? '-'}\` strong=\`${strong ?? '-'}\``,
+            formatModelTierSummary(entry.models, 6)
+              .split('\n')
+              .map((l) => `    ${l}`)
+              .join('\n'),
+          );
+        } else if (entry.profile.kind === 'kiro-cli-acp' && entry.models.length > 0) {
+          modelLines.push(
+            `  - 模型：${entry.models.slice(0, 6).join(', ')}${
+              entry.models.length > 6 ? ` …共 ${entry.models.length} 个` : ''
+            }`,
+          );
+        } else if (entry.detail?.includes('models:')) {
+          modelLines.push(`  - 模型列表：${entry.detail}`);
+        }
+        lines.push(
+          `${base}\n  - 状态：可用\n  - 探测：${entry.detail ?? 'ok'}\n  - Quota：${quota.state}${
+            quota.detail ? ` · ${quota.detail}` : ''
+          }${modelLines.length > 0 ? `\n${modelLines.join('\n')}` : ''}`,
+        );
+      }
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'done',
+          title: '🩺 Runtime 检查',
+          body: [
+            '用于检查当前 bridge 上所有 runtime profile 的可用性与配额状态。',
+            '',
+            ...lines,
+            '',
+            '提示：OpenAI 兼容网关用 `GET /models` 发现模型；fast/strong 是 bridge 根据模型 id 的启发式分层，最终以 config 里各 profile 的 `model` 为准。',
+            `终端也可运行：\`${cliCommand('models')}\``,
           ].join('\n'),
         }),
       );
