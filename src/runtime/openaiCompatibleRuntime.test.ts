@@ -97,4 +97,22 @@ describe('OpenAICompatibleRuntime', () => {
       'second question',
     ]);
   });
+
+  it('recreates missing session id instead of throwing', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: 'recovered' } }],
+      }),
+    } as Response);
+
+    const rt = new OpenAICompatibleRuntime(profile, { cwd: process.cwd() });
+    const ghostId = '00000000-0000-4000-8000-000000000099';
+    await rt.loadSession(ghostId, process.cwd());
+    const events = [];
+    for await (const ev of rt.prompt(ghostId, 'hello')) {
+      events.push(ev);
+    }
+    expect(events.some((e) => e.kind === 'message' && e.text === 'recovered')).toBe(true);
+  });
 });

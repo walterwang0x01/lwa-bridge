@@ -2,11 +2,10 @@
  * LWA CLI 入口（主命令 `lwa`；兼容 `lwa-bridge` / `lark-kiro-bridge`）
  *
  * 子命令：
- *   init         首次配置：填入飞书 App ID / Secret，生成 ~/.lwa/config.json
- *   run          前台启动 gateway，监听飞书消息
- *   chat         本地终端对话
- *   config-show  打印当前配置（隐藏 secret）
- *   service ...  跨平台守护进程管理（launchd / systemd / Task Scheduler）
+ *   (default) / code  本地 coding REPL（默认）
+ *   chat              本地 IM 演练 REPL
+ *   serve / run       Gateway：按 ingress.channels 连接飞书/Slack
+ *   init / models / plan / service ...
  */
 import { Command } from 'commander';
 import { createInterface } from 'node:readline/promises';
@@ -23,15 +22,13 @@ import { formatModelTierSummary, suggestFastStrongModels } from './runtime/opena
 import { getLogger } from './lib/logger.js';
 import { getDaemonAdapter, DaemonError } from './daemon/index.js';
 import { listProcesses, findProcess } from './daemon/registry.js';
+import { listPlanIds, PLAN_PRESETS, resolvePlanId } from './runtime/planProfiles.js';
 
 const program = new Command();
 
-// 从 package.json 读真实版本，避免 cli.ts 里硬编码漂移
 function readPackageVersion(): string {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    // dist/cli.js → ../package.json
-    // src/cli.ts (vitest) → ../package.json
     const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
     for (const p of candidates) {
       if (existsSync(p)) {
@@ -40,15 +37,57 @@ function readPackageVersion(): string {
       }
     }
   } catch {
-    // ignore，回退到默认
+    // ignore
   }
   return '0.0.0';
 }
 
+async function runLocalRepl(mode: 'code' | 'chat' = 'code'): Promise<void> {
+  if (!existsSync(CONFIG_FILE)) {
+    console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
+    process.exit(1);
+  }
+  // REPL：默认压低日志，避免打断底部输入（可用 LARK_KIRO_LOG_LEVEL=info 打开）
+  if (!process.env['LARK_KIRO_LOG_LEVEL']) {
+    process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
+  }
+  await runBridge({ cliOnly: true, cliMode: mode });
+}
+
+async function runGateway(opts: { chat?: boolean }): Promise<void> {
+  if (!existsSync(CONFIG_FILE) && process.stdin.isTTY) {
+    try {
+      const { config } = await runQrWizard();
+      saveConfig(config);
+      console.log(`✅ 配置已保存到 ${CONFIG_FILE}\n`);
+    } catch (e) {
+      console.error(`扫码向导失败：${(e as Error).message}`);
+      console.error(`改用手动模式：${cliCommand('init --manual')}\n`);
+      process.exit(1);
+    }
+  }
+  await runBridge({ attachCliChat: opts.chat });
+  await new Promise(() => undefined);
+}
+
 program
   .name(CLI_NAME)
-  .description('LWA gateway — Feishu/CLI entry for local multi-agent runtimes')
-  .version(readPackageVersion());
+  .description('LWA — local multi-agent workbench (code REPL + chat rehearsal + Feishu gateway)')
+  .version(readPackageVersion())
+  .action(async () => {
+    try {
+      if (process.stdin.isTTY) {
+        await runLocalRepl('code');
+        return;
+      }
+      program.help();
+    } catch (e) {
+      const err = e as Error;
+      console.error(`❌ ${err.message}`);
+      if (process.env['LARK_KIRO_DEBUG']) console.error(err.stack);
+      process.exit(1);
+    }
+  });
 
 program
   .command('init')
@@ -67,21 +106,21 @@ program
         process.exit(1);
       }
 
-      // 已直接传 --app-id / --app-secret 走快速模式
       if (opts.appId && opts.appSecret) {
         saveConfig(defaultConfig(opts.appId, opts.appSecret));
         console.log(`✅ Wrote config to ${CONFIG_FILE}`);
-        console.log(`  Run: ${cliCommand('run')}`);
+        console.log(
+          `  Code: ${cliCommand('code')}   Chat: ${cliCommand('chat')}   Gateway: ${cliCommand('serve')}`,
+        );
         return;
       }
 
-      // 默认走扫码向导（除非 --manual 或 stdin 不是 TTY）
       if (!opts.manual && process.stdin.isTTY) {
         try {
           const { config } = await runQrWizard();
           saveConfig(config);
           console.log(`✅ 配置已保存到 ${CONFIG_FILE}`);
-          console.log(`   下一步：${cliCommand('run')}\n`);
+          console.log(`   本地：${cliCommand('code')}   飞书：${cliCommand('serve')}\n`);
           return;
         } catch (e) {
           console.error(`扫码向导失败：${(e as Error).message}`);
@@ -90,7 +129,6 @@ program
         }
       }
 
-      // 手动模式：交互式问 ID/Secret
       let appId = opts.appId;
       let appSecret = opts.appSecret;
       const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -106,31 +144,27 @@ program
       }
       saveConfig(defaultConfig(appId, appSecret));
       console.log(`✅ Wrote config to ${CONFIG_FILE}`);
-      console.log(`  Run: ${cliCommand('run')}`);
+      console.log(`  Code: ${cliCommand('code')}   Gateway: ${cliCommand('serve')}`);
     },
   );
 
+async function serveAction(opts: { chat?: boolean }): Promise<void> {
+  try {
+    await runGateway(opts);
+  } catch (e) {
+    const err = e as Error;
+    console.error(`❌ ${err.message}`);
+    if (process.env['LARK_KIRO_DEBUG']) console.error(err.stack);
+    process.exit(1);
+  }
+}
+
 program
-  .command('run')
-  .description('Run the bridge in foreground (auto-launch QR wizard if no config)')
-  .option('--chat', 'Attach local terminal chat alongside Feishu/Slack (requires TTY)')
-  .action(async (opts: { chat?: boolean }) => {
+  .command('code')
+  .description('Local coding REPL (default; Kiro-first plan routing)')
+  .action(async () => {
     try {
-      // 没配置：自动跳起扫码向导（开箱即用）
-      if (!existsSync(CONFIG_FILE) && process.stdin.isTTY) {
-        try {
-          const { config } = await runQrWizard();
-          saveConfig(config);
-          console.log(`✅ 配置已保存到 ${CONFIG_FILE}\n`);
-        } catch (e) {
-          console.error(`扫码向导失败：${(e as Error).message}`);
-          console.error(`改用手动模式：${cliCommand('init --manual')}\n`);
-          process.exit(1);
-        }
-      }
-      await runBridge({ attachCliChat: opts.chat });
-      // 保持进程不退出，等信号
-      await new Promise(() => undefined);
+      await runLocalRepl('code');
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);
@@ -140,19 +174,57 @@ program
   });
 
 program
+  .command('serve')
+  .description('Start gateway (Feishu/Slack per ingress.channels); opens Dashboard')
+  .option('--chat', 'Also attach local REPL on this TTY')
+  .action(serveAction);
+
+program
+  .command('run')
+  .description('Alias of serve')
+  .option('--chat', 'Also attach local REPL on this TTY')
+  .action(serveAction);
+
+program
   .command('chat')
-  .description('Local terminal chat (full bridge: cron, dashboard, routing)')
+  .description('Local IM-style REPL (Feishu persona rehearsal; no WebSocket)')
   .action(async () => {
     try {
-      if (!existsSync(CONFIG_FILE)) {
-        console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
-        process.exit(1);
-      }
-      await runBridge({ cliOnly: true });
+      await runLocalRepl('chat');
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);
       if (process.env['LARK_KIRO_DEBUG']) console.error(err.stack);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('plan')
+  .description('Show harness plan presets (kiro-unlimited+cursor-lite, …)')
+  .argument('[id]', 'optional plan id')
+  .action((id?: string) => {
+    try {
+      const cfg = existsSync(CONFIG_FILE) ? loadConfig() : null;
+      const current = cfg ? resolvePlanId(cfg) : 'kiro-unlimited+cursor-lite';
+      if (id) {
+        if (!(id in PLAN_PRESETS)) {
+          console.error(`Unknown plan: ${id}. Available: ${listPlanIds().join(', ')}`);
+          process.exit(1);
+        }
+        const p = PLAN_PRESETS[id as keyof typeof PLAN_PRESETS];
+        console.log(`## ${p.id}\n${p.label}`);
+        console.log(JSON.stringify({ code: p.code, chat: p.chat, lark: p.lark }, null, 2));
+        return;
+      }
+      console.log(`current plan: ${current}`);
+      for (const pid of listPlanIds()) {
+        const p = PLAN_PRESETS[pid];
+        console.log(`- ${pid}: ${p.label}${pid === current ? ' ← current' : ''}`);
+      }
+      console.log(`\nSet in ~/.lwa/config.json: "runtime": { "plan": "${current}" }`);
+    } catch (e) {
+      console.error((e as Error).message);
       process.exit(1);
     }
   });
@@ -208,9 +280,6 @@ program
     }
   });
 
-/**
- * 跨平台守护命令辅助：捕获 DaemonError（不支持的平台）友好提示
- */
 async function withDaemon<T>(
   fn: (d: ReturnType<typeof getDaemonAdapter>) => Promise<T>,
 ): Promise<void> {
@@ -220,7 +289,7 @@ async function withDaemon<T>(
   } catch (e) {
     if (e instanceof DaemonError) {
       console.error(`❌ ${e.message}`);
-      console.error(`   Use \`${cliCommand('run')}\` to start in foreground instead.`);
+      console.error(`   Use \`${cliCommand('serve')}\` to start in foreground instead.`);
       process.exit(1);
     }
     throw e;
@@ -259,14 +328,12 @@ service
     await withDaemon((d) => d.status());
   });
 
-// 顶级别名（业界惯例：start/stop/restart/status 直接顶在 CLI 上）
 program
   .command('start')
   .description('Install (if needed) and start the background daemon')
   .action(async () => {
     await withDaemon(async (d) => {
       await d.install().catch((e) => {
-        // 已存在的服务定义不算错；adapter 内部会幂等处理
         console.error(`(install) ${(e as Error).message}`);
       });
       await d.start();
@@ -286,7 +353,6 @@ program
   .action(async () => {
     await withDaemon(async (d) => {
       await d.stop().catch(() => undefined);
-      // 等服务管理器彻底清空（macOS launchd bootout 异步、Linux 也类似）
       await new Promise((r) => setTimeout(r, 1500));
       await d.start();
     });
@@ -349,16 +415,14 @@ program
       await new Promise((r) => setTimeout(r, 2000));
       try {
         process.kill(target.pid, 0);
-        // 还活着
         process.kill(target.pid, 'SIGKILL');
         console.log(`✅ SIGKILL sent to pid ${target.pid}`);
       } catch {
-        // 已死
+        // already dead
       }
     }
   });
 
-// 兜底未知命令
 program.parseAsync(process.argv).catch((e) => {
   getLogger().child({ module: 'cli' }).error({ err: e }, 'cli error');
   process.exit(1);

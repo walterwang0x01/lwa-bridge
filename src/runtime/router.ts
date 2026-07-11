@@ -1,11 +1,14 @@
 /**
- * 智能 runtime 路由：简单任务优先 cursor，复杂任务优先 kiro。
+ * 智能 runtime 路由：按 harness 模式（code/chat/lark）+ 套餐 plan 选引擎。
+ * OpenAPI 网关可选：熔断打开时从候选剔除。
  */
 import type { Config } from '../lib/config.js';
 import { resolveRuntimeProfile } from './config.js';
 import { discoverRuntimeRegistry } from './registry.js';
 import { fallbackProfilesForBucket, pickFirstQuotaOkProfile, uniqueProfileOrder } from './quota.js';
 import type { RuntimeKind, ModelRouteDecision, RuntimeProfile } from './types.js';
+import { resolveModeRouteTable, type HarnessMode } from './planProfiles.js';
+import { sharedGatewayHealth, type GatewayHealth } from './gatewayHealth.js';
 
 export type TaskBucket = 'chat' | 'review' | 'plan' | 'edit' | 'conduit';
 
@@ -51,6 +54,39 @@ export function complexityScore(cfg: Config, ctx: RuntimeRouteContext): number {
   return score;
 }
 
+async function filterByGatewayHealth(
+  available: Array<{ name: string; profile: RuntimeProfile }>,
+  gatewayOptional: boolean,
+  health: GatewayHealth,
+): Promise<{
+  available: Array<{ name: string; profile: RuntimeProfile }>;
+  skipped: string[];
+}> {
+  if (!gatewayOptional) return { available, skipped: [] };
+  const kept: Array<{ name: string; profile: RuntimeProfile }> = [];
+  const skipped: string[] = [];
+  for (const entry of available) {
+    if (entry.profile.kind !== 'openai-compatible') {
+      kept.push(entry);
+      continue;
+    }
+    if (!health.allows(entry.profile, entry.name)) {
+      skipped.push(entry.name);
+      continue;
+    }
+    const state = health.getState(entry.profile, entry.name);
+    if (state === 'half-open') {
+      const probe = await health.probe(entry.profile, entry.name);
+      if (!probe.ok) {
+        skipped.push(entry.name);
+        continue;
+      }
+    }
+    kept.push(entry);
+  }
+  return { available: kept, skipped };
+}
+
 export async function chooseRuntimeProfile(
   cfg: Config,
   ctx: RuntimeRouteContext,
@@ -58,13 +94,31 @@ export async function chooseRuntimeProfile(
   options?: {
     taskBucket?: TaskBucket;
     monthUsageByKind?: Partial<Record<RuntimeKind, number>>;
+    /** harness 模式：决定用哪张路由表（默认 lark，兼容旧行为） */
+    harnessMode?: HarnessMode;
+    health?: GatewayHealth;
   },
 ): Promise<RuntimeDecision> {
   const taskBucket = options?.taskBucket ?? classifyTaskBucket(ctx);
   const monthUsageByKind = options?.monthUsageByKind;
+  const harnessMode = options?.harnessMode ?? 'lark';
+  const health = options?.health ?? sharedGatewayHealth;
+  const modeTable = resolveModeRouteTable(cfg, harnessMode);
 
   if (explicitProfileName) {
     const profile = resolveRuntimeProfile(cfg, explicitProfileName);
+    if (
+      profile.kind === 'openai-compatible' &&
+      modeTable.gatewayOptional &&
+      !health.allows(profile, explicitProfileName)
+    ) {
+      return {
+        profileName: explicitProfileName,
+        profile,
+        reason: 'explicit-profile;gateway-circuit-open',
+        complexityScore: complexityScore(cfg, ctx),
+      };
+    }
     const available = [{ name: explicitProfileName, profile }];
     const quotaPick = await pickFirstQuotaOkProfile(
       [explicitProfileName],
@@ -93,41 +147,75 @@ export async function chooseRuntimeProfile(
   }
 
   const mode = cfg.runtime?.router?.mode ?? 'manual';
-  const available = (await discoverRuntimeRegistry(cfg))
+  let available = (await discoverRuntimeRegistry(cfg))
     .filter((entry) => entry.available)
     .map((entry) => ({ name: entry.profileName, profile: entry.profile }));
+
+  const filtered = await filterByGatewayHealth(available, modeTable.gatewayOptional, health);
+  available = filtered.available;
+  const gatewaySkipNote =
+    filtered.skipped.length > 0 ? `;gateway_skip(${filtered.skipped.join(',')})` : '';
+
   if (available.length === 1) {
     const only = available[0]!;
     return {
       profileName: only.name,
       profile: only.profile,
-      reason: 'single-available-runtime',
+      reason: `single-available-runtime${gatewaySkipNote}`,
       complexityScore: complexityScore(cfg, ctx),
     };
   }
 
   const defaultName = cfg.runtime?.default ?? 'kiro';
-  if (mode !== 'smart' || defaultName !== 'auto') {
+  // code/chat：即使 default≠auto，smart 模式也走 mode 路由表（避免飞书 openai 路由污染 coding）
+  const useSmartModeTable =
+    mode === 'smart' &&
+    (defaultName === 'auto' || harnessMode === 'code' || harnessMode === 'chat');
+
+  if (!useSmartModeTable) {
     const score = complexityScore(cfg, ctx);
+    const name = defaultName === 'auto' ? modeTable.complexProfile : defaultName;
+    const hit = available.find((a) => a.name === name);
+    if (hit) {
+      return {
+        profileName: hit.name,
+        profile: hit.profile,
+        reason: `${mode === 'smart' ? 'auto-fallback-default' : 'manual-default'};mode=${harnessMode}${gatewaySkipNote}`,
+        complexityScore: score,
+      };
+    }
+    const fb = available[0];
+    if (fb) {
+      return {
+        profileName: fb.name,
+        profile: fb.profile,
+        reason: `manual-default-fallback;mode=${harnessMode}${gatewaySkipNote}`,
+        complexityScore: score,
+      };
+    }
     return {
-      profileName: defaultName === 'auto' ? 'kiro' : defaultName,
-      profile: resolveRuntimeProfile(cfg, defaultName === 'auto' ? 'kiro' : defaultName),
-      reason: mode === 'smart' ? 'auto-fallback-default' : 'manual-default',
+      profileName: 'kiro',
+      profile: resolveRuntimeProfile(cfg, 'kiro'),
+      reason: `smart-hard-fallback;mode=${harnessMode}${gatewaySkipNote}`,
       complexityScore: score,
     };
   }
 
-  const lark = cfg.runtime?.router?.lark;
-  const simpleName = lark?.simpleProfile ?? 'cursor';
-  const complexName = lark?.complexProfile ?? 'kiro';
+  const simpleName = modeTable.simpleProfile;
+  const complexName =
+    taskBucket === 'conduit' ? modeTable.conduitProfile : modeTable.complexProfile;
   const score = complexityScore(cfg, ctx);
   const threshold = cfg.runtime?.router?.rules?.complexityThreshold ?? 4;
   const preferredName = score >= threshold ? complexName : simpleName;
   const fallbackName = preferredName === simpleName ? complexName : simpleName;
 
+  const bucketFb =
+    modeTable.fallbackByBucket?.[taskBucket] ?? fallbackProfilesForBucket(taskBucket, cfg);
+
   const profileOrder = uniqueProfileOrder(
     [preferredName, fallbackName],
-    fallbackProfilesForBucket(taskBucket, cfg),
+    bucketFb,
+    modeTable.fallbackProfiles,
     cfg.runtime?.router?.fallbackProfiles ?? [],
     ['kiro', 'cursor', 'gemini', 'openai-fast', 'openai-strong'],
   );
@@ -135,7 +223,9 @@ export async function chooseRuntimeProfile(
   const quotaPick = await pickFirstQuotaOkProfile(profileOrder, available, cfg, monthUsageByKind);
   if (quotaPick) {
     const baseReason =
-      score >= threshold ? `smart-complex(score=${score})` : `smart-simple(score=${score})`;
+      score >= threshold
+        ? `smart-complex(score=${score});mode=${harnessMode}`
+        : `smart-simple(score=${score});mode=${harnessMode}`;
     const quotaNote =
       quotaPick.name !== preferredName
         ? `;quota_fallback(${preferredName}->${quotaPick.name})`
@@ -145,7 +235,7 @@ export async function chooseRuntimeProfile(
     return {
       profileName: quotaPick.name,
       profile: quotaPick.profile,
-      reason: `${baseReason}${quotaNote}`,
+      reason: `${baseReason}${quotaNote}${gatewaySkipNote}`,
       complexityScore: score,
     };
   }
@@ -153,7 +243,10 @@ export async function chooseRuntimeProfile(
   return {
     profileName: 'kiro',
     profile: resolveRuntimeProfile(cfg, 'kiro'),
-    reason: available.length > 0 ? 'quota-all-depleted' : 'smart-hard-fallback',
+    reason:
+      available.length > 0
+        ? `quota-all-depleted;mode=${harnessMode}${gatewaySkipNote}`
+        : `smart-hard-fallback;mode=${harnessMode}${gatewaySkipNote}`,
     complexityScore: score,
   };
 }
@@ -173,7 +266,6 @@ function candidatesForTier(tierProfile: string, fallback: string[]): string[] {
       return ['claude-sonnet-5', 'claude-sonnet-4.6', 'claude-sonnet-4.5', ...fallback];
     case 'fast':
       return ['claude-haiku-4.5', 'deepseek-3.2', 'minimax-m2.5', ...fallback];
-    case 'balanced':
     default:
       return ['claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-sonnet-4', ...fallback];
   }

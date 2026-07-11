@@ -75,18 +75,22 @@ async function withSessionsLock<T>(fn: () => T): Promise<T> {
   }
 }
 
-async function createSession(cwd: string): Promise<string> {
-  const id = randomUUID();
-  await withSessionsLock(() => {
+async function ensureSession(sessionId: string, cwd: string): Promise<SessionRecord> {
+  return withSessionsLock(() => {
     const data = readSessionsFile();
-    data.sessions[id] = { cwd, messages: [], updatedAt: Date.now() };
+    const existing = data.sessions[sessionId];
+    if (existing) return existing;
+    const created: SessionRecord = { cwd, messages: [], updatedAt: Date.now() };
+    data.sessions[sessionId] = created;
     writeSessionsFile(data);
+    return created;
   });
-  return id;
 }
 
-async function getSession(sessionId: string): Promise<SessionRecord | undefined> {
-  return withSessionsLock(() => readSessionsFile().sessions[sessionId]);
+async function createSession(cwd: string): Promise<string> {
+  const id = randomUUID();
+  await ensureSession(id, cwd);
+  return id;
 }
 
 async function updateSession(
@@ -95,8 +99,10 @@ async function updateSession(
 ): Promise<void> {
   await withSessionsLock(() => {
     const data = readSessionsFile();
-    const current = data.sessions[sessionId];
-    if (!current) throw new Error(`openai session not found: ${sessionId}`);
+    let current = data.sessions[sessionId];
+    if (!current) {
+      current = { cwd: '', messages: [], updatedAt: Date.now() };
+    }
     data.sessions[sessionId] = updater(current);
     writeSessionsFile(data);
   });
@@ -145,20 +151,14 @@ export class OpenAICompatibleRuntime implements AgentRuntime {
   }
 
   async loadSession(id: string, cwd: string): Promise<void> {
-    const existing = await getSession(id);
-    if (!existing) {
-      this.sessionId = await createSession(cwd);
-      return;
-    }
+    await ensureSession(id, cwd);
     this.sessionId = id;
   }
 
   async *prompt(sessionId: string, text: string): AsyncIterable<UnifiedSessionEvent> {
     const sid = sessionId || this.sessionId || (await this.newSession(this.cwd));
-    const record = await getSession(sid);
-    if (!record) {
-      throw new Error(`openai session not found: ${sid}`);
-    }
+    const record = await ensureSession(sid, this.cwd);
+    this.sessionId = sid;
 
     const apiKey =
       this.profile.apiKey ?? this.extraEnv?.['OPENAI_API_KEY'] ?? process.env['OPENAI_API_KEY'];
@@ -233,4 +233,30 @@ export class OpenAICompatibleRuntime implements AgentRuntime {
   get availableSkills(): Array<{ name: string; description: string }> {
     return [];
   }
+}
+
+/** 读取 openai 会话消息（供 /compact）。 */
+export async function readOpenAISessionMessages(
+  sessionId: string,
+): Promise<Array<{ role: 'user' | 'assistant' | 'system'; content: string }>> {
+  if (!sessionId) return [];
+  return withSessionsLock(() => {
+    const data = readSessionsFile();
+    const rec = data.sessions[sessionId];
+    return rec?.messages ?? [];
+  });
+}
+
+/** 用摘要替换 openai 会话历史（保留一条 user 摘要）。 */
+export async function replaceOpenAISessionWithSummary(
+  sessionId: string,
+  cwd: string,
+  summary: string,
+): Promise<void> {
+  await updateSession(sessionId, (current) => ({
+    ...current,
+    cwd: current.cwd || cwd,
+    updatedAt: Date.now(),
+    messages: [{ role: 'user', content: summary }],
+  }));
 }

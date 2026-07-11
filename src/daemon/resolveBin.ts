@@ -20,7 +20,7 @@ export async function resolveBridgeBin(): Promise<BridgeBin> {
       const r = await execa(lookup, [bin], { reject: false });
       if (r.exitCode === 0 && r.stdout.trim()) {
         const path = r.stdout.split(/\r?\n/)[0]?.trim();
-        if (path) return { program: path, args: ['run'] };
+        if (path) return { program: path, args: ['serve'] };
       }
     } catch {
       // try next alias
@@ -29,5 +29,5 @@ export async function resolveBridgeBin(): Promise<BridgeBin> {
   const node = process.execPath;
   const fileUrl = new URL(import.meta.url).pathname;
   const guess = fileUrl.replace(/\/(dist|src)\/daemon\/resolveBin\.[mc]?js$/, '/bin/lwa.mjs');
-  return { program: node, args: [guess, 'run'] };
+  return { program: node, args: [guess, 'serve'] };
 }

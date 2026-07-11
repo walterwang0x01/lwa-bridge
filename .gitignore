@@ -19,6 +19,9 @@ coverage/
 # 注意：.kiro/（spec、conduit-workspace 的 DAG 定义）有价值，不忽略
 .kiro-conduit/
 
+# LWA parallel agent worktrees
+.lwa-worktrees/
+
 # CodeGraph
 .codegraph/
 

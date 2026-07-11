@@ -94,11 +94,17 @@
 # 1. Install
 npm i -g lark-kiro-bridge
 
-# 2. Run (first launch shows a QR — scan, approve, done)
-lwa run
+# 2a. Local pure REPL (no Feishu)
+lwa
+
+# 2b. Feishu gateway (first launch may show QR)
+lwa serve
 ```
 
-> **That's it** — scanning the QR in Feishu auto-creates the app, writes credentials, and grants required permissions.
+> **Local** is like Claude Code / kiro: one command into a REPL, then `/model` `/runtime` `/help`.  
+> **Feishu** uses `lwa serve`; Dashboard at `http://127.0.0.1:5180`. Channels via `ingress.channels` (default `["lark"]`).
+
+After `lwa serve`, DM the bot in Feishu — you should see a streaming card.
 
 DM the bot "hi" — you should see a streaming card immediately.
 
@@ -295,17 +301,21 @@ All other fields have sensible defaults.
 lwa init                # Scan QR to create Feishu app (recommended)
 lwa init --manual       # Manually enter existing App ID/Secret
 lwa init --app-id <id> --app-secret <s>   # One-shot (CI-friendly)
-lwa run                 # Foreground (auto-launches QR if no config)
-lark-kiro-bridge config-show         # Show current config (redacted)
+lwa                     # Local pure REPL (TTY default)
+lwa chat                # Same as above
+lwa serve               # Gateway (Feishu per ingress.channels)
+lwa run                 # Alias of serve
+lwa models              # List OpenAI-compatible gateway models
+lwa config-show         # Show current config (redacted)
 
 lwa start               # Install and start daemon
-lark-kiro-bridge stop                # Stop daemon
+lwa stop                # Stop daemon
 lwa restart             # Restart
 lwa status              # Daemon status
-lark-kiro-bridge unregister          # Uninstall
+lwa unregister          # Uninstall
 
-lark-kiro-bridge ps                  # List all bridge processes on this host
-lark-kiro-bridge kill <id> [--force] # Kill a process
+lwa ps                  # List all bridge processes on this host
+lwa kill <id> [--force] # Kill a process
 ```
 
 ## 📚 Documentation

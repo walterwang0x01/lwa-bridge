@@ -10,17 +10,23 @@
  *   /ws use <name>         切换到命名工作区
  *   /ws remove <name>      删除命名工作区
  *   /status                查看会话状态
+ *   /sessions              列出 CLI 会话
+ *   /resume [id]           切换/恢复 CLI 会话
+ *   /compact [focus]       压缩当前会话上下文
+ *   /plan [text]           进入 plan 阶段（或直接规划）
+ *   /review [text]         进入 review 阶段（或直接审查）
  *   /stop                  停止当前任务
  *   /timeout <N|off|default>  调整当前 chat 的 idle watchdog（分钟）
  *   /reconnect             重连 WebSocket
- *   /doctor [描述]          收集近期日志，让 Kiro 自己诊断
+ *   /doctor [描述]          CLI 无描述=本地体检；有描述=日志交给 Kiro 诊断
  *   /model                 列出可用模型 + 当前选中
  *   /model <name>          切换模型并写入 config.json（auto/default 表示清除覆盖）
  *   /help                  帮助
  *
- * kiro-cli 其他内置 TUI 命令（/agent /tools /compact /login /logout /session）
+ * kiro-cli 其他内置 TUI 命令（/agent /tools /login /logout）
  *   在非交互模式下 kiro-cli 不识别，会被 LLM 当成普通问题"假装"回答。
  *   桥接器拦下来给一个明确的提示，避免误导用户。
+ *   注意：/compact /sessions 已升级为 LWA 自有命令。
  *
  * 不识别的 /xxx 命令会被原样转发给 Kiro（让用户自己定义）。
  */
@@ -33,6 +39,19 @@ export type ParsedCommand =
   | { kind: 'ws-use'; name: string }
   | { kind: 'ws-remove'; name: string }
   | { kind: 'status' }
+  | { kind: 'sessions' }
+  | { kind: 'resume'; id?: string }
+  | { kind: 'compact'; focus?: string }
+  | { kind: 'phase-plan'; prompt?: string }
+  | { kind: 'phase-review'; prompt?: string }
+  | { kind: 'phase-apply' }
+  | { kind: 'explore'; query: string }
+  | { kind: 'subtest'; query?: string }
+  | { kind: 'worktree'; mode: 'list' }
+  | { kind: 'worktree'; mode: 'add'; name: string }
+  | { kind: 'worktree'; mode: 'use'; name: string }
+  | { kind: 'worktree'; mode: 'rm'; name: string }
+  | { kind: 'worktree'; mode: 'help' }
   | { kind: 'stop' }
   | { kind: 'timeout'; mode: 'set'; minutes: number }
   | { kind: 'timeout'; mode: 'off' }
@@ -92,11 +111,8 @@ export type ParsedCommand =
  */
 const KIRO_INTERNAL_COMMANDS = new Set([
   'tools',
-  'compact',
   'login',
   'logout',
-  'session',
-  'sessions',
   'clear',
   'usage',
   'cost',
@@ -123,6 +139,11 @@ const COMMAND_ALIASES: Record<string, string> = {
   // /status 系列
   s: 'status',
   stat: 'status',
+  // /sessions
+  sess: 'sessions',
+  // /compact
+  summarize: 'compact',
+  compress: 'compact',
   // /new 系列
   reset: 'new',
   clear: 'new', // 注意：覆盖 KIRO_INTERNAL_COMMANDS 里的 clear
@@ -167,6 +188,48 @@ export function parseCommand(text: string): ParsedCommand | null {
       return { kind: 'pwd' };
     case 'status':
       return { kind: 'status' };
+    case 'sessions':
+    case 'session':
+      return { kind: 'sessions' };
+    case 'resume':
+    case 'continue':
+      return { kind: 'resume', id: tail || undefined };
+    case 'compact':
+      return { kind: 'compact', focus: tail || undefined };
+    case 'plan':
+      // /plan 与 /conduit plan 区分：无 conduit 前缀时为阶段命令
+      return { kind: 'phase-plan', prompt: tail || undefined };
+    case 'review':
+      return { kind: 'phase-review', prompt: tail || undefined };
+    case 'apply':
+      return { kind: 'phase-apply' };
+    case 'explore':
+      if (!tail) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'explore', query: tail };
+    case 'test':
+      return { kind: 'subtest', query: tail || undefined };
+    case 'worktree':
+    case 'wt': {
+      if (!tail || tail === 'list' || tail === 'ls') return { kind: 'worktree', mode: 'list' };
+      if (tail === 'help' || tail === '?') return { kind: 'worktree', mode: 'help' };
+      const tokens = tail.split(/\s+/);
+      const sub = (tokens[0] ?? '').toLowerCase();
+      const name = tokens.slice(1).join(' ').trim();
+      if ((sub === 'add' || sub === 'new' || sub === 'create') && name) {
+        return { kind: 'worktree', mode: 'add', name };
+      }
+      if ((sub === 'use' || sub === 'cd') && name) {
+        return { kind: 'worktree', mode: 'use', name };
+      }
+      if ((sub === 'rm' || sub === 'remove' || sub === 'delete') && name) {
+        return { kind: 'worktree', mode: 'rm', name };
+      }
+      // /worktree <name> → add
+      if (/^[a-zA-Z0-9._-]{1,64}$/.test(tail)) {
+        return { kind: 'worktree', mode: 'add', name: tail };
+      }
+      return { kind: 'worktree', mode: 'help' };
+    }
     case 'stop':
       return { kind: 'stop' };
     case 'reconnect':

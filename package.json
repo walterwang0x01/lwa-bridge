@@ -30,7 +30,7 @@
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish",
-    "start": "node bin/lwa.mjs run",
+    "start": "node bin/lwa.mjs serve",
     "prepublishOnly": "npx tsc --noEmit && npx biome check src && npx vitest run && pnpm build",
     "prepare": "husky"
   },

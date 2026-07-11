@@ -41,6 +41,67 @@ export const ConfigSchema = z.object({
   runtime: z
     .object({
       default: z.string().default('kiro'),
+      /**
+       * 套餐感知路由预设。
+       * - kiro-unlimited+cursor-lite：code 默认 kiro 主 + cursor 轻量，网关可选
+       * - cursor-heavy：cursor 主
+       * - gateway-first：openai-compatible 主
+       */
+      plan: z
+        .enum(['kiro-unlimited+cursor-lite', 'cursor-heavy', 'gateway-first'])
+        .default('kiro-unlimited+cursor-lite'),
+      /** 按 harness 模式覆盖 plan 预设中的路由表 */
+      modes: z
+        .object({
+          code: z
+            .object({
+              simpleProfile: z.string().optional(),
+              complexProfile: z.string().optional(),
+              conduitProfile: z.string().optional(),
+              fallbackProfiles: z.array(z.string()).optional(),
+              sticky: z.boolean().optional(),
+              gatewayOptional: z.boolean().optional(),
+            })
+            .optional(),
+          chat: z
+            .object({
+              simpleProfile: z.string().optional(),
+              complexProfile: z.string().optional(),
+              conduitProfile: z.string().optional(),
+              fallbackProfiles: z.array(z.string()).optional(),
+              sticky: z.boolean().optional(),
+              gatewayOptional: z.boolean().optional(),
+            })
+            .optional(),
+          lark: z
+            .object({
+              simpleProfile: z.string().optional(),
+              complexProfile: z.string().optional(),
+              conduitProfile: z.string().optional(),
+              fallbackProfiles: z.array(z.string()).optional(),
+              sticky: z.boolean().optional(),
+              gatewayOptional: z.boolean().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+      /** OpenAPI 网关熔断参数 */
+      gateway: z
+        .object({
+          failureThreshold: z.number().int().positive().default(2),
+          cooldownMs: z.number().int().positive().default(60_000),
+          probeTimeoutMs: z.number().int().positive().default(3_000),
+        })
+        .optional(),
+      /** 上下文压缩（手动 /compact + auto） */
+      compact: z
+        .object({
+          auto: z.boolean().default(true),
+          /** 粗略字符阈值（≈ tokens*4）；默认 80k ≈ 20k tokens */
+          thresholdChars: z.number().int().positive().default(80_000),
+          cooldownMs: z.number().int().positive().default(60_000),
+        })
+        .optional(),
       profiles: z.record(z.string(), RuntimeProfileSchema).default({}),
       routing: z
         .object({
@@ -116,7 +177,13 @@ export const ConfigSchema = z.object({
     .default({}),
   ingress: z
     .object({
-      channel: z.enum(['lark', 'slack', 'cli']).default('lark'),
+      /**
+       * 启用的入站通道（Gateway / `lwa serve`）。
+       * 本地 `lwa` / `lwa chat` 始终只用 CLI，不受此字段影响。
+       */
+      channels: z.array(z.enum(['lark', 'slack', 'cli'])).optional(),
+      /** @deprecated 使用 channels；单通道旧配置会映射到 channels */
+      channel: z.enum(['lark', 'slack', 'cli']).optional(),
       slack: z
         .object({
           botToken: z.string().optional(),
@@ -125,7 +192,16 @@ export const ConfigSchema = z.object({
         })
         .optional(),
     })
-    .default({ channel: 'lark' }),
+    .default({})
+    .transform((v) => {
+      const channels =
+        v.channels && v.channels.length > 0
+          ? v.channels
+          : v.channel
+            ? [v.channel]
+            : (['lark'] as Array<'lark' | 'slack' | 'cli'>);
+      return { ...v, channels };
+    }),
   lark: z.object({
     appId: z.string().min(1),
     appSecret: z.string().min(1),

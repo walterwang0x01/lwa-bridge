@@ -32,7 +32,7 @@ export function helpMarkdown(): string {
     '`/ps` — 列出本机所有 bridge 进程',
     '`/exit <id>` — 停止指定进程（管理员）',
     '`/reconnect` — 重连飞书 WebSocket',
-    '`/doctor [描述]` — 让 Kiro 看日志自诊断',
+    '`/doctor` — CLI 本地体检（plan/runtime/gateway）；带描述则让 Kiro 看日志诊断',
     '',
     '**其他**',
     '`/help` — 显示这条帮助',

@@ -28,7 +28,6 @@ import type { TaskHistoryStore } from '../store/taskHistory.js';
 import { evaluateApplySafeGates } from '../runtime/adaptive.js';
 import { FilePlanSource, planDirFor, planFilePathFor } from '../plan/source.js';
 import { mkdirSync, rmSync } from 'node:fs';
-import { runKiro } from '../kiro/runner.js';
 import { runAgentTurn } from '../runtime/runner.js';
 import {
   listRuntimeProfileNames,
@@ -40,9 +39,12 @@ import {
   chooseRuntimeProfile,
   classifyTaskBucket,
 } from '../runtime/router.js';
+import { resolveModeRouteTable } from '../runtime/planProfiles.js';
+import { sharedGatewayHealth } from '../runtime/gatewayHealth.js';
 import { cliCommand, configPathTilde } from '../lib/branding.js';
 import { discoverRuntimeRegistry } from '../runtime/registry.js';
 import { formatModelTierSummary, suggestFastStrongModels } from '../runtime/openaiModels.js';
+import { cardToPlainText, formatCliHelp } from '../ingress/cli/textPresenter.js';
 import { probeRuntimeQuota } from '../runtime/quota.js';
 import { decodeSessionId } from '../runtime/sessionId.js';
 import type { RuntimeProfile } from '../runtime/types.js';
@@ -114,6 +116,12 @@ export interface DispatcherOptions {
   activeCards?: ActiveCardsStore;
   /** 任务历史记录；由 bootstrap 注入。不传时不记录历史（兼容老调用方）*/
   taskHistory?: TaskHistoryStore;
+  /** CLI 模式：影响路由表与 system prompt */
+  cliMode?: 'code' | 'chat';
+  /** CLI 切换会话时回调（/resume） */
+  onCliConversationSwitch?: (conversationId: string) => void;
+  /** 读取当前 CLI conversation id */
+  getCliConversationId?: () => string;
 }
 
 export class Dispatcher {
@@ -133,6 +141,9 @@ export class Dispatcher {
   private readonly cronScheduler?: CronScheduler;
   private readonly activeCards?: ActiveCardsStore;
   private readonly taskHistory?: TaskHistoryStore;
+  private readonly cliMode?: 'code' | 'chat';
+  private readonly onCliConversationSwitch?: (conversationId: string) => void;
+  private readonly getCliConversationId?: () => string;
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config;
@@ -145,6 +156,21 @@ export class Dispatcher {
     if (opts.cronScheduler) this.cronScheduler = opts.cronScheduler;
     if (opts.activeCards) this.activeCards = opts.activeCards;
     if (opts.taskHistory) this.taskHistory = opts.taskHistory;
+    if (opts.cliMode) this.cliMode = opts.cliMode;
+    if (opts.onCliConversationSwitch) this.onCliConversationSwitch = opts.onCliConversationSwitch;
+    if (opts.getCliConversationId) this.getCliConversationId = opts.getCliConversationId;
+  }
+
+  private harnessModeOf(conversationId: string): 'code' | 'chat' | 'lark' {
+    if (this.cliMode === 'chat' || conversationId === 'cli-chat') return 'chat';
+    if (
+      this.cliMode === 'code' ||
+      conversationId === 'cli-code' ||
+      conversationId === 'cli-local'
+    ) {
+      return 'code';
+    }
+    return 'lark';
   }
 
   private acpPoolKey(profile: RuntimeProfile): string {
@@ -202,6 +228,7 @@ export class Dispatcher {
   }> {
     const taskBucket = classifyTaskBucket({ prompt, mediaCount, commandName });
     const explicitProfileName = await this.sessions.getRuntimeProfile(conversationId);
+    const harnessMode = this.harnessModeOf(conversationId);
     const monthUsageByKind = this.taskHistory
       ? await this.taskHistory.countMonthUsageByKind().catch(() => undefined)
       : undefined;
@@ -209,8 +236,31 @@ export class Dispatcher {
       this.config,
       { prompt, mediaCount, commandName },
       explicitProfileName,
-      { taskBucket, monthUsageByKind },
+      { taskBucket, monthUsageByKind, harnessMode, health: sharedGatewayHealth },
     );
+
+    // sticky：真实任务后锁定；纯闲聊不粘，避免 "hi" 锁死 cursor
+    if (!explicitProfileName) {
+      const table = resolveModeRouteTable(this.config, harnessMode);
+      const score = picked.complexityScore ?? 0;
+      const threshold = this.config.runtime?.router?.rules?.complexityThreshold ?? 4;
+      const shouldStick =
+        table.sticky &&
+        (taskBucket !== 'chat' || score >= threshold) &&
+        picked.profileName &&
+        !picked.profileName.startsWith('auto→');
+      if (shouldStick) {
+        await this.sessions.setConversationRuntimeProfile(
+          conversationId,
+          picked.profileName,
+          this.config.workspace.defaultCwd,
+        );
+        picked = {
+          ...picked,
+          reason: `${picked.reason};sticky`,
+        };
+      }
+    }
     if (!explicitProfileName && this.taskHistory) {
       const adaptive = await this.taskHistory
         .recommendAdaptiveStrategy(200, taskBucket)
@@ -604,25 +654,32 @@ export class Dispatcher {
       }
     })();
     if (needAdmin && !isAdmin(senderPrincipalId, this.config)) {
-      await this.sendInteractiveCard(
-        msg,
-        buildAckCard({
-          state: 'error',
-          title: '🚫 权限不足',
-          body: '此命令仅管理员可用。',
-        }),
-      );
-      return;
+      // 本地 REPL = 本机操作者，视为管理员（否则 /cd 等 coding 命令全被挡）
+      if (!this.isTextChannel(conversationId)) {
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'error',
+            title: '🚫 权限不足',
+            body: '此命令仅管理员可用。',
+          }),
+        );
+        return;
+      }
     }
 
     // 6) 路由
     if (cmd) {
       switch (cmd.kind) {
         case 'help':
-          await this.sendInteractiveCard(
-            msg,
-            buildHelpCard({ skills: this.chatSkills.get(conversationId) }),
-          );
+          if (this.isTextChannel(conversationId)) {
+            await this.respondText(msg, formatCliHelp(this.cliMode ?? 'code'));
+          } else {
+            await this.sendInteractiveCard(
+              msg,
+              buildHelpCard({ skills: this.chatSkills.get(conversationId) }),
+            );
+          }
           return;
         case 'pwd': {
           const wsName = await this.workspaceNameOf(session.currentCwd);
@@ -642,6 +699,48 @@ export class Dispatcher {
             session.currentCwd,
           );
           const wsName = await this.workspaceNameOf(session.currentCwd);
+          if (this.isTextChannel(conversationId)) {
+            const { formatCliStatusLine, gitBranch, shortenHomePath } = await import(
+              '../ingress/cli/workspace.js'
+            );
+            const { estimateSessionContext } = await import('../runtime/contextEstimate.js');
+            const branch = gitBranch(session.currentCwd);
+            const phase = await this.sessions.getConversationPhase(conversationId);
+            const planId = this.config.runtime?.plan ?? 'kiro-unlimited+cursor-lite';
+            const circuits = sharedGatewayHealth.snapshot();
+            const ctx = await estimateSessionContext({
+              config: this.config,
+              sessions: this.sessions,
+              conversationId,
+              cwd: session.currentCwd,
+              profile,
+            });
+            const lines = [
+              formatCliStatusLine({
+                cwd: session.currentCwd,
+                profileName,
+                model: profile.model,
+              }),
+              `conversation: ${conversationId}`,
+              `cwd: ${shortenHomePath(session.currentCwd)}`,
+              branch ? `branch: ${branch}` : undefined,
+              wsName ? `workspace: ${wsName}` : undefined,
+              `runtime: ${profileName} (${profile.kind})`,
+              profile.model ? `model: ${profile.model}` : undefined,
+              `plan: ${planId}`,
+              `harness: ${this.harnessModeOf(conversationId)}`,
+              phase ? `phase: ${phase}` : undefined,
+              agentSid ? `agentSession: ${agentSid.slice(0, 12)}…` : 'agentSession: (new)',
+              `ctx: ~${ctx.pct}% (${Math.round(ctx.chars / 1000)}k / ${Math.round(ctx.thresholdChars / 1000)}k)${ctx.hasSummary ? ' · compacted' : ''}`,
+              session.compactionSummary ? 'compact: yes' : 'compact: no',
+              `task: ${this.getPipeline(conversationId).hasActiveTask() ? 'running' : 'idle'}`,
+              circuits.length
+                ? `gateway: ${circuits.map((c) => `${c.state}`).join(',')}`
+                : 'gateway: ok',
+            ].filter(Boolean);
+            await this.respondText(msg, lines.join('\n'));
+            return;
+          }
           const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
           const cardOpts: Parameters<typeof buildStatusCard>[0] = {
             cwd: session.currentCwd,
@@ -664,7 +763,32 @@ export class Dispatcher {
           return;
         }
         case 'new': {
+          if (this.isTextChannel(conversationId) && this.onCliConversationSwitch) {
+            const prefix = this.cliMode === 'chat' ? 'cli-chat' : 'cli-code';
+            const nextId = `${prefix}-${Date.now().toString(36).slice(-6)}`;
+            await this.sessions.setConversationCwd(
+              nextId,
+              session.currentCwd,
+              this.config.workspace.defaultCwd,
+            );
+            await this.sessions.setConversationMeta(
+              nextId,
+              { title: `session ${nextId}`, phase: null, compactionSummary: null },
+              this.config.workspace.defaultCwd,
+            );
+            this.onCliConversationSwitch(nextId);
+            await this.respondText(
+              msg,
+              `🔄 New session: \`${nextId}\`\nNext message starts fresh in \`${session.currentCwd}\`.`,
+            );
+            return;
+          }
           await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
+          await this.sessions.setConversationMeta(
+            conversationId,
+            { compactionSummary: null, phase: null },
+            this.config.workspace.defaultCwd,
+          );
           await this.evictChatFromAllPools(conversationId);
           await this.sendInteractiveCard(
             msg,
@@ -674,6 +798,78 @@ export class Dispatcher {
               body: `下次提问会在 \`${session.currentCwd}\` 下新建 agent session。`,
             }),
           );
+          return;
+        }
+        case 'sessions': {
+          const list = await this.sessions.listCliSessions();
+          if (list.length === 0) {
+            await this.respondText(msg, 'No CLI sessions yet. Chat once or /new.');
+            return;
+          }
+          const active = this.getCliConversationId?.() ?? conversationId;
+          const { shortenHomePath } = await import('../ingress/cli/workspace.js');
+          const lines = list.slice(0, 30).map((s) => {
+            const mark = s.id === active ? ' ←' : '';
+            const when = new Date(s.lastActiveAt).toISOString().slice(0, 16).replace('T', ' ');
+            return `• \`${s.id}\`${mark}  ${shortenHomePath(s.cwd)}  ${s.runtimeProfile ?? '-'}  ${s.phase ?? '-'}  ${when}${s.hasSummary ? '  [compact]' : ''}`;
+          });
+          await this.respondText(
+            msg,
+            ['CLI sessions:', ...lines, '', 'Switch: /resume <id>'].join('\n'),
+          );
+          return;
+        }
+        case 'resume': {
+          if (!this.isTextChannel(conversationId) || !this.onCliConversationSwitch) {
+            await this.respondText(msg, '/resume is CLI-only.');
+            return;
+          }
+          const list = await this.sessions.listCliSessions();
+          const target = cmd.id
+            ? list.find((s) => s.id === cmd.id || s.id.endsWith(cmd.id!))
+            : list[0];
+          if (!target) {
+            await this.respondText(
+              msg,
+              cmd.id
+                ? `Session not found: \`${cmd.id}\`. Use /sessions.`
+                : 'No sessions to resume. Use /sessions.',
+            );
+            return;
+          }
+          this.onCliConversationSwitch(target.id);
+          await this.respondText(
+            msg,
+            `✅ Resumed \`${target.id}\`\ncwd: ${target.cwd}\nruntime: ${target.runtimeProfile ?? '(auto)'}`,
+          );
+          return;
+        }
+        case 'compact': {
+          await this.handleCompactCmd(msg, cmd.focus);
+          return;
+        }
+        case 'phase-plan': {
+          await this.handlePhaseCmd(msg, 'plan', cmd.prompt);
+          return;
+        }
+        case 'phase-review': {
+          await this.handlePhaseCmd(msg, 'review', cmd.prompt);
+          return;
+        }
+        case 'phase-apply': {
+          await this.handlePhaseCmd(msg, 'apply');
+          return;
+        }
+        case 'explore': {
+          await this.handleSubagentCmd(msg, 'explore', cmd.query);
+          return;
+        }
+        case 'subtest': {
+          await this.handleSubagentCmd(msg, 'test', cmd.query);
+          return;
+        }
+        case 'worktree': {
+          await this.handleWorktreeCmd(msg, cmd);
           return;
         }
         case 'stop': {
@@ -790,6 +986,13 @@ export class Dispatcher {
           return;
         }
         case 'reconnect': {
+          if (this.isTextChannel(conversationId)) {
+            await this.respondText(
+              msg,
+              'Gateway-only: /reconnect is unavailable in local REPL.\nUse: lwa serve',
+            );
+            return;
+          }
           await this.sendInteractiveCard(
             msg,
             buildAckCard({
@@ -1062,8 +1265,8 @@ export class Dispatcher {
 
   /**
    * /doctor [描述]
-   * 把最近 200 行结构化日志 + 用户描述拼成 prompt 喂给 Kiro 自诊断。
-   * 走标准 runKiroTask 流程，享受所有流式卡片和 watchdog。
+   * CLI 无描述：本地体检（plan/runtime/gateway/memory/git），不调 LLM。
+   * 有描述或飞书：把最近日志 + 描述喂给 Kiro 自诊断。
    */
   private async handleDoctorCmd(
     msg: IncomingMessage,
@@ -1071,8 +1274,20 @@ export class Dispatcher {
     cwd: string,
   ): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
+    const desc = description.trim();
+    if (this.isTextChannel(conversationId) && !desc) {
+      const { runCliDoctor } = await import('../runtime/cliDoctor.js');
+      const report = await runCliDoctor({
+        config: this.config,
+        cwd,
+        harnessMode: this.harnessModeOf(conversationId),
+        conversationId,
+      });
+      await this.respondText(msg, report.text);
+      return;
+    }
     const lines = readRecentLogLines(200);
-    const userDesc = description.trim() || '（无）';
+    const userDesc = desc || '（无）';
     const prompt = [
       '你是 LWA gateway 的运维助手。下面是这个网关最近的结构化日志（NDJSON），',
       '以及用户描述的问题。请基于日志找出可能的故障点，给出诊断结论和修复建议。',
@@ -1112,6 +1327,340 @@ export class Dispatcher {
       kiroBinPath: this.config.kiro.binPath,
     });
     await this.sendInteractiveCard(msg, buildSelftestCard(report));
+  }
+
+  private async maybeAutoCompact(
+    conversationId: string,
+    cwd: string,
+    nextPrompt: string,
+  ): Promise<void> {
+    const compactCfg = this.config.runtime?.compact;
+    const enabled = compactCfg?.auto ?? true;
+    const threshold = compactCfg?.thresholdChars ?? 80_000;
+    const cooldown = compactCfg?.cooldownMs ?? 60_000;
+
+    const { estimateContextChars, shouldAutoCompact } = await import('../runtime/autoCompact.js');
+    const { readOpenAISessionMessages } = await import('../runtime/openaiCompatibleRuntime.js');
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const { profile } = await this.resolveChatRuntime(conversationId);
+    const agentSid = await this.sessions.getConversationAgentSession(conversationId, cwd);
+
+    const summary = session.compactionSummary ?? '';
+    let messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    if (profile.kind === 'openai-compatible' && agentSid) {
+      const nativeId = decodeSessionId(agentSid, profile.kind);
+      if (nativeId) messages = await readOpenAISessionMessages(nativeId);
+    }
+    if (messages.length === 0 && summary) {
+      messages = [{ role: 'user', content: summary }];
+    }
+    const chars = estimateContextChars(messages, [summary, nextPrompt]);
+    if (
+      !shouldAutoCompact({
+        chars,
+        thresholdChars: threshold,
+        enabled,
+        lastCompactAt: session.lastCompactAt,
+        cooldownMs: cooldown,
+      })
+    ) {
+      return;
+    }
+
+    process.stdout.write(
+      `(auto-compact: ~${Math.round(chars / 1000)}k chars ≥ ${Math.round(threshold / 1000)}k)\n`,
+    );
+    // 复用手动 compact（无 focus）
+    const fakeMsg = {
+      chatId: conversationId,
+      messageId: `auto-compact-${Date.now()}`,
+      eventId: `auto-compact-${Date.now()}`,
+      chatType: 'p2p' as const,
+      senderOpenId: 'cli-user',
+      messageType: 'text' as const,
+      text: '/compact',
+      createTime: Date.now(),
+      receivedAt: Date.now(),
+      rawContent: '',
+      mentions: [],
+    } as unknown as IncomingMessage;
+    await this.handleCompactCmd(fakeMsg, 'auto: keep goals, files, decisions, todos');
+  }
+
+  private async handleCompactCmd(msg: IncomingMessage, focus?: string): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const { compactMessages } = await import('../runtime/compact.js');
+    const { readOpenAISessionMessages, replaceOpenAISessionWithSummary } = await import(
+      '../runtime/openaiCompatibleRuntime.js'
+    );
+
+    const { profileName, profile } = await this.resolveChatRuntime(conversationId);
+    const agentSid = await this.sessions.getConversationAgentSession(
+      conversationId,
+      session.currentCwd,
+    );
+
+    let messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    if (profile.kind === 'openai-compatible' && agentSid) {
+      const nativeId = decodeSessionId(agentSid, profile.kind);
+      if (nativeId) messages = await readOpenAISessionMessages(nativeId);
+    }
+
+    const { summary, via } = await compactMessages(this.config, messages, focus);
+    await this.sessions.setConversationMeta(
+      conversationId,
+      { compactionSummary: summary, lastCompactAt: Date.now() },
+      this.config.workspace.defaultCwd,
+    );
+
+    if (profile.kind === 'openai-compatible' && agentSid) {
+      const nativeId = decodeSessionId(agentSid, profile.kind);
+      if (nativeId) {
+        await replaceOpenAISessionWithSummary(nativeId, session.currentCwd, summary);
+      }
+    } else {
+      // kiro/cursor：清底层 session，下一轮带着摘要开新会话
+      await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
+      await this.evictChatFromAllPools(conversationId);
+    }
+
+    await this.respondText(
+      msg,
+      [
+        `✅ Compacted via ${via} (${profileName})`,
+        focus ? `focus: ${focus}` : undefined,
+        '',
+        summary.slice(0, 1200),
+        summary.length > 1200 ? '\n…' : undefined,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+
+  private async handlePhaseCmd(
+    msg: IncomingMessage,
+    phase: 'plan' | 'apply' | 'review',
+    prompt?: string,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    await this.sessions.setConversationMeta(
+      conversationId,
+      { phase },
+      this.config.workspace.defaultCwd,
+    );
+
+    // 阶段默认引擎：plan/review → kiro；apply 保持 sticky/auto
+    if (phase === 'plan' || phase === 'review') {
+      try {
+        resolveRuntimeProfile(this.config, 'kiro');
+        await this.sessions.setConversationRuntimeProfile(
+          conversationId,
+          'kiro',
+          this.config.workspace.defaultCwd,
+        );
+      } catch {
+        // kiro 不可用则不强制
+      }
+    }
+
+    if (!prompt) {
+      const hints: Record<typeof phase, string> = {
+        plan: 'Plan phase on. Next message: design only — no file edits. Or: /plan <your goal>',
+        apply: 'Apply phase on. Next message: implement the plan.',
+        review: 'Review phase on (read-only). Next message: review target. Or: /review <scope>',
+      };
+      await this.respondText(
+        msg,
+        `✅ ${hints[phase]}\nruntime sticky → prefer kiro for plan/review`,
+      );
+      return;
+    }
+
+    // 带 prompt：直接当一轮用户消息跑
+    const prefixed =
+      phase === 'plan'
+        ? `[PLAN ONLY — do not edit files]\n${prompt}`
+        : phase === 'review'
+          ? `[REVIEW ONLY — read-only; list findings, risks, suggestions; do not edit]\n${prompt}`
+          : prompt;
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
+    const taskId = `phase-${phase}-${Date.now()}`;
+    if (this.isTextChannel(conversationId)) {
+      await this.executeCliTurn(
+        msg,
+        prefixed,
+        session.currentCwd,
+        idleMin * 60_000,
+        taskId,
+        Date.now(),
+      );
+      return;
+    }
+    await this.executeKiroTask(msg, prefixed, session.currentCwd, [], idleMin);
+  }
+
+  private async handleSubagentCmd(
+    msg: IncomingMessage,
+    role: 'explore' | 'test' | 'review',
+    query?: string,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    if (!this.isTextChannel(conversationId)) {
+      await this.respondText(msg, `/${role} is CLI-oriented; use Feishu chat for normal turns.`);
+      return;
+    }
+    const { buildSubagentPrompt, subagentDefaultRuntime } = await import('../runtime/subagents.js');
+    const parent = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const childId = `cli-sub-${role}-${Date.now().toString(36).slice(-5)}`;
+    await this.sessions.setConversationCwd(
+      childId,
+      parent.currentCwd,
+      this.config.workspace.defaultCwd,
+    );
+    const runtimeName = subagentDefaultRuntime(role);
+    try {
+      resolveRuntimeProfile(this.config, runtimeName);
+      await this.sessions.setConversationRuntimeProfile(
+        childId,
+        runtimeName,
+        this.config.workspace.defaultCwd,
+      );
+    } catch {
+      // keep auto
+    }
+    await this.sessions.setConversationMeta(
+      childId,
+      { title: `sub:${role}`, phase: role === 'review' ? 'review' : null },
+      this.config.workspace.defaultCwd,
+    );
+
+    const prompt = buildSubagentPrompt(role, query ?? '');
+    process.stdout.write(`\n(subagent ${role} → ${runtimeName} · ${childId})\n`);
+
+    // 临时把消息 conversation 指到 child：构造浅拷贝
+    const childMsg = { ...msg, conversationId: childId, chatId: childId };
+    const idleMin = this.effectiveIdleMinutes(parent.idleTimeoutMinutes);
+    await this.executeCliTurn(
+      childMsg as IncomingMessage,
+      prompt,
+      parent.currentCwd,
+      idleMin * 60_000,
+      `sub-${role}-${Date.now()}`,
+      Date.now(),
+    );
+
+    // 把子会话摘要挂到父会话（不自动切换过去）
+    const childSummary = await this.sessions.getCompactionSummary(childId);
+    if (childSummary) {
+      const prev = (await this.sessions.getCompactionSummary(conversationId)) ?? '';
+      await this.sessions.setConversationMeta(
+        conversationId,
+        {
+          compactionSummary: `${prev}\n\n[subagent:${role}]\n${childSummary}`.trim(),
+        },
+        this.config.workspace.defaultCwd,
+      );
+    }
+    await this.respondText(
+      msg,
+      `\n(subagent ${role} done · child \`${childId}\` kept for /resume; you are still on \`${conversationId}\`)`,
+    );
+  }
+
+  private async handleWorktreeCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'worktree' }>,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const { findGitRoot, listWorktrees, addWorktree, removeWorktree, WorktreeError } = await import(
+      '../ingress/cli/worktree.js'
+    );
+    const { validateCwd } = await import('../lib/security.js');
+
+    const root = findGitRoot(session.currentCwd);
+    if (cmd.mode === 'help') {
+      await this.respondText(
+        msg,
+        [
+          'Git worktree (parallel agents)',
+          '  /worktree list',
+          '  /worktree add <name>   create <repo>/.lwa-worktrees/<name>',
+          '  /worktree use <name>   /cd into that worktree',
+          '  /worktree rm <name>',
+          '',
+          'Optional: install BrowserSkill (`bsk`) for logged-in browser automation — not bundled.',
+        ].join('\n'),
+      );
+      return;
+    }
+    if (!root) {
+      await this.respondText(msg, 'Not inside a git repo.');
+      return;
+    }
+    try {
+      if (cmd.mode === 'list') {
+        const list = listWorktrees(root);
+        const lines = list.map(
+          (w) =>
+            `• ${w.path}${w.branch ? ` (${w.branch})` : ''}${w.path === root ? ' ← main' : ''}`,
+        );
+        await this.respondText(msg, ['Worktrees:', ...lines].join('\n'));
+        return;
+      }
+      if (cmd.mode === 'add') {
+        const { path, branch } = addWorktree(root, cmd.name);
+        await this.respondText(
+          msg,
+          `✅ worktree added\npath: \`${path}\`\nbranch: \`${branch}\`\nUse: /worktree use ${cmd.name}`,
+        );
+        return;
+      }
+      if (cmd.mode === 'use') {
+        const list = listWorktrees(root);
+        const hit =
+          list.find((w) => w.path.endsWith(`/${cmd.name}`) || w.path.endsWith(`\\${cmd.name}`)) ??
+          list.find((w) => w.branch === `lwa/${cmd.name}`);
+        if (!hit) {
+          await this.respondText(msg, `Worktree not found: ${cmd.name}. /worktree list`);
+          return;
+        }
+        const abs = validateCwd(hit.path, this.config, session.currentCwd);
+        await this.sessions.setConversationCwd(
+          conversationId,
+          abs,
+          this.config.workspace.defaultCwd,
+        );
+        await this.respondText(msg, `✅ cwd → \`${abs}\``);
+        return;
+      }
+      if (cmd.mode === 'rm') {
+        const removed = removeWorktree(root, cmd.name);
+        await this.respondText(msg, `✅ removed \`${removed}\``);
+        return;
+      }
+    } catch (e) {
+      const message = e instanceof WorktreeError ? e.message : (e as Error).message;
+      await this.respondText(msg, `❌ worktree: ${message}`);
+    }
   }
 
   /**
@@ -1213,6 +1762,13 @@ export class Dispatcher {
             ...lines,
             '',
             '提示：OpenAI 兼容网关用 `GET /models` 发现模型；fast/strong 是 bridge 根据模型 id 的启发式分层，最终以 config 里各 profile 的 `model` 为准。',
+            `套餐 plan：\`${this.config.runtime?.plan ?? 'kiro-unlimited+cursor-lite'}\` · harness：\`${this.harnessModeOf(conversationId)}\``,
+            ...sharedGatewayHealth
+              .snapshot()
+              .map(
+                (c) =>
+                  `网关熔断：\`${c.key}\` state=${c.state} failures=${c.failures}${c.lastError ? ` (${c.lastError})` : ''}`,
+              ),
             `终端也可运行：\`${cliCommand('models')}\``,
           ].join('\n'),
         }),
@@ -1221,6 +1777,19 @@ export class Dispatcher {
     }
 
     const name = cmd.name;
+    if (name === 'auto' || name === 'clear') {
+      await this.sessions.clearConversationRuntimeProfile(conversationId);
+      await this.evictChatFromAllPools(conversationId);
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'done',
+          title: '✅ 已恢复智能路由',
+          body: '已清除会话粘性引擎。下一条消息按当前 mode/plan 重新选择 runtime。',
+        }),
+      );
+      return;
+    }
     try {
       resolveRuntimeProfile(this.config, name);
     } catch {
@@ -1232,7 +1801,7 @@ export class Dispatcher {
         buildAckCard({
           state: 'error',
           title: '❌ 未知引擎',
-          body: `没有 profile \`${name}\`。\n\n可用：${valid}`,
+          body: `没有 profile \`${name}\`。\n\n可用：${valid}\n或 \`/runtime auto\` 清除粘性。`,
         }),
       );
       return;
@@ -1260,6 +1829,11 @@ export class Dispatcher {
     cmd: Extract<ParsedCommand, { kind: 'model' }>,
     _cwd: string, // 当前未使用；保留参数签名一致性，后续可能用于 per-chat 模型覆盖
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    if (this.isTextChannel(conversationId)) {
+      await this.handleModelCmdCli(msg, cmd);
+      return;
+    }
     if (cmd.mode === 'show') {
       // 先发占位，再异步取列表 + patch
       await this.sendInteractiveCardAsync(
@@ -1326,6 +1900,85 @@ export class Dispatcher {
     );
   }
 
+  /** CLI 纯文本 /model：展示当前 runtime+model，kiro 可列模型并切换。 */
+  private async handleModelCmdCli(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'model' }>,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const { profileName, profile } = await this.resolveChatRuntime(conversationId);
+    const profiles = listRuntimeProfileNames(this.config).join(' | ');
+
+    if (cmd.mode === 'show') {
+      const lines = [
+        `current: ${profileName} (${profile.kind})`,
+        `model: ${profile.model ?? this.config.kiro.model ?? '-'}`,
+        `runtimes: ${profiles}`,
+        '',
+        'switch engine: /runtime <name>',
+        'diagnose: /runtime check',
+      ];
+      if (profile.kind === 'kiro-cli-acp') {
+        const list = await listModels(profile.bin || this.config.kiro.binPath);
+        if (list?.models.length) {
+          lines.push('', 'kiro models:');
+          for (const m of list.models.slice(0, 20)) {
+            const mark = m.name === (this.config.kiro.model ?? list.defaultModel) ? ' *' : '';
+            lines.push(`  ${m.name}${mark}`);
+          }
+          if (list.models.length > 20) lines.push(`  … +${list.models.length - 20} more`);
+          lines.push('', 'set: /model <name>   reset: /model auto');
+        }
+      } else if (profile.kind === 'openai-compatible') {
+        const registry = await discoverRuntimeRegistry(this.config);
+        const entry = registry.find((e) => e.profileName === profileName);
+        if (entry?.models.length) {
+          lines.push('', `gateway models (${entry.models.length}):`);
+          lines.push(formatModelTierSummary(entry.models, 15));
+          lines.push('', 'switch profile: /runtime openai-fast|openai-strong');
+        } else {
+          lines.push(
+            '',
+            `openai models: ${entry?.detail ?? 'unavailable'}`,
+            'switch profile: /runtime openai-fast|openai-strong',
+            `or: ${cliCommand('models')}`,
+          );
+        }
+      }
+      await this.respondText(msg, lines.join('\n'));
+      return;
+    }
+
+    if (profile.kind !== 'kiro-cli-acp') {
+      await this.respondText(
+        msg,
+        `current engine ${profileName} does not support /model switch.\nUse /runtime <profile> instead.`,
+      );
+      return;
+    }
+
+    if (cmd.mode === 'reset') {
+      this.config = patchAndSaveConfig(this.config, (draft) => {
+        delete draft.kiro.model;
+      });
+      clearModelCache();
+      await this.respondText(msg, 'ok — model reset to kiro default (auto)');
+      return;
+    }
+
+    const list = await listModels(profile.bin || this.config.kiro.binPath);
+    const target = this.resolveModelName(cmd.name, list);
+    if (list && target === undefined) {
+      await this.respondText(msg, `unknown model: ${cmd.name}\nUse /model to list.`);
+      return;
+    }
+    const finalName = target ?? cmd.name;
+    this.config = patchAndSaveConfig(this.config, (draft) => {
+      draft.kiro.model = finalName;
+    });
+    await this.respondText(msg, `ok — model set to ${finalName}`);
+  }
+
   /**
    * 模型名解析：
    *   - 列表里精确匹配 → 直接返回
@@ -1346,11 +1999,29 @@ export class Dispatcher {
 
   /**
    * 发送一张飞书 v2 交互卡片（带按钮的那种）作为对原消息的回复。
-   * 跟 replyDoneCard 不同：不走 CardRenderer 的状态机，发一次就完事，
-   * 不会再 patch；按钮回调走 onCardAction 流程。
+   * CLI 通道改为纯文本，避免终端无法点击的卡片 UI。
    */
+  private isTextChannel(conversationId?: string): boolean {
+    if (this.ingress.channel === 'cli') return true;
+    if (conversationId?.startsWith('cli-')) return true;
+    return false;
+  }
+
+  private async respondText(msg: IncomingMessage, text: string): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    try {
+      await this.ingress.sendText(conversationId, text);
+    } catch (e) {
+      this.log.error({ err: e }, 'respondText failed');
+    }
+  }
+
   private async sendInteractiveCard(msg: IncomingMessage, card: object): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
+    if (this.isTextChannel(conversationId)) {
+      await this.respondText(msg, cardToPlainText(card));
+      return;
+    }
     try {
       await this.ingress.replyCard(msg.messageId, card);
     } catch (e) {
@@ -1378,6 +2049,16 @@ export class Dispatcher {
     placeholderCard: object,
     buildFinalCard: () => Promise<object>,
   ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    if (this.isTextChannel(conversationId)) {
+      try {
+        const finalCard = await buildFinalCard();
+        await this.respondText(msg, cardToPlainText(finalCard));
+      } catch (e) {
+        await this.respondText(msg, `❌ ${(e as Error).message}`);
+      }
+      return;
+    }
     let placeholderMessageId: string | undefined;
     try {
       placeholderMessageId = await this.ingress.replyCard(msg.messageId, placeholderCard);
@@ -1417,6 +2098,10 @@ export class Dispatcher {
    */
   private async sendCardToConversation(conversationId: string, card: object): Promise<void> {
     try {
+      if (this.isTextChannel(conversationId)) {
+        await this.ingress.sendText(conversationId, cardToPlainText(card));
+        return;
+      }
       await this.ingress.sendCard(conversationId, card);
     } catch (e) {
       this.log.error({ err: e }, 'sendCardToConversation failed; falling back to text');
@@ -3261,6 +3946,191 @@ export class Dispatcher {
   }
 
   /**
+   * CLI 纯文本 turn：不走飞书卡片，只把最终回复打到终端。
+   */
+  private async executeCliTurn(
+    msg: IncomingMessage,
+    finalPrompt: string,
+    cwd: string,
+    idleTimeoutMs: number,
+    taskId: string,
+    taskStartedAt: number,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const pipeline = this.getPipeline(conversationId);
+
+    await pipeline.submit({
+      id: taskId,
+      run: async (signal) => {
+        process.stdout.write('\n…\n');
+        try {
+          const sessionTtlMs =
+            this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
+
+          // auto-compact：上下文过大时先压缩再继续
+          await this.maybeAutoCompact(conversationId, cwd, finalPrompt);
+
+          const phase = await this.sessions.getConversationPhase(conversationId);
+          const priorSummary = await this.sessions.getCompactionSummary(conversationId);
+          let turnPrompt = finalPrompt;
+          if (priorSummary) {
+            turnPrompt = `${priorSummary}\n\n---\nContinue from the compacted context above.\n\n${finalPrompt}`;
+          }
+          if (phase === 'plan' && !turnPrompt.includes('[PLAN ONLY')) {
+            turnPrompt = `[PLAN ONLY — do not edit files; produce a concrete plan]\n${turnPrompt}`;
+          } else if (phase === 'review' && !turnPrompt.includes('[REVIEW ONLY')) {
+            turnPrompt = `[REVIEW ONLY — read-only; findings / risks / suggestions; do not edit]\n${turnPrompt}`;
+          }
+          const { profileName, profile, reason, complexityScore, modelDecision } =
+            await this.selectRuntimeForTask(conversationId, turnPrompt, 0);
+          const { shortenHomePath } = await import('../ingress/cli/workspace.js');
+          const { buildCliCodingSystemPrompt, buildCliChatSystemPrompt } = await import(
+            '../ingress/cli/codingPrompt.js'
+          );
+          const harnessMode = this.harnessModeOf(conversationId);
+          const systemPromptPrefix =
+            harnessMode === 'chat'
+              ? buildCliChatSystemPrompt({
+                  cwd,
+                  profileName,
+                  model: profile.model,
+                  feishuPrefix: this.config.kiro.systemPromptPrefix,
+                })
+              : buildCliCodingSystemPrompt({
+                  cwd,
+                  profileName,
+                  model: profile.model,
+                });
+          const codingProfile = {
+            ...profile,
+            systemPromptPrefix,
+          };
+          if (reason.includes('gateway_skip') || reason.includes('gateway-circuit')) {
+            process.stdout.write(`(gateway degraded → ${profileName})\n`);
+          }
+          process.stdout.write(
+            `[${profileName}${profile.model ? ` · ${profile.model}` : ''}]  ${shortenHomePath(cwd)}\n\n`,
+          );
+          const storedSid = await this.sessions.getConversationAgentSession(
+            conversationId,
+            cwd,
+            sessionTtlMs,
+          );
+
+          let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
+          if (profile.kind === 'kiro-cli-acp') {
+            const pool = this.getAcpPool(profile);
+            pooled = await pool.acquire(conversationId, {
+              cwd,
+              resumeId: storedSid ? decodeSessionId(storedSid, profile.kind) : undefined,
+            });
+          }
+
+          let streamed = '';
+          let result: Awaited<ReturnType<typeof runAgentTurn>>;
+          try {
+            result = await runAgentTurn(codingProfile, {
+              prompt: turnPrompt,
+              cwd,
+              resumeId: storedSid,
+              timeoutMs: profile.timeoutMs ?? this.config.kiro.timeoutMs,
+              idleTimeoutMs,
+              signal,
+              onEvent: (ev) => {
+                if (ev.kind === 'message' && ev.text) {
+                  streamed += ev.text;
+                  process.stdout.write(ev.text);
+                }
+              },
+              extraEnv: {
+                LARK_KIRO_CHAT_ID: conversationId,
+                LARK_KIRO_CHAT_TYPE: msg.chatType,
+                LARK_KIRO_SENDER_OPEN_ID: msg.senderOpenId,
+                LARK_AGENT_RUNTIME: profileName,
+                LARK_AGENT_RUNTIME_REASON: reason,
+                LARK_AGENT_COMPLEXITY_SCORE: String(complexityScore ?? ''),
+                LARK_AGENT_MODEL: profile.model ?? '',
+                LARK_AGENT_MODEL_REASON: modelDecision?.reason ?? '',
+                LWA_CLI_MODE: harnessMode,
+                LWA_PHASE: phase ?? '',
+              },
+              pooled,
+            });
+            if (profile.kind === 'openai-compatible') {
+              sharedGatewayHealth.recordSuccess(profile, profileName);
+            }
+          } catch (e) {
+            if (profile.kind === 'openai-compatible') {
+              sharedGatewayHealth.recordFailure(profile, profileName, (e as Error).message);
+              process.stdout.write(
+                `\n(gateway error → circuit; next turns prefer kiro/cursor)\n${(e as Error).message}\n`,
+              );
+              return;
+            }
+            throw e;
+          }
+
+          if (profile.kind === 'kiro-cli-acp') {
+            this.getAcpPool(profile).release(conversationId);
+          }
+
+          if (result.aborted) {
+            process.stdout.write('\n(aborted)\n');
+            return;
+          }
+          if (result.idleTimedOut || result.timedOut) {
+            process.stdout.write('\n(timeout)\n');
+            return;
+          }
+          if (result.exitCode !== 0) {
+            if (profile.kind === 'openai-compatible') {
+              sharedGatewayHealth.recordFailure(profile, profileName, `exit ${result.exitCode}`);
+            }
+            process.stdout.write(`\n(error: exit ${result.exitCode})\n`);
+            return;
+          }
+
+          if (!streamed && result.text) {
+            process.stdout.write(result.text);
+          }
+          process.stdout.write('\n');
+
+          if (result.newSessionId) {
+            await this.sessions.setConversationKiroSession(
+              conversationId,
+              cwd,
+              result.newSessionId,
+            );
+          }
+          await this.sessions.touchConversation(conversationId);
+
+          if (this.taskHistory) {
+            await this.taskHistory
+              .add({
+                taskId,
+                conversationId,
+                chatId: conversationId,
+                cwd,
+                startedAt: taskStartedAt,
+                finishedAt: Date.now(),
+                terminal: 'done',
+                promptPreview: finalPrompt.slice(0, 100),
+                toolCallCount: 0,
+                artifacts: [],
+                runtimeKind: profile.kind,
+                runtimeProfile: profileName,
+                model: profile.model,
+              })
+              .catch(() => undefined);
+          }
+        } catch (e) {
+          process.stdout.write(`\n(error: ${(e as Error).message})\n`);
+        }
+      },
+    });
+  }
+
+  /**
    * 真正把任务丢到 ChatPipeline 跑 Kiro 的实现（不含 rapid-fire 合并）。
    * - 在 ChatPipeline 里跑（自动 preempt）
    * - 用 RunCardController 流式刷新卡片（每个工具独立 panel）
@@ -3292,12 +4162,14 @@ export class Dispatcher {
     // 拼接 prompt：[系统前缀] + [plan 路径提示] + 媒体路径 + 用户文本
     // 系统前缀约束工具偏好；plan 路径提示让 kiro 知道写计划文件的位置
     const systemPrefix = this.config.kiro.systemPromptPrefix;
-    const planHint =
-      `\n\n# 任务计划文件\n\n` +
-      `如果当前任务超过 3 步，把 JSON 计划写到 \`${planFilePath}\`，bridge 会自动渲染到飞书卡片让用户看到进度。\n` +
-      `Schema：{version:1, chatId, status:"planning"|"running"|"completed"|"failed"|"cancelled", title?, items:[{id,title,status:"pending"|"in_progress"|"done"|"failed"|"skipped",detail?,startedAt?,finishedAt?}], createdAt, updatedAt}\n` +
-      `**原子写入**：先写 \`${planFilePath}.tmp\` 再 \`mv\` 成正式文件，避免读到半截 JSON。\n` +
-      `每完成一步 update 一次（status 改 done）；不要一次性把所有 step 标 done；不要提交后忘了写。`;
+    const isCli = this.isTextChannel(conversationId);
+    const planHint = isCli
+      ? ''
+      : `\n\n# 任务计划文件\n\n` +
+        `如果当前任务超过 3 步，把 JSON 计划写到 \`${planFilePath}\`，bridge 会自动渲染到飞书卡片让用户看到进度。\n` +
+        `Schema：{version:1, chatId, status:"planning"|"running"|"completed"|"failed"|"cancelled", title?, items:[{id,title,status:"pending"|"in_progress"|"done"|"failed"|"skipped",detail?,startedAt?,finishedAt?}], createdAt, updatedAt}\n` +
+        `**原子写入**：先写 \`${planFilePath}.tmp\` 再 \`mv\` 成正式文件，避免读到半截 JSON。\n` +
+        `每完成一步 update 一次（status 改 done）；不要一次性把所有 step 标 done；不要提交后忘了写。`;
     const userPrompt = mediaPaths.length
       ? mediaPaths.map((p) => `@${p}`).join(' ') + (prompt ? '\n\n' + prompt : '')
       : prompt;
@@ -3320,6 +4192,11 @@ export class Dispatcher {
       },
       'executeKiroTask start',
     );
+
+    if (isCli) {
+      await this.executeCliTurn(msg, finalPrompt, cwd, idleTimeoutMs, taskId, taskStartedAt);
+      return;
+    }
 
     await pipeline.submit({
       id: taskId,

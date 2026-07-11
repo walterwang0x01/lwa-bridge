@@ -30,6 +30,14 @@ const ChatSessionSchema = z.object({
    *   N>0       → 用 N 分钟
    */
   idleTimeoutMinutes: z.number().int().nonnegative().optional(),
+  /** CLI 会话标题（/sessions 展示） */
+  title: z.string().optional(),
+  /** 阶段：plan / apply / review */
+  phase: z.enum(['plan', 'apply', 'review']).optional(),
+  /** /compact 后的可读摘要，注入后续 turn */
+  compactionSummary: z.string().optional(),
+  /** 上次 compact 时间（auto-compact 防抖） */
+  lastCompactAt: z.number().int().nonnegative().optional(),
 });
 
 const SessionsFileSchema = z.object({
@@ -277,6 +285,18 @@ export class SessionStore {
     await this.setRuntimeProfile(conversationId, profileName, defaultCwd);
   }
 
+  /** 清除会话粘性 runtime（恢复 auto 路由）。 */
+  async clearConversationRuntimeProfile(conversationId: string): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session = data.chats[conversationId];
+      if (!session) return;
+      delete session.runtimeProfile;
+      session.lastActiveAt = Date.now();
+      writeFile(data);
+    });
+  }
+
   /**
    * 更新 chat 的 lastActiveAt 时间戳（每次成功 turn 后调用）。
    */
@@ -331,5 +351,78 @@ export class SessionStore {
     defaultCwd: string,
   ): Promise<void> {
     await this.setIdleTimeout(conversationId, minutes, defaultCwd);
+  }
+
+  /** 列出 CLI 会话（conversationId 以 cli- 开头）。 */
+  async listCliSessions(): Promise<
+    Array<{
+      id: string;
+      cwd: string;
+      title?: string;
+      phase?: string;
+      runtimeProfile?: string;
+      lastActiveAt: number;
+      hasSummary: boolean;
+    }>
+  > {
+    return withLock(() => {
+      const data = readFile();
+      return Object.entries(data.chats)
+        .filter(([id]) => id.startsWith('cli-'))
+        .map(([id, s]) => ({
+          id,
+          cwd: s.currentCwd,
+          title: s.title,
+          phase: s.phase,
+          runtimeProfile: s.runtimeProfile,
+          lastActiveAt: s.lastActiveAt,
+          hasSummary: Boolean(s.compactionSummary),
+        }))
+        .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    });
+  }
+
+  async setConversationMeta(
+    conversationId: string,
+    patch: {
+      title?: string;
+      phase?: 'plan' | 'apply' | 'review' | null;
+      compactionSummary?: string | null;
+      lastCompactAt?: number | null;
+    },
+    defaultCwd: string,
+  ): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[conversationId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      if (patch.title !== undefined) session.title = patch.title;
+      if (patch.phase === null) delete session.phase;
+      else if (patch.phase !== undefined) session.phase = patch.phase;
+      if (patch.compactionSummary === null) delete session.compactionSummary;
+      else if (patch.compactionSummary !== undefined) {
+        session.compactionSummary = patch.compactionSummary;
+      }
+      if (patch.lastCompactAt === null) delete session.lastCompactAt;
+      else if (patch.lastCompactAt !== undefined) session.lastCompactAt = patch.lastCompactAt;
+      session.lastActiveAt = Date.now();
+      data.chats[conversationId] = session;
+      writeFile(data);
+    });
+  }
+
+  async getCompactionSummary(conversationId: string): Promise<string | undefined> {
+    return withLock(() => readFile().chats[conversationId]?.compactionSummary);
+  }
+
+  async getConversationPhase(
+    conversationId: string,
+  ): Promise<'plan' | 'apply' | 'review' | undefined> {
+    return withLock(() => readFile().chats[conversationId]?.phase);
   }
 }

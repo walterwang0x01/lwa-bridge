@@ -1,57 +1,32 @@
+/**
+ * 本地终端入口：纯文本 REPL，不依赖飞书卡片交互。
+ */
 import { createInterface, type Interface } from 'node:readline/promises';
+import { CLI_NAME } from '../../lib/branding.js';
+import { cardToPlainText, cleanCliText, formatCliHelp } from './textPresenter.js';
+import { formatCliStatusLine } from './workspace.js';
 import type {
   IngressChannel,
   IngressInboundHandlers,
   IngressPort,
   NormalizedCardAction,
   NormalizedMessage,
-  NormalizedMessageItem,
   NormalizedReply,
 } from '../types.js';
+
+export interface CliPromptContext {
+  getCwd: () => Promise<string> | string;
+  getProfile?: () => Promise<{ profileName: string; model?: string } | undefined>;
+  /** code = coding agent；chat = IM 演练 */
+  mode?: 'code' | 'chat';
+  /** 当前会话 id（可被 /resume 切换） */
+  getConversationId?: () => string;
+  setConversationId?: (id: string) => void;
+}
 
 interface CliStoredMessage {
   conversationId: string;
   text: string;
-}
-
-function renderCardToText(card: object): string {
-  const texts: string[] = [];
-  walkCard(card, texts);
-  return texts.join('\n\n').trim() || '[empty card]';
-}
-
-function walkCard(node: unknown, texts: string[]): void {
-  if (!node || typeof node !== 'object') return;
-  const obj = node as Record<string, unknown>;
-
-  const header = obj.header as Record<string, unknown> | undefined;
-  const title = extractContent(header?.title);
-  if (title) texts.push(title);
-
-  const body = obj.body as { elements?: unknown[] } | undefined;
-  if (Array.isArray(body?.elements)) {
-    for (const el of body.elements) walkCard(el, texts);
-  }
-
-  if (obj.tag === 'markdown' || obj.tag === 'plain_text') {
-    const content = extractContent(obj);
-    if (content) texts.push(content);
-  }
-
-  if (Array.isArray(obj.elements)) {
-    for (const el of obj.elements) walkCard(el, texts);
-  }
-}
-
-function extractContent(node: unknown): string {
-  if (!node || typeof node !== 'object') return '';
-  const obj = node as Record<string, unknown>;
-  const content = obj.content;
-  if (typeof content !== 'string') return '';
-  return content
-    .replace(/<font[^>]*>/gi, '')
-    .replace(/<\/font>/gi, '')
-    .trim();
 }
 
 export class CliIngressChannel implements IngressChannel {
@@ -87,7 +62,7 @@ export class CliIngressChannel implements IngressChannel {
         const id = this.nextMessageId('card');
         const reply = this.messages.get(replyToMessageId);
         const conversationId = reply?.conversationId ?? 'cli-local';
-        const text = renderCardToText(card);
+        const text = cardToPlainText(card);
         this.messages.set(id, { conversationId, text });
         this.streamMessageId = id;
         this.streamLineCount = 0;
@@ -102,7 +77,7 @@ export class CliIngressChannel implements IngressChannel {
       },
       sendCard: async (conversationId, card) => {
         const id = this.nextMessageId('card');
-        const text = renderCardToText(card);
+        const text = cardToPlainText(card);
         this.messages.set(id, { conversationId, text });
         this.streamMessageId = id;
         this.streamLineCount = 0;
@@ -111,7 +86,7 @@ export class CliIngressChannel implements IngressChannel {
       },
       patchCard: async (messageId, card) => {
         const existing = this.messages.get(messageId);
-        const text = renderCardToText(card);
+        const text = cardToPlainText(card);
         this.messages.set(messageId, {
           conversationId: existing?.conversationId ?? 'cli-local',
           text,
@@ -120,7 +95,6 @@ export class CliIngressChannel implements IngressChannel {
       },
       recallMessage: async (messageId) => {
         this.messages.delete(messageId);
-        console.log(`\n[cli recall ${messageId}]`);
       },
       downloadInboundMedia: async () => [],
       transcribeInboundAudio: async () => ({
@@ -143,19 +117,50 @@ export class CliIngressChannel implements IngressChannel {
     this.rl.close();
   }
 
-  async promptLoop(conversationId = 'cli-local', senderPrincipalId = 'cli-user'): Promise<void> {
+  async promptLoop(
+    conversationId = 'cli-code',
+    senderPrincipalId = 'cli-user',
+    ctx?: CliPromptContext,
+  ): Promise<void> {
     if (!this.handlers) throw new Error('cli ingress not started');
-    console.log('CLI chat ready. 输入消息开始对话；输入 `.exit` 退出，`.help` 查看提示。');
+
+    const activeId = () => ctx?.getConversationId?.() ?? conversationId;
+
+    const resolveLine = async (): Promise<string> => {
+      const cwd = ctx ? await ctx.getCwd() : process.cwd();
+      const profile = ctx?.getProfile ? await ctx.getProfile() : undefined;
+      return formatCliStatusLine({
+        cwd,
+        profileName: profile?.profileName,
+        model: profile?.model,
+      });
+    };
+
+    const mode = ctx?.mode ?? 'code';
+    console.log(
+      mode === 'chat'
+        ? `${CLI_NAME} chat · local IM rehearsal (no Feishu WS)`
+        : `${CLI_NAME} code · local coding agent`,
+    );
+    console.log(await resolveLine());
+    console.log(
+      mode === 'chat'
+        ? 'Rehearse Feishu-style replies.  /help  ·  /new  ·  .exit\n'
+        : 'Ask for a code change in this repo.  /help  ·  /sessions  ·  /new  ·  .exit\n',
+    );
+
     while (this.connected) {
-      const text = (await this.rl.question('\n> ')).trim();
+      console.log(`\n${await resolveLine()}`);
+      const text = (await this.rl.question('→ ')).trim();
       if (!text) continue;
       if (text === '.exit' || text === '.quit') break;
       if (text === '.help') {
-        console.log('直接输入自然语言或斜杠命令；`.exit` 退出。');
+        console.log(formatCliHelp(mode));
         continue;
       }
-      const msg = this.makeTextMessage(conversationId, senderPrincipalId, text);
-      this.messages.set(msg.messageId, { conversationId, text });
+      const cid = activeId();
+      const msg = this.makeTextMessage(cid, senderPrincipalId, text);
+      this.messages.set(msg.messageId, { conversationId: cid, text });
       await this.handlers.onMessage(msg);
     }
   }
@@ -194,20 +199,21 @@ export class CliIngressChannel implements IngressChannel {
   private printReply(reply: NormalizedReply): void {
     if (reply.kind === 'text') {
       this.resetStream();
-      console.log(`\n[assistant]\n${reply.text}`);
+      const body = cleanCliText(reply.text);
+      if (body) console.log(`\n${body}\n`);
       return;
     }
-    const text = renderCardToText(reply.card);
+    const text = cardToPlainText(reply.card);
     if (reply.kind === 'patch_card') {
       this.printStreamingAssistant(text, reply.messageId);
       return;
     }
     if (reply.kind === 'reply_card' || reply.kind === 'card') {
-      console.log(`\n[assistant]\n${text}`);
+      if (text) console.log(`\n${text}\n`);
       return;
     }
     this.resetStream();
-    console.log(`\n[assistant card]\n${text}`);
+    if (text) console.log(`\n${text}\n`);
   }
 
   private resetStream(): void {
@@ -215,11 +221,11 @@ export class CliIngressChannel implements IngressChannel {
     this.streamLineCount = 0;
   }
 
-  /** patch_card 在 TTY 下原地刷新，模拟飞书卡片的流式更新。 */
   private printStreamingAssistant(text: string, messageId: string): void {
-    const body = `\n[assistant]\n${text}`;
+    const body = text ? `\n${text}\n` : '';
+    if (!body) return;
     if (!process.stdout.isTTY) {
-      console.log(`\n[assistant update ${messageId}]\n${text}`);
+      console.log(body);
       return;
     }
     if (this.streamMessageId === messageId && this.streamLineCount > 0) {
@@ -228,7 +234,6 @@ export class CliIngressChannel implements IngressChannel {
       this.streamMessageId = messageId;
     }
     process.stdout.write(body);
-    if (!body.endsWith('\n')) process.stdout.write('\n');
     this.streamLineCount = body.split('\n').length;
   }
 }

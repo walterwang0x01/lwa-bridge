@@ -384,7 +384,7 @@ export function buildHelpCard(opts?: {
       ['/ps', '列出本机所有 bridge 进程'],
       ['/exit <id>', '停止指定进程（管理员）'],
       ['/reconnect', '重连飞书 WebSocket'],
-      ['/doctor [描述]', '看日志自诊断'],
+      ['/doctor', 'CLI 本地体检；带描述则看日志自诊断'],
       ['/selftest', '健康检查报告（一键看 9 项配置/运行时状态）'],
     ]),
   ];

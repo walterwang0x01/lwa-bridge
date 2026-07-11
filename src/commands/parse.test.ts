@@ -490,8 +490,41 @@ describe('parseCommand', () => {
       expect(parseCommand('/tools')).toEqual({ kind: 'kiro-internal', name: 'tools' });
     });
 
-    it('/compact 拦截', () => {
-      expect(parseCommand('/compact')).toEqual({ kind: 'kiro-internal', name: 'compact' });
+    it('/compact 是 LWA 命令', () => {
+      expect(parseCommand('/compact')).toEqual({ kind: 'compact', focus: undefined });
+      expect(parseCommand('/compact focus auth')).toEqual({
+        kind: 'compact',
+        focus: 'focus auth',
+      });
+    });
+
+    it('/sessions /plan /review', () => {
+      expect(parseCommand('/sessions')).toEqual({ kind: 'sessions' });
+      expect(parseCommand('/plan')).toEqual({ kind: 'phase-plan', prompt: undefined });
+      expect(parseCommand('/plan do jwt')).toEqual({ kind: 'phase-plan', prompt: 'do jwt' });
+      expect(parseCommand('/review')).toEqual({ kind: 'phase-review', prompt: undefined });
+      expect(parseCommand('/apply')).toEqual({ kind: 'phase-apply' });
+      expect(parseCommand('/resume abc')).toEqual({ kind: 'resume', id: 'abc' });
+    });
+
+    it('/explore /test /worktree', () => {
+      expect(parseCommand('/explore where is auth')).toEqual({
+        kind: 'explore',
+        query: 'where is auth',
+      });
+      expect(parseCommand('/test')).toEqual({ kind: 'subtest', query: undefined });
+      expect(parseCommand('/test unit')).toEqual({ kind: 'subtest', query: 'unit' });
+      expect(parseCommand('/worktree list')).toEqual({ kind: 'worktree', mode: 'list' });
+      expect(parseCommand('/worktree add feat-x')).toEqual({
+        kind: 'worktree',
+        mode: 'add',
+        name: 'feat-x',
+      });
+      expect(parseCommand('/wt use feat-x')).toEqual({
+        kind: 'worktree',
+        mode: 'use',
+        name: 'feat-x',
+      });
     });
 
     it('/login 拦截', () => {
@@ -502,8 +535,8 @@ describe('parseCommand', () => {
       expect(parseCommand('/logout')).toEqual({ kind: 'kiro-internal', name: 'logout' });
     });
 
-    it('/session 拦截', () => {
-      expect(parseCommand('/session')).toEqual({ kind: 'kiro-internal', name: 'session' });
+    it('/session 映射到 /sessions', () => {
+      expect(parseCommand('/session')).toEqual({ kind: 'sessions' });
     });
   });
 

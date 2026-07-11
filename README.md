@@ -94,13 +94,17 @@
 # 1. 安装
 npm i -g lark-kiro-bridge
 
-# 2. 启动（首次会自动弹二维码 → 扫码同意 → 完成）
-lwa run
+# 2a. 本地纯净 REPL（不连飞书）
+lwa
+
+# 2b. 飞书 Gateway（首次可自动弹二维码）
+lwa serve
 ```
 
-> **就这么简单**——飞书 App 扫码同意后，bridge 自动创建应用、配好凭证、开通必要权限。
+> **本地**像 Claude Code / kiro：一条命令进 REPL，里面用 `/model` `/runtime` `/help`。  
+> **飞书**用 `lwa serve`；Dashboard：`http://127.0.0.1:5180`。通道由 `ingress.channels` 控制（默认 `["lark"]`）。
 
-启动后在飞书私聊机器人发「你好」，应该立即看到流式刷新的卡片。
+启动 Gateway 后在飞书私聊机器人发「你好」，应该立即看到流式刷新的卡片。
 
 ### 想用已有的飞书应用？
 
@@ -138,21 +142,20 @@ lwa restart        # 重启
 > Linux 想让 daemon 在用户登出后还跑（比如服务器场景），跑一次：
 > `loginctl enable-linger $USER`
 
-### 本地终端直聊（CLI ingress）
-
-如果你暂时不想走飞书，也可以直接在本机终端把同一个 dispatcher 跑起来：
+### 本地纯净 REPL
 
 ```bash
-lwa chat
+lwa          # TTY 下默认进入
+lwa chat     # 显式同义
 ```
 
-这会进入一个本地交互会话。你可以直接输入自然语言或斜杠命令（如 `/help`、`/status`、`/ws list`）；输入 `.exit` 退出。
+纯文本交互（无飞书卡片）：自然语言、`/help` `/model` `/runtime` `/status`；`.exit` 退出。不连飞书、不启 Dashboard。
 
-> 这是第一版 CLI ingress：重点是复用现有 bridge 能力做本地对话与调试，不依赖飞书收消息。
+飞书生产入口请用 `lwa serve`（见上）。通道配置见 [docs/MIGRATION_LWA.md](./docs/MIGRATION_LWA.md)。
 
 ### 📊 Web Dashboard
 
-bridge 跑起来后自动在本机起一个只读控制台，浏览器直接打开：
+`lwa serve` / `lwa start` 后自动在本机起只读控制台，浏览器打开：
 
 ```
 http://127.0.0.1:5180
@@ -372,11 +375,15 @@ export OPENAI_MODEL=aws-bedrock/claude-haiku-4-5
 lwa init                # 扫码创建飞书应用（首选）
 lwa init --manual       # 手动输入已有 App ID/Secret
 lwa init --app-id <id> --app-secret <s>   # 一行搞定（CI 友好）
-lwa run                 # 前台启动（首次自动跳扫码）
-lwa chat                # 本地终端直接对话（CLI ingress）
+lwa                     # 本地纯净 REPL（TTY 默认）
+lwa chat                # 同上
+lwa serve               # Gateway（飞书等，按 ingress.channels）
+lwa run                 # serve 别名
+lwa serve --chat        # Gateway + 本机 REPL
+lwa models              # OpenAI 兼容网关模型列表
 lwa config-show         # 显示当前配置（脱敏）
 
-lwa start               # 装并起 daemon
+lwa start               # 装并起 daemon（serve）
 lwa stop                # 停 daemon
 lwa restart             # 重启
 lwa status              # 状态

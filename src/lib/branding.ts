@@ -19,7 +19,8 @@ export const LEGACY_DATA_DIR_NAME = '.lark-kiro-bridge';
 export const PRODUCT_TITLE = 'LWA';
 export const PRODUCT_SUBTITLE = 'Lark Local Agent Workbench';
 
-export function cliCommand(subcommand: string): string {
+export function cliCommand(subcommand?: string): string {
+  if (!subcommand) return CLI_NAME;
   return `${CLI_NAME} ${subcommand}`;
 }
 
