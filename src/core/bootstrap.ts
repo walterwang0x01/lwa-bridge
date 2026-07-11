@@ -40,6 +40,10 @@ export interface RunBridgeOptions {
   cliOnly?: boolean;
   /** CLI 模式：code（默认）| chat */
   cliMode?: 'code' | 'chat';
+  /** 续上最近一个 CLI 会话 */
+  cliContinue?: boolean;
+  /** 恢复指定 CLI 会话 id */
+  cliResumeId?: string;
 }
 
 function resolveGatewayChannels(config: Config): ChannelId[] {
@@ -56,8 +60,17 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
   const config = loadConfig();
   const cliOnly = Boolean(opts?.cliOnly);
   const cliMode = opts?.cliMode ?? 'code';
+  const sessions = new SessionStore();
+  let initialCliId = cliMode === 'chat' ? 'cli-chat' : 'cli-code';
+  if (cliOnly && opts?.cliResumeId) {
+    initialCliId = opts.cliResumeId;
+  } else if (cliOnly && opts?.cliContinue) {
+    const prefix = cliMode === 'chat' ? 'cli-chat' : 'cli-code';
+    const latest = await sessions.latestCliSessionId(prefix);
+    if (latest) initialCliId = latest;
+  }
   const cliConversationIdRef = {
-    current: cliMode === 'chat' ? 'cli-chat' : 'cli-code',
+    current: initialCliId,
   };
   log.info(
     {
@@ -164,7 +177,6 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
     });
   }
 
-  const sessions = new SessionStore();
   const workspaces = new WorkspaceStore();
   const cronStore = new CronStore();
   const activeCards = new ActiveCardsStore();
@@ -343,6 +355,45 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
         } catch {
           return { profileName };
         }
+      } catch {
+        return undefined;
+      }
+    },
+    getStatusExtras: async () => {
+      try {
+        const { estimateSessionContext } = await import('../runtime/contextEstimate.js');
+        const { loadProjectMemory } = await import('../ingress/cli/projectMemory.js');
+        const { loadGlobalMemory } = await import('../ingress/cli/globalMemory.js');
+        const conversationId = cliConversationIdRef.current;
+        const session = await sessions.getConversation(conversationId, resolveCliLaunchCwd(config));
+        const { profile } = (() => {
+          try {
+            const name =
+              session.runtimeProfile ??
+              (typeof config.runtime?.default === 'string' ? config.runtime.default : 'kiro');
+            if (name === 'auto') {
+              return { profile: resolveRuntimeProfile(config, 'kiro') };
+            }
+            return { profile: resolveRuntimeProfile(config, name) };
+          } catch {
+            return { profile: resolveRuntimeProfile(config, 'kiro') };
+          }
+        })();
+        const ctx = await estimateSessionContext({
+          config,
+          sessions,
+          conversationId,
+          cwd: session.currentCwd,
+          profile,
+        });
+        const memHits = [
+          ...loadProjectMemory(session.currentCwd).map((f) => f.name),
+          ...loadGlobalMemory().map((f) => f.name),
+        ];
+        return {
+          ctxPct: ctx.pct,
+          memLabel: memHits.length ? memHits.slice(0, 3).join('+') : undefined,
+        };
       } catch {
         return undefined;
       }

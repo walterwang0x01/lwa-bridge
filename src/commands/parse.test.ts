@@ -505,6 +505,7 @@ describe('parseCommand', () => {
       expect(parseCommand('/review')).toEqual({ kind: 'phase-review', prompt: undefined });
       expect(parseCommand('/apply')).toEqual({ kind: 'phase-apply' });
       expect(parseCommand('/resume abc')).toEqual({ kind: 'resume', id: 'abc' });
+      expect(parseCommand('/rename JWT work')).toEqual({ kind: 'rename', title: 'JWT work' });
     });
 
     it('/explore /test /worktree', () => {

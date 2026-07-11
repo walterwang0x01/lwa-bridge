@@ -72,13 +72,22 @@ export function formatCliStatusLine(opts: {
   cwd: string;
   profileName?: string;
   model?: string;
+  conversationId?: string;
+  ctxPct?: number;
+  memLabel?: string;
 }): string {
   const branch = gitBranch(opts.cwd);
   const parts = [shortenHomePath(opts.cwd)];
   if (branch) parts.push(`· ${branch}`);
+  if (opts.conversationId) {
+    const short = opts.conversationId.replace(/^cli-(code|chat)-?/, '');
+    parts.push(`· ${short || opts.conversationId}`);
+  }
   if (opts.profileName) {
     const eng = opts.model ? `${opts.profileName} · ${opts.model}` : opts.profileName;
     parts.push(`· ${eng}`);
   }
+  if (opts.ctxPct !== undefined) parts.push(`· ctx ${opts.ctxPct}%`);
+  if (opts.memLabel) parts.push(`· mem ${opts.memLabel}`);
   return parts.join(' ');
 }

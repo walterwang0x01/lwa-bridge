@@ -22,6 +22,8 @@ export interface CliPromptContext {
   /** 当前会话 id（可被 /resume 切换） */
   getConversationId?: () => string;
   setConversationId?: (id: string) => void;
+  /** 可选：状态行额外字段 */
+  getStatusExtras?: () => Promise<{ ctxPct?: number; memLabel?: string } | undefined>;
 }
 
 interface CliStoredMessage {
@@ -129,10 +131,14 @@ export class CliIngressChannel implements IngressChannel {
     const resolveLine = async (): Promise<string> => {
       const cwd = ctx ? await ctx.getCwd() : process.cwd();
       const profile = ctx?.getProfile ? await ctx.getProfile() : undefined;
+      const extras = ctx?.getStatusExtras ? await ctx.getStatusExtras() : undefined;
       return formatCliStatusLine({
         cwd,
         profileName: profile?.profileName,
         model: profile?.model,
+        conversationId: activeId(),
+        ctxPct: extras?.ctxPct,
+        memLabel: extras?.memLabel,
       });
     };
 

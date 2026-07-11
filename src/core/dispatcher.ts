@@ -811,11 +811,14 @@ export class Dispatcher {
           const lines = list.slice(0, 30).map((s) => {
             const mark = s.id === active ? ' ←' : '';
             const when = new Date(s.lastActiveAt).toISOString().slice(0, 16).replace('T', ' ');
-            return `• \`${s.id}\`${mark}  ${shortenHomePath(s.cwd)}  ${s.runtimeProfile ?? '-'}  ${s.phase ?? '-'}  ${when}${s.hasSummary ? '  [compact]' : ''}`;
+            const title = s.title ? ` "${s.title}"` : '';
+            return `• \`${s.id}\`${mark}${title}  ${shortenHomePath(s.cwd)}  ${s.runtimeProfile ?? '-'}  ${s.phase ?? '-'}  ${when}${s.hasSummary ? '  [compact]' : ''}`;
           });
           await this.respondText(
             msg,
-            ['CLI sessions:', ...lines, '', 'Switch: /resume <id>'].join('\n'),
+            ['CLI sessions:', ...lines, '', 'Switch: /resume <id> · Rename: /rename <title>'].join(
+              '\n',
+            ),
           );
           return;
         }
@@ -842,6 +845,15 @@ export class Dispatcher {
             msg,
             `✅ Resumed \`${target.id}\`\ncwd: ${target.cwd}\nruntime: ${target.runtimeProfile ?? '(auto)'}`,
           );
+          return;
+        }
+        case 'rename': {
+          await this.sessions.setConversationMeta(
+            conversationId,
+            { title: cmd.title },
+            this.config.workspace.defaultCwd,
+          );
+          await this.respondText(msg, `✅ Renamed session → ${cmd.title}`);
           return;
         }
         case 'compact': {
@@ -1340,6 +1352,7 @@ export class Dispatcher {
     const cooldown = compactCfg?.cooldownMs ?? 60_000;
 
     const { estimateContextChars, shouldAutoCompact } = await import('../runtime/autoCompact.js');
+    const { microCompactMessages } = await import('../runtime/microCompact.js');
     const { readOpenAISessionMessages } = await import('../runtime/openaiCompatibleRuntime.js');
     const session = await this.sessions.getConversation(
       conversationId,
@@ -1357,6 +1370,7 @@ export class Dispatcher {
     if (messages.length === 0 && summary) {
       messages = [{ role: 'user', content: summary }];
     }
+    messages = microCompactMessages(messages);
     const chars = estimateContextChars(messages, [summary, nextPrompt]);
     if (
       !shouldAutoCompact({
@@ -1373,30 +1387,39 @@ export class Dispatcher {
     process.stdout.write(
       `(auto-compact: ~${Math.round(chars / 1000)}k chars ≥ ${Math.round(threshold / 1000)}k)\n`,
     );
-    // 复用手动 compact（无 focus）
-    const fakeMsg = {
-      chatId: conversationId,
-      messageId: `auto-compact-${Date.now()}`,
-      eventId: `auto-compact-${Date.now()}`,
-      chatType: 'p2p' as const,
-      senderOpenId: 'cli-user',
-      messageType: 'text' as const,
-      text: '/compact',
-      createTime: Date.now(),
-      receivedAt: Date.now(),
-      rawContent: '',
-      mentions: [],
-    } as unknown as IncomingMessage;
-    await this.handleCompactCmd(fakeMsg, 'auto: keep goals, files, decisions, todos');
+    await this.performCompact(conversationId, 'auto: keep goals, files, decisions, todos');
   }
 
   private async handleCompactCmd(msg: IncomingMessage, focus?: string): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
+    const result = await this.performCompact(conversationId, focus);
+    await this.respondText(
+      msg,
+      [
+        `✅ Compacted via ${result.via} (${result.profileName})`,
+        focus ? `focus: ${focus}` : undefined,
+        result.rereadCount ? `re-read: ${result.rereadCount} file(s)` : undefined,
+        '',
+        result.summary.slice(0, 1200),
+        result.summary.length > 1200 ? '\n…' : undefined,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+
+  /** 执行 compact；返回摘要，不直接回复用户。 */
+  private async performCompact(
+    conversationId: string,
+    focus?: string,
+  ): Promise<{ summary: string; via: string; profileName: string; rereadCount: number }> {
     const session = await this.sessions.getConversation(
       conversationId,
       this.config.workspace.defaultCwd,
     );
     const { compactMessages } = await import('../runtime/compact.js');
+    const { microCompactMessages } = await import('../runtime/microCompact.js');
+    const { buildFilesRereadBlock } = await import('../runtime/artifacts.js');
     const { readOpenAISessionMessages, replaceOpenAISessionWithSummary } = await import(
       '../runtime/openaiCompatibleRuntime.js'
     );
@@ -1412,37 +1435,40 @@ export class Dispatcher {
       const nativeId = decodeSessionId(agentSid, profile.kind);
       if (nativeId) messages = await readOpenAISessionMessages(nativeId);
     }
+    messages = microCompactMessages(messages);
 
-    const { summary, via } = await compactMessages(this.config, messages, focus);
+    const filesTouched = session.filesTouched ?? [];
+    const focusWithFiles =
+      filesTouched.length > 0
+        ? [focus, `files touched: ${filesTouched.slice(-12).join(', ')}`].filter(Boolean).join('\n')
+        : focus;
+
+    const { summary, via } = await compactMessages(this.config, messages, focusWithFiles);
+    const reread = buildFilesRereadBlock(session.currentCwd, filesTouched);
+    const fullSummary = reread ? `${summary}\n\n${reread}` : summary;
+
     await this.sessions.setConversationMeta(
       conversationId,
-      { compactionSummary: summary, lastCompactAt: Date.now() },
+      { compactionSummary: fullSummary, lastCompactAt: Date.now() },
       this.config.workspace.defaultCwd,
     );
 
     if (profile.kind === 'openai-compatible' && agentSid) {
       const nativeId = decodeSessionId(agentSid, profile.kind);
       if (nativeId) {
-        await replaceOpenAISessionWithSummary(nativeId, session.currentCwd, summary);
+        await replaceOpenAISessionWithSummary(nativeId, session.currentCwd, fullSummary);
       }
     } else {
-      // kiro/cursor：清底层 session，下一轮带着摘要开新会话
       await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
       await this.evictChatFromAllPools(conversationId);
     }
 
-    await this.respondText(
-      msg,
-      [
-        `✅ Compacted via ${via} (${profileName})`,
-        focus ? `focus: ${focus}` : undefined,
-        '',
-        summary.slice(0, 1200),
-        summary.length > 1200 ? '\n…' : undefined,
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    );
+    return {
+      summary: fullSummary,
+      via,
+      profileName,
+      rereadCount: Math.min(6, filesTouched.length),
+    };
   }
 
   private async handlePhaseCmd(
@@ -1812,6 +1838,26 @@ export class Dispatcher {
       name,
       this.config.workspace.defaultCwd,
     );
+    // 换引擎：可选自动 compact 摘要交接，然后清底层 session（不跨引擎续接）
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    let handoffNote = '旧底层 session 已断开；下一轮用新引擎。';
+    if (session.compactionSummary) {
+      handoffNote = '已保留 compact 摘要交接；旧底层 session 已断开。';
+    } else if (this.isTextChannel(conversationId)) {
+      try {
+        await this.performCompact(
+          conversationId,
+          `runtime handoff → ${name}: keep goals, files, decisions, todos`,
+        );
+        handoffNote = '已自动 compact 并交接摘要；旧底层 session 已断开。';
+      } catch {
+        handoffNote = '摘要交接失败，已切换引擎；建议手动 /compact。';
+      }
+    }
+    await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
     await this.evictChatFromAllPools(conversationId);
     const profile = resolveRuntimeProfile(this.config, name);
     await this.sendInteractiveCard(
@@ -1819,7 +1865,7 @@ export class Dispatcher {
       buildAckCard({
         state: 'done',
         title: '✅ 引擎已切换',
-        body: `已切换到 \`${name}\`（${profile.kind} / \`${profile.bin}\`）。\n下一条消息使用新引擎；旧 session 不会跨引擎续接。`,
+        body: `已切换到 \`${name}\`（${profile.kind} / \`${profile.bin}\`）。\n${handoffNote}`,
       }),
     );
   }
@@ -4026,7 +4072,11 @@ export class Dispatcher {
             });
           }
 
+          const { extractPathsFromSessionEvent, normalizeArtifactPath } = await import(
+            '../runtime/artifacts.js'
+          );
           let streamed = '';
+          const touchedThisTurn: string[] = [];
           let result: Awaited<ReturnType<typeof runAgentTurn>>;
           try {
             result = await runAgentTurn(codingProfile, {
@@ -4040,6 +4090,10 @@ export class Dispatcher {
                 if (ev.kind === 'message' && ev.text) {
                   streamed += ev.text;
                   process.stdout.write(ev.text);
+                }
+                for (const raw of extractPathsFromSessionEvent(ev)) {
+                  const abs = normalizeArtifactPath(cwd, raw);
+                  if (abs) touchedThisTurn.push(abs);
                 }
               },
               extraEnv: {
@@ -4102,6 +4156,13 @@ export class Dispatcher {
               result.newSessionId,
             );
           }
+          if (touchedThisTurn.length > 0) {
+            await this.sessions.appendFilesTouched(
+              conversationId,
+              touchedThisTurn,
+              this.config.workspace.defaultCwd,
+            );
+          }
           await this.sessions.touchConversation(conversationId);
 
           if (this.taskHistory) {
@@ -4116,7 +4177,7 @@ export class Dispatcher {
                 terminal: 'done',
                 promptPreview: finalPrompt.slice(0, 100),
                 toolCallCount: 0,
-                artifacts: [],
+                artifacts: [...new Set(touchedThisTurn)].slice(0, 20),
                 runtimeKind: profile.kind,
                 runtimeProfile: profileName,
                 model: profile.model,

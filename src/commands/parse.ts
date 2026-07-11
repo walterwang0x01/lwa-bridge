@@ -12,6 +12,7 @@
  *   /status                查看会话状态
  *   /sessions              列出 CLI 会话
  *   /resume [id]           切换/恢复 CLI 会话
+ *   /rename <title>        命名当前 CLI 会话
  *   /compact [focus]       压缩当前会话上下文
  *   /plan [text]           进入 plan 阶段（或直接规划）
  *   /review [text]         进入 review 阶段（或直接审查）
@@ -41,6 +42,7 @@ export type ParsedCommand =
   | { kind: 'status' }
   | { kind: 'sessions' }
   | { kind: 'resume'; id?: string }
+  | { kind: 'rename'; title: string }
   | { kind: 'compact'; focus?: string }
   | { kind: 'phase-plan'; prompt?: string }
   | { kind: 'phase-review'; prompt?: string }
@@ -194,6 +196,9 @@ export function parseCommand(text: string): ParsedCommand | null {
     case 'resume':
     case 'continue':
       return { kind: 'resume', id: tail || undefined };
+    case 'rename':
+      if (!tail) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'rename', title: tail };
     case 'compact':
       return { kind: 'compact', focus: tail || undefined };
     case 'plan':

@@ -38,6 +38,8 @@ const ChatSessionSchema = z.object({
   compactionSummary: z.string().optional(),
   /** 上次 compact 时间（auto-compact 防抖） */
   lastCompactAt: z.number().int().nonnegative().optional(),
+  /** 本会话触及的文件路径（compact 后可重读） */
+  filesTouched: z.array(z.string()).optional(),
 });
 
 const SessionsFileSchema = z.object({
@@ -389,6 +391,7 @@ export class SessionStore {
       phase?: 'plan' | 'apply' | 'review' | null;
       compactionSummary?: string | null;
       lastCompactAt?: number | null;
+      filesTouched?: string[] | null;
     },
     defaultCwd: string,
   ): Promise<void> {
@@ -410,10 +413,53 @@ export class SessionStore {
       }
       if (patch.lastCompactAt === null) delete session.lastCompactAt;
       else if (patch.lastCompactAt !== undefined) session.lastCompactAt = patch.lastCompactAt;
+      if (patch.filesTouched === null) delete session.filesTouched;
+      else if (patch.filesTouched !== undefined) session.filesTouched = patch.filesTouched;
       session.lastActiveAt = Date.now();
       data.chats[conversationId] = session;
       writeFile(data);
     });
+  }
+
+  async appendFilesTouched(
+    conversationId: string,
+    paths: string[],
+    defaultCwd: string,
+    max = 40,
+  ): Promise<string[]> {
+    return withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[conversationId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      const seen = new Set(session.filesTouched ?? []);
+      const merged = [...(session.filesTouched ?? [])];
+      for (const p of paths) {
+        if (!p || seen.has(p)) continue;
+        seen.add(p);
+        merged.push(p);
+      }
+      session.filesTouched = merged.slice(-max);
+      session.lastActiveAt = Date.now();
+      data.chats[conversationId] = session;
+      writeFile(data);
+      return session.filesTouched;
+    });
+  }
+
+  async getFilesTouched(conversationId: string): Promise<string[]> {
+    return withLock(() => readFile().chats[conversationId]?.filesTouched ?? []);
+  }
+
+  /** 最近一个 CLI 会话 id（按 lastActiveAt）。 */
+  async latestCliSessionId(prefix?: string): Promise<string | undefined> {
+    const list = await this.listCliSessions();
+    const filtered = prefix ? list.filter((s) => s.id.startsWith(prefix)) : list;
+    return filtered[0]?.id;
   }
 
   async getCompactionSummary(conversationId: string): Promise<string | undefined> {

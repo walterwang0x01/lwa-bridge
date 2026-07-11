@@ -42,7 +42,10 @@ function readPackageVersion(): string {
   return '0.0.0';
 }
 
-async function runLocalRepl(mode: 'code' | 'chat' = 'code'): Promise<void> {
+async function runLocalRepl(
+  mode: 'code' | 'chat' = 'code',
+  opts?: { continue?: boolean; resume?: string },
+): Promise<void> {
   if (!existsSync(CONFIG_FILE)) {
     console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
     process.exit(1);
@@ -51,7 +54,12 @@ async function runLocalRepl(mode: 'code' | 'chat' = 'code'): Promise<void> {
   if (!process.env['LARK_KIRO_LOG_LEVEL']) {
     process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
   }
-  await runBridge({ cliOnly: true, cliMode: mode });
+  await runBridge({
+    cliOnly: true,
+    cliMode: mode,
+    cliContinue: opts?.continue,
+    cliResumeId: opts?.resume,
+  });
 }
 
 async function runGateway(opts: { chat?: boolean }): Promise<void> {
@@ -162,9 +170,11 @@ async function serveAction(opts: { chat?: boolean }): Promise<void> {
 program
   .command('code')
   .description('Local coding REPL (default; Kiro-first plan routing)')
-  .action(async () => {
+  .option('--continue', 'Resume the most recent code session')
+  .option('--resume <id>', 'Resume a specific CLI session id')
+  .action(async (opts: { continue?: boolean; resume?: string }) => {
     try {
-      await runLocalRepl('code');
+      await runLocalRepl('code', { continue: opts.continue, resume: opts.resume });
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);
@@ -188,9 +198,11 @@ program
 program
   .command('chat')
   .description('Local IM-style REPL (Feishu persona rehearsal; no WebSocket)')
-  .action(async () => {
+  .option('--continue', 'Resume the most recent chat session')
+  .option('--resume <id>', 'Resume a specific CLI session id')
+  .action(async (opts: { continue?: boolean; resume?: string }) => {
     try {
-      await runLocalRepl('chat');
+      await runLocalRepl('chat', { continue: opts.continue, resume: opts.resume });
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);

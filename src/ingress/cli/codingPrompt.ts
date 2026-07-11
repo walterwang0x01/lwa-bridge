@@ -2,6 +2,7 @@
  * 本地 coding REPL 的系统提示（覆盖飞书向的 kiro.systemPromptPrefix）。
  */
 import { formatProjectMemoryBlock, loadProjectMemory } from './projectMemory.js';
+import { formatGlobalMemoryBlock, loadGlobalMemory } from './globalMemory.js';
 
 export function buildCliCodingSystemPrompt(opts: {
   cwd: string;
@@ -9,10 +10,15 @@ export function buildCliCodingSystemPrompt(opts: {
   model?: string;
   /** 测试可注入；默认从 cwd 读 LWA.md / AGENTS.md / CLAUDE.md */
   projectMemoryBlock?: string;
+  /** 测试可注入；默认读 ~/.lwa/memory/*.md */
+  globalMemoryBlock?: string;
 }): string {
   const modelLine = opts.model ? `Model: ${opts.model}` : '';
-  const memoryBlock =
+  const projectBlock =
     opts.projectMemoryBlock ?? formatProjectMemoryBlock(loadProjectMemory(opts.cwd));
+  const globalBlock = opts.globalMemoryBlock ?? formatGlobalMemoryBlock(loadGlobalMemory());
+  const memoryParts = [globalBlock, projectBlock].filter(Boolean);
+  const memoryBlock = memoryParts.length ? memoryParts.join('\n\n') : '';
   return [
     "You are LWA, a local coding agent in the user's terminal (NOT a Feishu/Lark IM bot).",
     'Do not mention Feishu, lark-cli, chat cards, or sending messages to IM unless the user explicitly asks.',

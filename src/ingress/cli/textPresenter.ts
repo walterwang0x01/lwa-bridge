@@ -85,6 +85,7 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     '  /worktree …          git worktree add|use|rm|list (parallel agents)',
     '  /sessions            list CLI sessions',
     '  /resume [id]         switch CLI session',
+    '  /rename <title>      name current session',
     '  /new                 reset conversation session',
     '  /stop                abort running task',
     '',
@@ -92,6 +93,6 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     '',
     'Meta: /help  .exit',
     '',
-    'Modes: lwa code | lwa chat | lwa serve',
+    'Modes: lwa code [--continue|--resume <id>] | lwa chat | lwa serve',
   ].join('\n');
 }
