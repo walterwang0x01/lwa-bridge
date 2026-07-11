@@ -5,7 +5,7 @@ import type { Config } from '../lib/config.js';
 import type { SessionStore } from '../store/sessions.js';
 import type { RuntimeProfile } from './types.js';
 import { decodeSessionId } from './sessionId.js';
-import { estimateContextChars } from './autoCompact.js';
+import { estimateContextChars, estimateTokensFromChars } from './autoCompact.js';
 import { readOpenAISessionMessages } from './openaiCompatibleRuntime.js';
 
 export async function estimateSessionContext(opts: {
@@ -17,7 +17,9 @@ export async function estimateSessionContext(opts: {
   extra?: string[];
 }): Promise<{
   chars: number;
+  tokens: number;
   thresholdChars: number;
+  thresholdTokens: number;
   pct: number;
   messageCount: number;
   hasSummary: boolean;
@@ -38,10 +40,14 @@ export async function estimateSessionContext(opts: {
     messages = [{ role: 'user', content: summary }];
   }
   const chars = estimateContextChars(messages, [summary, ...(opts.extra ?? [])]);
+  const tokens = estimateTokensFromChars(chars);
+  const thresholdTokens = estimateTokensFromChars(thresholdChars);
   const pct = Math.min(999, Math.round((chars / thresholdChars) * 100));
   return {
     chars,
+    tokens,
     thresholdChars,
+    thresholdTokens,
     pct,
     messageCount: messages.length,
     hasSummary: Boolean(summary),

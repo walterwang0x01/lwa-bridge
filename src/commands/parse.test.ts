@@ -31,8 +31,8 @@ describe('parseCommand', () => {
       expect(parseCommand('/reset')).toEqual({ kind: 'new' });
     });
 
-    it('/clear 是 /new 的别名（覆盖了 kiro-internal）', () => {
-      expect(parseCommand('/clear')).toEqual({ kind: 'new' });
+    it('/clear 清空上下文（保留会话 id）', () => {
+      expect(parseCommand('/clear')).toEqual({ kind: 'clear' });
     });
   });
 
@@ -526,6 +526,13 @@ describe('parseCommand', () => {
         mode: 'use',
         name: 'feat-x',
       });
+      expect(parseCommand('/parallel feat-a do jwt')).toEqual({
+        kind: 'parallel',
+        worktree: 'feat-a',
+        prompt: 'do jwt',
+      });
+      expect(parseCommand('/jobs')).toEqual({ kind: 'jobs', id: undefined });
+      expect(parseCommand('/jobs abc')).toEqual({ kind: 'jobs', id: 'abc' });
     });
 
     it('/login 拦截', () => {

@@ -731,8 +731,10 @@ export class Dispatcher {
               `harness: ${this.harnessModeOf(conversationId)}`,
               phase ? `phase: ${phase}` : undefined,
               agentSid ? `agentSession: ${agentSid.slice(0, 12)}…` : 'agentSession: (new)',
-              `ctx: ~${ctx.pct}% (${Math.round(ctx.chars / 1000)}k / ${Math.round(ctx.thresholdChars / 1000)}k)${ctx.hasSummary ? ' · compacted' : ''}`,
-              session.compactionSummary ? 'compact: yes' : 'compact: no',
+              `ctx: ~${ctx.pct}% (~${Math.round(ctx.tokens / 1000)}k / ${Math.round(ctx.thresholdTokens / 1000)}k tok)${ctx.hasSummary ? ' · compacted' : ''}`,
+              session.filesTouched?.length
+                ? `filesTouched: ${session.filesTouched.length}`
+                : undefined,
               `task: ${this.getPipeline(conversationId).hasActiveTask() ? 'running' : 'idle'}`,
               circuits.length
                 ? `gateway: ${circuits.map((c) => `${c.state}`).join(',')}`
@@ -797,6 +799,25 @@ export class Dispatcher {
               title: '🔄 会话已重置',
               body: `下次提问会在 \`${session.currentCwd}\` 下新建 agent session。`,
             }),
+          );
+          return;
+        }
+        case 'clear': {
+          await this.sessions.setConversationMeta(
+            conversationId,
+            {
+              compactionSummary: null,
+              phase: null,
+              filesTouched: null,
+              lastCompactAt: null,
+            },
+            this.config.workspace.defaultCwd,
+          );
+          await this.sessions.clearConversationKiroSession(conversationId, session.currentCwd);
+          await this.evictChatFromAllPools(conversationId);
+          await this.respondText(
+            msg,
+            `🧹 Cleared transcript/summary for \`${conversationId}\` (same session id).`,
           );
           return;
         }
@@ -882,6 +903,14 @@ export class Dispatcher {
         }
         case 'worktree': {
           await this.handleWorktreeCmd(msg, cmd);
+          return;
+        }
+        case 'parallel': {
+          await this.handleParallelCmd(msg, cmd.worktree, cmd.prompt);
+          return;
+        }
+        case 'jobs': {
+          await this.handleJobsCmd(msg, cmd.id);
           return;
         }
         case 'stop': {
@@ -1632,6 +1661,8 @@ export class Dispatcher {
           '  /worktree add <name>   create <repo>/.lwa-worktrees/<name>',
           '  /worktree use <name>   /cd into that worktree',
           '  /worktree rm <name>',
+          '  /parallel <name> <prompt>  run agent in that worktree (background)',
+          '  /jobs                  list background jobs',
           '',
           'Optional: install BrowserSkill (`bsk`) for logged-in browser automation — not bundled.',
         ].join('\n'),
@@ -1687,6 +1718,195 @@ export class Dispatcher {
       const message = e instanceof WorktreeError ? e.message : (e as Error).message;
       await this.respondText(msg, `❌ worktree: ${message}`);
     }
+  }
+
+  /**
+   * /parallel <worktree> <prompt>
+   * 在隔离 worktree 里后台跑 agent；主会话可继续输入。用 /jobs 查看。
+   */
+  private async handleParallelCmd(
+    msg: IncomingMessage,
+    worktreeName: string,
+    prompt: string,
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    if (!this.isTextChannel(conversationId)) {
+      await this.respondText(msg, '/parallel is CLI-only.');
+      return;
+    }
+    const session = await this.sessions.getConversation(
+      conversationId,
+      this.config.workspace.defaultCwd,
+    );
+    const { findGitRoot, listWorktrees, addWorktree, defaultWorktreeParent, WorktreeError } =
+      await import('../ingress/cli/worktree.js');
+    const { validateCwd } = await import('../lib/security.js');
+    const { createParallelJob, updateParallelJob } = await import('../runtime/parallelJobs.js');
+    const { join } = await import('node:path');
+    const { existsSync } = await import('node:fs');
+
+    const root = findGitRoot(session.currentCwd);
+    if (!root) {
+      await this.respondText(msg, 'Not inside a git repo. /parallel needs a worktree.');
+      return;
+    }
+
+    let wtPath: string;
+    try {
+      const parent = defaultWorktreeParent(root);
+      const expected = join(parent, worktreeName);
+      const existing = listWorktrees(root).find(
+        (w) =>
+          w.path === expected ||
+          w.path.endsWith(`/${worktreeName}`) ||
+          w.branch === `lwa/${worktreeName}`,
+      );
+      if (existing) {
+        wtPath = existing.path;
+      } else if (existsSync(expected)) {
+        wtPath = expected;
+      } else {
+        wtPath = addWorktree(root, worktreeName).path;
+      }
+      wtPath = validateCwd(wtPath, this.config, session.currentCwd);
+    } catch (e) {
+      const message = e instanceof WorktreeError ? e.message : (e as Error).message;
+      await this.respondText(msg, `❌ parallel: ${message}`);
+      return;
+    }
+
+    const childId = `cli-par-${worktreeName}-${Date.now().toString(36).slice(-5)}`;
+    await this.sessions.setConversationCwd(childId, wtPath, this.config.workspace.defaultCwd);
+    try {
+      resolveRuntimeProfile(this.config, 'kiro');
+      await this.sessions.setConversationRuntimeProfile(
+        childId,
+        'kiro',
+        this.config.workspace.defaultCwd,
+      );
+    } catch {
+      // auto
+    }
+    await this.sessions.setConversationMeta(
+      childId,
+      { title: `parallel:${worktreeName}` },
+      this.config.workspace.defaultCwd,
+    );
+
+    const job = createParallelJob({
+      parentConversationId: conversationId,
+      childConversationId: childId,
+      worktreeName,
+      cwd: wtPath,
+      promptPreview: prompt.slice(0, 120),
+    });
+
+    await this.respondText(
+      msg,
+      [
+        `🚀 parallel job \`${job.id}\` started`,
+        `worktree: ${worktreeName}`,
+        `cwd: ${wtPath}`,
+        `child: ${childId}`,
+        '',
+        'You can keep chatting here. Check: /jobs',
+      ].join('\n'),
+    );
+
+    const childMsg = { ...msg, conversationId: childId, chatId: childId };
+    const idleMin = this.effectiveIdleMinutes(session.idleTimeoutMinutes);
+    const tag = `[${job.id}]`;
+
+    void (async () => {
+      try {
+        process.stdout.write(`\n${tag} running in ${worktreeName}…\n`);
+        await this.executeCliTurn(
+          childMsg as IncomingMessage,
+          `[PARALLEL worktree=${worktreeName} — isolated checkout; summarize result for parent]\n${prompt}`,
+          wtPath,
+          idleMin * 60_000,
+          `par-${job.id}`,
+          Date.now(),
+        );
+        let summary = await this.sessions.getCompactionSummary(childId);
+        if (!summary) {
+          try {
+            const r = await this.performCompact(
+              childId,
+              'parallel result: goals done, files changed, remaining todos',
+            );
+            summary = r.summary;
+          } catch {
+            summary = `(parallel ${worktreeName} finished; no summary)`;
+          }
+        }
+        const prev = (await this.sessions.getCompactionSummary(conversationId)) ?? '';
+        await this.sessions.setConversationMeta(
+          conversationId,
+          {
+            compactionSummary:
+              `${prev}\n\n[parallel:${worktreeName} job=${job.id}]\n${summary}`.trim(),
+          },
+          this.config.workspace.defaultCwd,
+        );
+        updateParallelJob(job.id, {
+          status: 'done',
+          finishedAt: Date.now(),
+          summaryPreview: summary.slice(0, 240),
+        });
+        process.stdout.write(`\n${tag} ✅ done · summary attached to parent · /jobs ${job.id}\n`);
+      } catch (e) {
+        const err = (e as Error).message;
+        updateParallelJob(job.id, {
+          status: 'error',
+          finishedAt: Date.now(),
+          error: err,
+        });
+        process.stdout.write(`\n${tag} ❌ ${err}\n`);
+      }
+    })();
+  }
+
+  private async handleJobsCmd(msg: IncomingMessage, id?: string): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const { listParallelJobs, getParallelJob } = await import('../runtime/parallelJobs.js');
+    if (id) {
+      const job = getParallelJob(id);
+      if (!job) {
+        await this.respondText(msg, `Job not found: ${id}`);
+        return;
+      }
+      await this.respondText(
+        msg,
+        [
+          `job ${job.id} · ${job.status}`,
+          `worktree: ${job.worktreeName}`,
+          `cwd: ${job.cwd}`,
+          `child: ${job.childConversationId}`,
+          `started: ${new Date(job.startedAt).toISOString()}`,
+          job.finishedAt ? `finished: ${new Date(job.finishedAt).toISOString()}` : undefined,
+          job.error ? `error: ${job.error}` : undefined,
+          job.summaryPreview ? `summary: ${job.summaryPreview}` : undefined,
+          `prompt: ${job.promptPreview}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+      return;
+    }
+    const list = listParallelJobs(conversationId);
+    if (list.length === 0) {
+      await this.respondText(
+        msg,
+        'No parallel jobs yet. Try:\n  /parallel feat-a implement X\n  /jobs',
+      );
+      return;
+    }
+    const lines = list.slice(0, 20).map((j) => {
+      const when = new Date(j.startedAt).toISOString().slice(11, 19);
+      return `• \`${j.id}\` ${j.status}  ${j.worktreeName}  ${when}  ${j.promptPreview.slice(0, 40)}`;
+    });
+    await this.respondText(msg, ['Parallel jobs:', ...lines, '', 'Detail: /jobs <id>'].join('\n'));
   }
 
   /**

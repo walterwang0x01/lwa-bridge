@@ -1,6 +1,6 @@
 /**
  * 估算会话上下文体积，并判断是否应触发 auto-compact。
- * 粗略按字符数（≈ token*4），不追求精确 tokenizer。
+ * 粗略：chars / 4 ≈ tokens（与主流 CLI 一致的启发式，非精确 tokenizer）。
  */
 import type { CompactMessage } from './compact.js';
 
@@ -9,6 +9,11 @@ export function estimateContextChars(messages: CompactMessage[], extras: string[
   for (const m of messages) n += m.content.length + 16;
   for (const e of extras) n += e.length;
   return n;
+}
+
+/** ≈ tokens；CJK 略偏保守（按字符算再 /4）。 */
+export function estimateTokensFromChars(chars: number): number {
+  return Math.max(0, Math.ceil(chars / 4));
 }
 
 export function shouldAutoCompact(opts: {

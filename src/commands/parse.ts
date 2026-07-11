@@ -2,7 +2,8 @@
  * 斜杠命令解析
  *
  * 支持的命令：
- *   /new, /reset           重置当前会话
+ *   /new, /reset           新建会话 id（CLI）/ 重置底层 session
+ *   /clear                 清空摘要与底层 session，保留当前 id
  *   /cd <path>             切换工作目录
  *   /pwd                   查看当前目录
  *   /ws list               列出所有命名工作区
@@ -13,6 +14,8 @@
  *   /sessions              列出 CLI 会话
  *   /resume [id]           切换/恢复 CLI 会话
  *   /rename <title>        命名当前 CLI 会话
+ *   /parallel <wt> <prompt> 在 worktree 后台并行跑 agent
+ *   /jobs [id]             查看并行 job
  *   /compact [focus]       压缩当前会话上下文
  *   /plan [text]           进入 plan 阶段（或直接规划）
  *   /review [text]         进入 review 阶段（或直接审查）
@@ -27,12 +30,13 @@
  * kiro-cli 其他内置 TUI 命令（/agent /tools /login /logout）
  *   在非交互模式下 kiro-cli 不识别，会被 LLM 当成普通问题"假装"回答。
  *   桥接器拦下来给一个明确的提示，避免误导用户。
- *   注意：/compact /sessions 已升级为 LWA 自有命令。
+ *   注意：/compact /sessions /clear 已升级为 LWA 自有命令。
  *
  * 不识别的 /xxx 命令会被原样转发给 Kiro（让用户自己定义）。
  */
 export type ParsedCommand =
   | { kind: 'new' }
+  | { kind: 'clear' }
   | { kind: 'cd'; path: string }
   | { kind: 'pwd' }
   | { kind: 'ws-list' }
@@ -49,6 +53,8 @@ export type ParsedCommand =
   | { kind: 'phase-apply' }
   | { kind: 'explore'; query: string }
   | { kind: 'subtest'; query?: string }
+  | { kind: 'parallel'; worktree: string; prompt: string }
+  | { kind: 'jobs'; id?: string }
   | { kind: 'worktree'; mode: 'list' }
   | { kind: 'worktree'; mode: 'add'; name: string }
   | { kind: 'worktree'; mode: 'use'; name: string }
@@ -111,15 +117,7 @@ export type ParsedCommand =
  * 这些在非交互模式（bridge 用 ACP 程序化驱动）下不会被 kiro-cli 识别，需要桥接器主动拦截。
  * 注意：/model 已升级成桥接器自己的命令，不在这里。
  */
-const KIRO_INTERNAL_COMMANDS = new Set([
-  'tools',
-  'login',
-  'logout',
-  'clear',
-  'usage',
-  'cost',
-  'profile',
-]);
+const KIRO_INTERNAL_COMMANDS = new Set(['tools', 'login', 'logout', 'usage', 'cost', 'profile']);
 
 /**
  * 命令名容错表：常见 typo / 别名 / 缩写 → 标准命令名。
@@ -148,7 +146,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   compress: 'compact',
   // /new 系列
   reset: 'new',
-  clear: 'new', // 注意：覆盖 KIRO_INTERNAL_COMMANDS 里的 clear
+  // /clear 独立：清空上下文，不新建 id
   // /stop 系列
   abort: 'stop',
   cancel: 'stop',
@@ -159,6 +157,8 @@ const COMMAND_ALIASES: Record<string, string> = {
   rc: 'reconnect',
   // /timeout
   to: 'timeout',
+  // /jobs
+  job: 'jobs',
 };
 
 function normalizeCommandHead(head: string): string {
@@ -183,6 +183,8 @@ export function parseCommand(text: string): ParsedCommand | null {
     case 'new':
     case 'reset':
       return { kind: 'new' };
+    case 'clear':
+      return { kind: 'clear' };
     case 'cd':
       if (!tail) return { kind: 'unknown', raw: trimmed };
       return { kind: 'cd', path: tail };
@@ -213,6 +215,18 @@ export function parseCommand(text: string): ParsedCommand | null {
       return { kind: 'explore', query: tail };
     case 'test':
       return { kind: 'subtest', query: tail || undefined };
+    case 'parallel':
+    case 'par': {
+      const sp = tail.indexOf(' ');
+      if (sp <= 0) return { kind: 'unknown', raw: trimmed };
+      const worktree = tail.slice(0, sp).trim();
+      const prompt = tail.slice(sp + 1).trim();
+      if (!worktree || !prompt) return { kind: 'unknown', raw: trimmed };
+      if (!/^[a-zA-Z0-9._-]{1,64}$/.test(worktree)) return { kind: 'unknown', raw: trimmed };
+      return { kind: 'parallel', worktree, prompt };
+    }
+    case 'jobs':
+      return { kind: 'jobs', id: tail || undefined };
     case 'worktree':
     case 'wt': {
       if (!tail || tail === 'list' || tail === 'ls') return { kind: 'worktree', mode: 'list' };

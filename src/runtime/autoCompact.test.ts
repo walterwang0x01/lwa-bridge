@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateContextChars, shouldAutoCompact } from './autoCompact.js';
+import { estimateContextChars, estimateTokensFromChars, shouldAutoCompact } from './autoCompact.js';
 import { buildSubagentPrompt } from './subagents.js';
 
 describe('autoCompact', () => {
@@ -12,6 +12,10 @@ describe('autoCompact', () => {
       ['xyz'],
     );
     expect(n).toBeGreaterThan(8);
+  });
+
+  it('estimates tokens as chars/4', () => {
+    expect(estimateTokensFromChars(4000)).toBe(1000);
   });
 
   it('triggers only when over threshold and cooled down', () => {
