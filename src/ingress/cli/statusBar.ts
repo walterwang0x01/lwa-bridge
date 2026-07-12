@@ -35,7 +35,10 @@ export function resolveApprovalMode(
 
 export function buildCliStatusSnapshot(opts: {
   cwd: string;
-  session: ChatSession;
+  session: Pick<
+    ChatSession,
+    'runtimeProfile' | 'lastUsedRuntimeProfile' | 'lastUsedModel' | 'filesTouched' | 'runEverything'
+  >;
   config: Config;
   ctxPct?: number;
 }): CliStatusSnapshot {
