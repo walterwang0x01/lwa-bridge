@@ -149,10 +149,15 @@ lwa          # TTY 下默认进入
 lwa chat     # 显式同义
 ```
 
-纯文本 / 原生 CLI：
-- `lwa code`（默认）→ 把终端交给 **原生** `kiro-cli chat` 或 `agent`（手感与官方 CLI 一致）
-- `lwa code --repl` → LWA ACP 文本 REPL（调试 / 网关 profile）
+纯文本 / 本地 Coding Shell：
+- `lwa code`（默认）→ **LWA Auto Shell**：自有 TUI + 智能路由（kiro / cursor / 网关）
+- `lwa code --native` → 把终端交给原生 `kiro-cli chat` 或 `agent`（官方全屏 TUI）
 - `lwa chat` → IM 演练 REPL（飞书人设，不连 WebSocket）
+
+底部状态栏示例：`Auto · 42% · 3 files edited · Run Everything`
+
+全屏壳（alternate screen + 固定底栏 + 工具折叠）默认开启；纯文本回退：
+`LWA_PLAIN_SHELL=1 lwa code`
 
 `.exit` 仅用于 REPL。Gateway 用 `lwa serve`。
 
@@ -166,7 +171,10 @@ lwa chat     # 显式同义
 http://127.0.0.1:5180
 ```
 
-看得到：当前所有飞书 chat 的会话状态、定时任务列表、本机 bridge 进程、`~/.kiro/skills` 技能清单、最近日志（5 秒自动刷新）。纯只读，不暴露任何写操作。
+看得到：会话（含 CLI/飞书、runtime、files）、Conduit 进度、定时任务、本机进程、技能、任务历史、日志（5 秒自动刷新）。
+可操作：在会话卡片上点 **Auto / kiro / cursor** 切换粘性引擎（`POST /api/session/runtime`，仅本机）。
+
+**CLI ↔ 飞书会话同步**：二者共用 `~/.lwa/sessions.json`。在 `lwa code` 里 `/sessions` 会列出飞书会话，`/resume <飞书chatId>` 即可挂上同一 cwd / sticky / files。
 
 默认开启，端口可在 `config.json` 的 `dashboard.port` 改；`dashboard.enabled: false` 可关闭。
 

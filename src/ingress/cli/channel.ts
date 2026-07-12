@@ -1,10 +1,12 @@
 /**
  * 本地终端入口：纯文本 REPL，不依赖飞书卡片交互。
+ * code 模式 + TTY 时启用 ShellScreen（滚动区 + 固定底栏）。
  */
 import { createInterface, type Interface } from 'node:readline/promises';
 import { CLI_NAME } from '../../lib/branding.js';
 import { cardToPlainText, cleanCliText, formatCliHelp } from './textPresenter.js';
-import { formatCliStatusLine } from './workspace.js';
+import { formatCliFooter, type CliStatusSnapshot } from './statusBar.js';
+import { ShellScreen } from './shellScreen.js';
 import type {
   IngressChannel,
   IngressInboundHandlers,
@@ -16,14 +18,13 @@ import type {
 
 export interface CliPromptContext {
   getCwd: () => Promise<string> | string;
-  getProfile?: () => Promise<{ profileName: string; model?: string } | undefined>;
   /** code = coding agent；chat = IM 演练 */
   mode?: 'code' | 'chat';
   /** 当前会话 id（可被 /resume 切换） */
   getConversationId?: () => string;
   setConversationId?: (id: string) => void;
-  /** 可选：状态行额外字段 */
-  getStatusExtras?: () => Promise<{ ctxPct?: number; memLabel?: string } | undefined>;
+  /** 底部状态栏快照（Cursor 风格） */
+  getStatusSnapshot?: () => Promise<CliStatusSnapshot | undefined>;
 }
 
 interface CliStoredMessage {
@@ -43,6 +44,7 @@ export class CliIngressChannel implements IngressChannel {
   private seq = 0;
   private streamMessageId?: string;
   private streamLineCount = 0;
+  private shell: ShellScreen | null = null;
 
   constructor() {
     this.rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -116,6 +118,8 @@ export class CliIngressChannel implements IngressChannel {
   close(): void {
     this.connected = false;
     this.handlers = null;
+    this.shell?.exit();
+    this.shell = null;
     this.rl.close();
   }
 
@@ -126,53 +130,91 @@ export class CliIngressChannel implements IngressChannel {
   ): Promise<void> {
     if (!this.handlers) throw new Error('cli ingress not started');
 
+    const mode = ctx?.mode ?? 'code';
+    const useShell = ShellScreen.shouldUse({ mode });
+    if (useShell) {
+      this.shell = new ShellScreen();
+      this.shell.enter();
+    }
+
+    try {
+      await this.runPromptLoop(conversationId, senderPrincipalId, ctx, mode);
+    } finally {
+      this.shell?.exit();
+      this.shell = null;
+    }
+  }
+
+  private async runPromptLoop(
+    conversationId: string,
+    senderPrincipalId: string,
+    ctx: CliPromptContext | undefined,
+    mode: 'code' | 'chat',
+  ): Promise<void> {
     const activeId = () => ctx?.getConversationId?.() ?? conversationId;
 
-    const resolveLine = async (): Promise<string> => {
+    const resolveFooter = async (): Promise<{ primary: string; secondary: string } | string> => {
+      const snapshot = ctx?.getStatusSnapshot ? await ctx.getStatusSnapshot() : undefined;
+      if (snapshot) return formatCliFooter(snapshot);
       const cwd = ctx ? await ctx.getCwd() : process.cwd();
-      const profile = ctx?.getProfile ? await ctx.getProfile() : undefined;
-      const extras = ctx?.getStatusExtras ? await ctx.getStatusExtras() : undefined;
-      return formatCliStatusLine({
-        cwd,
-        profileName: profile?.profileName,
-        model: profile?.model,
-        conversationId: activeId(),
-        ctxPct: extras?.ctxPct,
-        memLabel: extras?.memLabel,
-      });
+      return { primary: String(cwd), secondary: '' };
     };
 
-    const mode = ctx?.mode ?? 'code';
-    const rule = process.stdout.isTTY
-      ? '\x1b[90m────────────────────────────────────────\x1b[0m'
-      : '----------------------------------------';
-    console.log(rule);
-    console.log(
+    const printFooter = async (): Promise<void> => {
+      const foot = await resolveFooter();
+      const primary = typeof foot === 'string' ? foot : foot.primary;
+      const secondary = typeof foot === 'string' ? '' : foot.secondary;
+      if (this.shell?.isActive) {
+        this.shell.renderFooter({ primary, secondary });
+        return;
+      }
+      if (process.stdout.isTTY) {
+        console.log(`\n\x1b[1m${primary}\x1b[0m`);
+        if (secondary) console.log(`\x1b[90m${secondary}\x1b[0m`);
+      } else {
+        console.log(`\n${primary}`);
+        if (secondary) console.log(secondary);
+      }
+    };
+
+    const title =
       mode === 'chat'
         ? `${CLI_NAME} chat · local IM rehearsal (no Feishu WS)`
-        : `${CLI_NAME} code · local coding agent`,
-    );
-    console.log(await resolveLine());
-    console.log(
+        : `${CLI_NAME} code · Auto Shell (kiro / cursor / gateway)`;
+    const hint =
       mode === 'chat'
         ? 'Rehearse Feishu-style replies.  /help  ·  /new  ·  .exit'
-        : 'Ask for a code change.  Tools fold inline.  /help  ·  /sessions  ·  /new  ·  .exit',
-    );
-    console.log(rule);
+        : 'Ask for a code change.  /runtime auto|kiro|cursor  ·  /yolo  ·  /help  ·  .exit';
+
+    if (this.shell?.isActive) {
+      this.shell.renderBanner(title, hint);
+      await printFooter();
+    } else {
+      const rule = process.stdout.isTTY
+        ? '\x1b[90m────────────────────────────────────────\x1b[0m'
+        : '----------------------------------------';
+      console.log(rule);
+      console.log(title);
+      await printFooter();
+      console.log(hint);
+      console.log(rule);
+    }
 
     while (this.connected) {
-      console.log(`\n${await resolveLine()}`);
+      await printFooter();
       const text = (await this.rl.question('→ ')).trim();
       if (!text) continue;
       if (text === '.exit' || text === '.quit') break;
       if (text === '.help') {
-        console.log(formatCliHelp(mode));
+        const help = formatCliHelp(mode);
+        if (this.shell?.isActive) this.shell.appendBlock(help);
+        else console.log(help);
         continue;
       }
       const cid = activeId();
       const msg = this.makeTextMessage(cid, senderPrincipalId, text);
       this.messages.set(msg.messageId, { conversationId: cid, text });
-      await this.handlers.onMessage(msg);
+      await this.handlers!.onMessage(msg);
     }
   }
 
@@ -207,11 +249,19 @@ export class CliIngressChannel implements IngressChannel {
     return `${prefix}-${this.seq}`;
   }
 
+  private emitOutput(text: string): void {
+    if (!text) return;
+    if (this.shell?.isActive) {
+      this.shell.appendBlock(text);
+      return;
+    }
+    console.log(`\n${text}\n`);
+  }
+
   private printReply(reply: NormalizedReply): void {
     if (reply.kind === 'text') {
       this.resetStream();
-      const body = cleanCliText(reply.text);
-      if (body) console.log(`\n${body}\n`);
+      this.emitOutput(cleanCliText(reply.text));
       return;
     }
     const text = cardToPlainText(reply.card);
@@ -220,11 +270,11 @@ export class CliIngressChannel implements IngressChannel {
       return;
     }
     if (reply.kind === 'reply_card' || reply.kind === 'card') {
-      if (text) console.log(`\n${text}\n`);
+      if (text) this.emitOutput(text);
       return;
     }
     this.resetStream();
-    if (text) console.log(`\n${text}\n`);
+    if (text) this.emitOutput(text);
   }
 
   private resetStream(): void {
@@ -235,6 +285,10 @@ export class CliIngressChannel implements IngressChannel {
   private printStreamingAssistant(text: string, messageId: string): void {
     const body = text ? `\n${text}\n` : '';
     if (!body) return;
+    if (this.shell?.isActive) {
+      this.shell.appendBlock(text);
+      return;
+    }
     if (!process.stdout.isTTY) {
       console.log(body);
       return;

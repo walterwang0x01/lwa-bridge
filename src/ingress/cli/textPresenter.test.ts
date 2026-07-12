@@ -15,12 +15,13 @@ describe('textPresenter', () => {
     expect(text).not.toContain('💰');
   });
 
-  it('formatCliHelp mentions coding and serve', () => {
+  it('formatCliHelp mentions Auto Shell and serve', () => {
     const h = formatCliHelp('code');
     expect(h).toContain('/runtime');
     expect(h).toContain('lwa serve');
-    expect(h).toContain('coding');
+    expect(h).toContain('Auto');
     expect(h).toContain('lwa code');
+    expect(h).toContain('/yolo');
   });
 
   it('cleanCliText strips button chrome', () => {

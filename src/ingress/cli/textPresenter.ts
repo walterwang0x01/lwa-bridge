@@ -52,11 +52,11 @@ export function cleanCliText(text: string): string {
 }
 
 export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
-  const title = mode === 'chat' ? 'LWA chat REPL (IM rehearsal)' : 'LWA coding ACP REPL (--repl)';
+  const title = mode === 'chat' ? 'LWA chat REPL (IM rehearsal)' : 'LWA Code Shell (Auto routing)';
   const hint =
     mode === 'chat'
       ? 'Chat: rehearse Feishu-style replies locally (no WebSocket).'
-      : 'Default `lwa code` launches native kiro-cli chat / agent. This REPL is --repl mode.';
+      : 'Default `lwa code` uses LWA Shell with Auto routing (kiro / cursor / gateway).';
   return [
     title,
     '',
@@ -65,15 +65,16 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     'Workspace',
     '  /pwd                 show cwd',
     '  /cd <path>           change project directory',
-    '  /status              cwd · branch · runtime · ctx%',
+    '  /status              Auto · ctx% · files · approval',
     '  /doctor              local checkup (plan/runtime/gateway)',
     '  /doctor <issue>      feed logs to Kiro for diagnosis',
     '  /ws list|save|use    named workspaces',
     '',
     'Agent',
     '  /runtime [name]      list / switch engine (kiro|cursor|openai-*)',
-    '  /runtime auto        clear sticky; re-enable smart routing',
+    '  /runtime auto        clear sticky; re-enable Auto routing',
     '  /runtime check       diagnose profiles + gateway circuit',
+    '  /yolo [on|off]       Run Everything vs Ask each time',
     '  /model [name|auto]   show / set model (kiro)',
     '  /models              list OpenAI gateway models (alias)',
     '  /plan [text]         plan phase (no edits) / run a plan prompt',
@@ -85,8 +86,9 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     '  /worktree …          git worktree add|use|rm|list',
     '  /parallel <wt> <msg> background agent in worktree',
     '  /jobs [id]           list / inspect parallel jobs',
-    '  /sessions            list CLI sessions',
-    '  /resume [id]         switch CLI session',
+    '  /sessions            list CLI + Feishu sessions (shared store)',
+    '  /resume [id]         switch session (Feishu chat id = sync sticky/cwd)',
+    '  /conduit status      active wave/tasks + last run-state',
     '  /rename <title>      name current session',
     '  /new                 new session id',
     '  /clear               clear summary (keep session id)',
@@ -96,6 +98,6 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     '',
     'Meta: /help  .exit',
     '',
-    'Modes: lwa code | lwa code --repl | lwa chat | lwa serve',
+    'Modes: lwa code | lwa code --native | lwa chat | lwa serve',
   ].join('\n');
 }

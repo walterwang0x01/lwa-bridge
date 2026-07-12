@@ -44,15 +44,15 @@ function readPackageVersion(): string {
 
 async function runLocalRepl(
   mode: 'code' | 'chat' = 'code',
-  opts?: { continue?: boolean; resume?: string; repl?: boolean },
+  opts?: { continue?: boolean; resume?: string; native?: boolean },
 ): Promise<void> {
   if (!existsSync(CONFIG_FILE)) {
     console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
     process.exit(1);
   }
 
-  // code + TTY：默认把终端交给原生 kiro-cli chat / agent（手感对齐官方 CLI）
-  if (mode === 'code' && process.stdin.isTTY && !opts?.repl) {
+  // code + TTY + --native：可选逃生舱，把终端交给原生 kiro-cli chat / agent
+  if (mode === 'code' && process.stdin.isTTY && opts?.native) {
     const code = await runNativeCodeHandoff({
       continue: opts?.continue,
       resume: opts?.resume,
@@ -60,7 +60,7 @@ async function runLocalRepl(
     process.exit(code);
   }
 
-  // REPL：默认压低日志，避免打断底部输入（可用 LARK_KIRO_LOG_LEVEL=info 打开）
+  // LWA Code Shell：默认压低日志，避免打断底部输入（可用 LARK_KIRO_LOG_LEVEL=info 打开）
   if (!process.env['LARK_KIRO_LOG_LEVEL']) {
     process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
   }
@@ -72,7 +72,7 @@ async function runLocalRepl(
   });
 }
 
-/** 启动原生 coding CLI；openai/gemini 等无原生 TUI 时回退 --repl。 */
+/** 启动原生 coding CLI；openai/gemini 等无原生 TUI 时回退 LWA Shell。 */
 async function runNativeCodeHandoff(opts: {
   continue?: boolean;
   resume?: string;
@@ -93,7 +93,7 @@ async function runNativeCodeHandoff(opts: {
   if (!supportsNativeCodingHandoff(profile.kind)) {
     console.error(
       `Profile \`${profileName}\` (${profile.kind}) has no native TUI. Falling back to ACP REPL.\n` +
-        `Tip: \`/runtime kiro\` or \`/runtime cursor\`, or run \`${cliCommand('code --repl')}\`.`,
+        `Tip: \`/runtime kiro\` or \`/runtime cursor\`, or run \`${cliCommand('code')}\` (LWA Shell).`,
     );
     if (!process.env['LARK_KIRO_LOG_LEVEL']) {
       process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
@@ -121,7 +121,7 @@ async function runNativeCodeHandoff(opts: {
     if (err.code === 'ENOENT') {
       console.error(
         `❌ Native CLI not found: \`${target.bin}\`.\n` +
-          `Install it or use \`${cliCommand('code --repl')}\` for ACP mode.`,
+          `Install it or use \`${cliCommand('code')}\` for LWA Shell (Auto routing).`,
       );
       return 127;
     }
@@ -148,7 +148,7 @@ async function runGateway(opts: { chat?: boolean }): Promise<void> {
 program
   .name(CLI_NAME)
   .description(
-    'LWA — local multi-agent workbench (native coding CLI + chat rehearsal + Feishu gateway)',
+    'LWA — local multi-agent workbench (Auto Code Shell + chat rehearsal + Feishu gateway)',
   )
   .version(readPackageVersion())
   .action(async () => {
@@ -238,16 +238,16 @@ async function serveAction(opts: { chat?: boolean }): Promise<void> {
 
 program
   .command('code')
-  .description('Local coding: hand off to native kiro-cli chat / agent (use --repl for ACP)')
-  .option('--continue', 'Resume the most recent native/REPL session')
+  .description('Local coding: LWA Auto Shell (use --native for kiro-cli chat / agent)')
+  .option('--continue', 'Resume the most recent session')
   .option('--resume <id>', 'Resume a specific session id')
-  .option('--repl', 'Force LWA ACP text REPL instead of native CLI')
-  .action(async (opts: { continue?: boolean; resume?: string; repl?: boolean }) => {
+  .option('--native', 'Hand off to native kiro-cli chat / agent TUI')
+  .action(async (opts: { continue?: boolean; resume?: string; native?: boolean }) => {
     try {
       await runLocalRepl('code', {
         continue: opts.continue,
         resume: opts.resume,
-        repl: opts.repl,
+        native: opts.native,
       });
     } catch (e) {
       const err = e as Error;

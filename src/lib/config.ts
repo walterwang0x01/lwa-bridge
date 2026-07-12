@@ -40,7 +40,7 @@ export const ConfigSchema = z.object({
    */
   runtime: z
     .object({
-      default: z.string().default('kiro'),
+      default: z.string().default('auto'),
       /**
        * 套餐感知路由预设。
        * - kiro-unlimited+cursor-lite：code 默认 kiro 主 + cursor 轻量，网关可选

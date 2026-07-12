@@ -17,6 +17,7 @@ describe('CliTurnView', () => {
     const chunks: string[] = [];
     const view = new CliTurnView({
       profileName: 'kiro',
+      routeMode: 'Auto',
       model: 'claude-test',
       cwd: '/tmp/proj',
       isTty: false,
@@ -46,6 +47,7 @@ describe('CliTurnView', () => {
     });
     const summary = view.end();
     const out = chunks.join('');
+    expect(out).toContain('Auto');
     expect(out).toContain('kiro');
     expect(out).toContain('claude-test');
     expect(out).toContain('Read');

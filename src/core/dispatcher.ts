@@ -75,6 +75,7 @@ import { ChatPipeline } from './pipeline.js';
 import { runConduit, type ConduitResult } from '../conduit/runner.js';
 import { formatProgressText } from '../conduit/progress.js';
 import { formatRunSummary, summarizeRunState } from '../conduit/summary.js';
+import { sharedConduitRegistry } from '../conduit/registry.js';
 import { listProcesses, findProcess } from '../daemon/registry.js';
 import {
   MemoryStore,
@@ -211,11 +212,11 @@ export class Dispatcher {
     conversationId: string,
   ): Promise<{ profileName: string; profile: RuntimeProfile }> {
     const stored = await this.sessions.getRuntimeProfile(conversationId);
-    if (!stored && (this.config.runtime?.default ?? 'kiro') === 'auto') {
+    if (!stored && (this.config.runtime?.default ?? 'auto') === 'auto') {
       const picked = await chooseRuntimeProfile(this.config, { prompt: '' });
       return { profileName: `auto→${picked.profileName}`, profile: picked.profile };
     }
-    const profileName = stored ?? this.config.runtime?.default ?? 'kiro';
+    const profileName = stored ?? this.config.runtime?.default ?? 'auto';
     const profile = resolveRuntimeProfile(
       this.config,
       profileName === 'auto' ? 'kiro' : profileName,
@@ -709,11 +710,10 @@ export class Dispatcher {
           );
           const wsName = await this.workspaceNameOf(session.currentCwd);
           if (this.isTextChannel(conversationId)) {
-            const { formatCliStatusLine, gitBranch, shortenHomePath } = await import(
-              '../ingress/cli/workspace.js'
-            );
+            const { buildCliStatusSnapshot, formatCliStatusBar, formatCliSubStatusLine } =
+              await import('../ingress/cli/statusBar.js');
             const { estimateSessionContext } = await import('../runtime/contextEstimate.js');
-            const branch = gitBranch(session.currentCwd);
+            const { shortenHomePath } = await import('../ingress/cli/workspace.js');
             const phase = await this.sessions.getConversationPhase(conversationId);
             const planId = this.config.runtime?.plan ?? 'kiro-unlimited+cursor-lite';
             const circuits = sharedGatewayHealth.snapshot();
@@ -724,15 +724,19 @@ export class Dispatcher {
               cwd: session.currentCwd,
               profile,
             });
+            const snapshot = buildCliStatusSnapshot({
+              cwd: session.currentCwd,
+              session,
+              config: this.config,
+              ctxPct: session.liveContextPct ?? ctx.pct,
+            });
             const lines = [
-              formatCliStatusLine({
-                cwd: session.currentCwd,
-                profileName,
-                model: profile.model,
-              }),
+              formatCliStatusBar(snapshot),
+              formatCliSubStatusLine(snapshot),
+              '',
               `conversation: ${conversationId}`,
               `cwd: ${shortenHomePath(session.currentCwd)}`,
-              branch ? `branch: ${branch}` : undefined,
+              snapshot.branch ? `branch: ${snapshot.branch}` : undefined,
               wsName ? `workspace: ${wsName}` : undefined,
               `runtime: ${profileName} (${profile.kind})`,
               profile.model ? `model: ${profile.model}` : undefined,
@@ -741,9 +745,8 @@ export class Dispatcher {
               phase ? `phase: ${phase}` : undefined,
               agentSid ? `agentSession: ${agentSid.slice(0, 12)}…` : 'agentSession: (new)',
               `ctx: ~${ctx.pct}% (~${Math.round(ctx.tokens / 1000)}k / ${Math.round(ctx.thresholdTokens / 1000)}k tok)${ctx.hasSummary ? ' · compacted' : ''}`,
-              session.filesTouched?.length
-                ? `filesTouched: ${session.filesTouched.length}`
-                : undefined,
+              snapshot.filesCount ? `filesTouched: ${snapshot.filesCount}` : undefined,
+              `approval: ${snapshot.approval}`,
               `task: ${this.getPipeline(conversationId).hasActiveTask() ? 'running' : 'idle'}`,
               circuits.length
                 ? `gateway: ${circuits.map((c) => `${c.state}`).join(',')}`
@@ -771,6 +774,10 @@ export class Dispatcher {
         }
         case 'runtime': {
           await this.handleRuntimeCmd(msg, cmd, session.currentCwd);
+          return;
+        }
+        case 'yolo': {
+          await this.handleYoloCmd(msg, cmd, session);
           return;
         }
         case 'new': {
@@ -832,24 +839,42 @@ export class Dispatcher {
         }
         case 'sessions': {
           const list = await this.sessions.listCliSessions();
-          if (list.length === 0) {
-            await this.respondText(msg, 'No CLI sessions yet. Chat once or /new.');
-            return;
-          }
+          const all = await this.sessions.listAll();
           const active = this.getCliConversationId?.() ?? conversationId;
           const { shortenHomePath } = await import('../ingress/cli/workspace.js');
-          const lines = list.slice(0, 30).map((s) => {
-            const mark = s.id === active ? ' ←' : '';
-            const when = new Date(s.lastActiveAt).toISOString().slice(0, 16).replace('T', ' ');
-            const title = s.title ? ` "${s.title}"` : '';
-            return `• \`${s.id}\`${mark}${title}  ${shortenHomePath(s.cwd)}  ${s.runtimeProfile ?? '-'}  ${s.phase ?? '-'}  ${when}${s.hasSummary ? '  [compact]' : ''}`;
-          });
-          await this.respondText(
-            msg,
-            ['CLI sessions:', ...lines, '', 'Switch: /resume <id> · Rename: /rename <title>'].join(
-              '\n',
-            ),
+          const lines: string[] = [];
+          if (list.length === 0) {
+            lines.push('No CLI sessions yet. Chat once or /new.');
+          } else {
+            lines.push('CLI sessions:');
+            for (const s of list.slice(0, 20)) {
+              const mark = s.id === active ? ' ←' : '';
+              const when = new Date(s.lastActiveAt).toISOString().slice(0, 16).replace('T', ' ');
+              const title = s.title ? ` "${s.title}"` : '';
+              lines.push(
+                `• \`${s.id}\`${mark}${title}  ${shortenHomePath(s.cwd)}  ${s.runtimeProfile ?? 'Auto'}  ${when}${s.hasSummary ? '  [compact]' : ''}`,
+              );
+            }
+          }
+          const lark = Object.entries(all)
+            .filter(([id]) => !id.startsWith('cli-'))
+            .sort(([, a], [, b]) => b.lastActiveAt - a.lastActiveAt)
+            .slice(0, 10);
+          if (lark.length) {
+            lines.push('', 'Feishu / other (shared SessionStore — /resume <id> to attach):');
+            for (const [id, s] of lark) {
+              const mark = id === active ? ' ←' : '';
+              const when = new Date(s.lastActiveAt).toISOString().slice(0, 16).replace('T', ' ');
+              lines.push(
+                `• \`${id}\`${mark}  ${shortenHomePath(s.currentCwd)}  ${s.runtimeProfile ?? 'Auto'}  ${when}`,
+              );
+            }
+          }
+          lines.push(
+            '',
+            'Switch: /resume <id>  ·  Tip: resume a Feishu chat id to share cwd / sticky runtime / files.',
           );
+          await this.respondText(msg, lines.join('\n'));
           return;
         }
         case 'resume': {
@@ -857,11 +882,36 @@ export class Dispatcher {
             await this.respondText(msg, '/resume is CLI-only.');
             return;
           }
-          const list = await this.sessions.listCliSessions();
-          const target = cmd.id
-            ? list.find((s) => s.id === cmd.id || s.id.endsWith(cmd.id!))
-            : list[0];
-          if (!target) {
+          const all = await this.sessions.listAll();
+          const cliList = await this.sessions.listCliSessions();
+          let targetId: string | undefined;
+          let targetCwd: string | undefined;
+          let targetRuntime: string | undefined;
+          if (cmd.id) {
+            const exact = all[cmd.id]
+              ? cmd.id
+              : Object.keys(all).find((id) => id === cmd.id || id.endsWith(cmd.id!));
+            if (exact) {
+              targetId = exact;
+              targetCwd = all[exact]!.currentCwd;
+              targetRuntime = all[exact]!.runtimeProfile;
+            } else {
+              const hit = cliList.find((s) => s.id === cmd.id || s.id.endsWith(cmd.id!));
+              if (hit) {
+                targetId = hit.id;
+                targetCwd = hit.cwd;
+                targetRuntime = hit.runtimeProfile;
+              }
+            }
+          } else {
+            const first = cliList[0];
+            if (first) {
+              targetId = first.id;
+              targetCwd = first.cwd;
+              targetRuntime = first.runtimeProfile;
+            }
+          }
+          if (!targetId) {
             await this.respondText(
               msg,
               cmd.id
@@ -870,10 +920,10 @@ export class Dispatcher {
             );
             return;
           }
-          this.onCliConversationSwitch(target.id);
+          this.onCliConversationSwitch(targetId);
           await this.respondText(
             msg,
-            `✅ Resumed \`${target.id}\`\ncwd: ${target.cwd}\nruntime: ${target.runtimeProfile ?? '(auto)'}`,
+            `✅ Attached \`${targetId}\`\ncwd: ${targetCwd}\nruntime: ${targetRuntime ?? '(auto)'}\n(Same SessionStore as Feishu — sticky / files / compact are shared.)`,
           );
           return;
         }
@@ -2099,6 +2149,49 @@ export class Dispatcher {
     );
   }
 
+  /** /yolo — 切换工具审批：Run Everything vs Ask each time（仅 CLI 会话级）。 */
+  private async handleYoloCmd(
+    msg: IncomingMessage,
+    cmd: Extract<ParsedCommand, { kind: 'yolo' }>,
+    session: { currentCwd: string; runtimeProfile?: string; runEverything?: boolean },
+  ): Promise<void> {
+    const conversationId = this.conversationIdOfMessage(msg);
+    const { buildCliStatusSnapshot } = await import('../ingress/cli/statusBar.js');
+
+    if (cmd.mode === 'show') {
+      const snap = buildCliStatusSnapshot({
+        cwd: session.currentCwd,
+        session,
+        config: this.config,
+      });
+      await this.respondText(
+        msg,
+        [
+          `approval: ${snap.approval}`,
+          '',
+          '/yolo on   → Run Everything (auto-approve tools)',
+          '/yolo off  → Ask each time',
+        ].join('\n'),
+      );
+      return;
+    }
+
+    await this.sessions.setRunEverything(
+      conversationId,
+      cmd.enabled,
+      this.config.workspace.defaultCwd,
+    );
+    const label = cmd.enabled ? 'Run Everything' : 'Ask each time';
+    if (this.isTextChannel(conversationId)) {
+      await this.respondText(msg, `✅ Tool approval → ${label}`);
+      return;
+    }
+    await this.sendInteractiveCard(
+      msg,
+      buildAckCard({ state: 'done', title: '✅ 审批模式', body: label }),
+    );
+  }
+
   private async handleModelCmd(
     msg: IncomingMessage,
     cmd: Extract<ParsedCommand, { kind: 'model' }>,
@@ -2819,13 +2912,20 @@ export class Dispatcher {
         await pipeline.submit({
           id: `conduit-merge-${Date.now()}`,
           run: async (signal) => {
-            const r = await this.runConduitStreaming(
-              ['run', '--workspace', cwd, '--merge'],
-              cwd,
-              signal,
-              evt.messageId,
-              '🚦 conduit run --merge',
-            );
+            sharedConduitRegistry.start(conversationId, cwd);
+            let r: ConduitResult;
+            try {
+              r = await this.runConduitStreaming(
+                ['run', '--workspace', cwd, '--merge'],
+                cwd,
+                signal,
+                evt.messageId,
+                '🚦 conduit run --merge',
+                conversationId,
+              );
+            } finally {
+              sharedConduitRegistry.finish(conversationId);
+            }
             const card = this.conduitRunCard(r, true, cwd);
             try {
               await this.ingress.patchCard(evt.messageId, card);
@@ -3745,7 +3845,29 @@ export class Dispatcher {
 
     if (cmd.mode === 'status') {
       const summary = summarizeRunState(cwd);
-      if (!summary) {
+      const active = sharedConduitRegistry.get(this.conversationIdOfMessage(msg));
+      if (this.isTextChannel(this.conversationIdOfMessage(msg))) {
+        const lines: string[] = [];
+        if (active) {
+          lines.push(formatProgressText(active.progress));
+          if (active.textTail) lines.push('', '```', active.textTail.slice(-1200), '```');
+        }
+        if (summary) {
+          if (lines.length) lines.push('');
+          lines.push(formatRunSummary(summary));
+        }
+        if (lines.length === 0) {
+          lines.push(
+            `cwd: ${cwd}`,
+            '',
+            'No active conduit run and no `.lwa-conduit/run-state.json`.',
+            'Run `/conduit run` when `dag.yaml` is ready.',
+          );
+        }
+        await this.respondText(msg, lines.join('\n'));
+        return;
+      }
+      if (!summary && !active) {
         await this.sendInteractiveCard(
           msg,
           buildAckCard({
@@ -3761,12 +3883,17 @@ export class Dispatcher {
         );
         return;
       }
+      const body = active
+        ? [formatProgressText(active.progress), '', summary ? formatRunSummary(summary) : '']
+            .filter(Boolean)
+            .join('\n')
+        : formatRunSummary(summary!);
       await this.sendInteractiveCard(
         msg,
         buildAckCard({
           state: 'done',
           title: '📊 conduit status',
-          body: formatRunSummary(summary),
+          body,
         }),
       );
       return;
@@ -3812,6 +3939,7 @@ export class Dispatcher {
     // mode === 'run'
     const conversationId = this.conversationIdOfMessage(msg);
     const pipeline = this.getPipeline(conversationId);
+    sharedConduitRegistry.start(conversationId, cwd);
     await pipeline.submit({
       id: `conduit-run-${Date.now()}`,
       run: async (signal) => {
@@ -3825,13 +3953,19 @@ export class Dispatcher {
         } catch (e) {
           this.log.error({ err: e }, 'conduit placeholder send failed');
         }
-        const r = await this.runConduitStreaming(
-          ['run', '--workspace', cwd],
-          cwd,
-          signal,
-          placeholderMessageId,
-          '🚦 conduit run',
-        );
+        let r: ConduitResult;
+        try {
+          r = await this.runConduitStreaming(
+            ['run', '--workspace', cwd],
+            cwd,
+            signal,
+            placeholderMessageId,
+            '🚦 conduit run',
+            conversationId,
+          );
+        } finally {
+          sharedConduitRegistry.finish(conversationId);
+        }
         await this.patchConduitFinal(placeholderMessageId, msg, this.conduitRunCard(r, false, cwd));
       },
     });
@@ -3847,12 +3981,19 @@ export class Dispatcher {
     signal: AbortSignal,
     messageId: string | undefined,
     runningTitle: string,
+    conversationId?: string,
   ): Promise<ConduitResult> {
     let lastPatch = 0;
     const onProgress = (info: {
       textTail: string;
       progress: import('../conduit/progress.js').ConduitProgressState;
     }): void => {
+      if (conversationId) {
+        sharedConduitRegistry.update(conversationId, {
+          progress: info.progress,
+          textTail: info.textTail,
+        });
+      }
       const now = Date.now();
       if (now - lastPatch < 2000 || !messageId) return;
       lastPatch = now;
@@ -4316,6 +4457,13 @@ export class Dispatcher {
           }
           const { profileName, profile, reason, complexityScore, modelDecision } =
             await this.selectRuntimeForTask(conversationId, turnPrompt, 0);
+          const cliSession = await this.sessions.getConversation(
+            conversationId,
+            this.config.workspace.defaultCwd,
+          );
+          const stickyRuntime = cliSession.runtimeProfile;
+          const routeMode = stickyRuntime && stickyRuntime !== 'auto' ? stickyRuntime : 'Auto';
+          const runEverything = cliSession.runEverything;
           const { buildCliCodingSystemPrompt, buildCliChatSystemPrompt } = await import(
             '../ingress/cli/codingPrompt.js'
           );
@@ -4336,6 +4484,11 @@ export class Dispatcher {
           const codingProfile = {
             ...profile,
             systemPromptPrefix,
+            ...(runEverything === true
+              ? { force: true }
+              : runEverything === false
+                ? { force: false }
+                : {}),
           };
           if (reason.includes('gateway_skip') || reason.includes('gateway-circuit')) {
             process.stdout.write(`(gateway degraded → ${profileName})\n`);
@@ -4353,6 +4506,7 @@ export class Dispatcher {
 
           view = new CliTurnView({
             profileName,
+            routeMode,
             model: profile.model,
             cwd,
           });
@@ -4389,6 +4543,13 @@ export class Dispatcher {
               signal,
               onEvent: (ev) => {
                 view?.onEvent(ev);
+                if (ev.kind === 'metadata' && typeof ev.contextUsagePercentage === 'number') {
+                  void this.sessions.setLiveContextPct(
+                    conversationId,
+                    ev.contextUsagePercentage,
+                    this.config.workspace.defaultCwd,
+                  );
+                }
                 if (ev.kind === 'message' && ev.text) {
                   streamed += ev.text;
                 }
@@ -4463,6 +4624,12 @@ export class Dispatcher {
               this.config.workspace.defaultCwd,
             );
           }
+          await this.sessions.setLastUsedRuntime(
+            conversationId,
+            profileName,
+            profile.model,
+            this.config.workspace.defaultCwd,
+          );
           await this.sessions.touchConversation(conversationId);
 
           if (this.taskHistory) {

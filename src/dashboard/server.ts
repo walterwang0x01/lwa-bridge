@@ -14,7 +14,8 @@
  *   - 纯只读，不暴露任何写操作；不返回 config（含 appSecret）
  *   - 静态文件路径做了 `..` 穿越校验，且限制在构建产物目录内
  *
- * 定位：第一版"只读总览"。后续要"可操作"（网页点按钮触发 conduit）再加 POST 路由。
+ * 定位：只读总览 + 少量本机可写操作（切会话 runtime）。
+ *   POST /api/session/runtime  { conversationId, profileName }  // profileName=auto 清除粘性
  */
 import { createServer, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -32,6 +33,11 @@ import { listGlobalAgents } from '../kiro/agents.js';
 import { listInstalls } from '../assets/gitSource.js';
 import { discoverRuntimeRegistry } from '../runtime/registry.js';
 import { probeAllRuntimeQuotasForDashboard } from '../runtime/quota.js';
+import { sharedConduitRegistry } from '../conduit/registry.js';
+import { formatProgressOneLiner } from '../conduit/progress.js';
+import { summarizeRunState } from '../conduit/summary.js';
+import { shortenHomePath } from '../ingress/cli/workspace.js';
+import { resolveRuntimeProfile, listRuntimeProfileNames } from '../runtime/config.js';
 
 // tsup 把整个包打成单文件 bundle（dist/cli.js / dist/index.js），不保留 src/
 // 的目录结构——所以运行时 import.meta.url 指向的是 dist/cli.js，HERE 算出来
@@ -94,13 +100,30 @@ function summarizeRuntimeEntry(
 
 async function buildOverview(deps: DashboardDeps): Promise<object> {
   const chats = await deps.sessions.listAll();
-  const sessions = Object.entries(chats).map(([chatId, s]) => ({
-    chatId,
-    currentCwd: s.currentCwd,
-    cwdCount: Object.keys(s.sessionsByCwd).length,
-    lastActiveAt: s.lastActiveAt,
-    idleTimeoutMinutes: s.idleTimeoutMinutes ?? null,
-  }));
+  const sessions = Object.entries(chats).map(([chatId, s]) => {
+    const channel = chatId.startsWith('cli-')
+      ? 'cli'
+      : chatId.startsWith('slack-')
+        ? 'slack'
+        : 'lark';
+    return {
+      chatId,
+      channel,
+      currentCwd: s.currentCwd,
+      cwdShort: shortenHomePath(s.currentCwd),
+      cwdCount: Object.keys(s.sessionsByCwd).length,
+      lastActiveAt: s.lastActiveAt,
+      idleTimeoutMinutes: s.idleTimeoutMinutes ?? null,
+      title: s.title ?? null,
+      phase: s.phase ?? null,
+      runtimeProfile: s.runtimeProfile ?? null,
+      lastUsedRuntimeProfile: s.lastUsedRuntimeProfile ?? null,
+      lastUsedModel: s.lastUsedModel ?? null,
+      filesTouched: s.filesTouched?.length ?? 0,
+      liveContextPct: s.liveContextPct ?? null,
+      runEverything: s.runEverything ?? null,
+    };
+  });
 
   const cron = deps.cronStore
     ? (await deps.cronStore.list()).map((t) => ({
@@ -147,6 +170,42 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     monthUsageByKind,
   );
 
+  const conduitActive = sharedConduitRegistry.listActive().map((r) => ({
+    conversationId: r.conversationId,
+    cwd: r.cwd,
+    cwdShort: shortenHomePath(r.cwd),
+    startedAt: r.startedAt,
+    eventCount: r.progress.eventCount,
+    oneLiner: formatProgressOneLiner(r.progress),
+    wave:
+      r.progress.totalWaves > 0
+        ? { current: r.progress.currentWave, total: r.progress.totalWaves }
+        : null,
+  }));
+
+  // 最近活跃会话的 cwd 上扫一眼 run-state（最多 5 个不同 cwd）
+  const seenCwds = new Set<string>();
+  const conduitRecent: object[] = [];
+  for (const s of sessions
+    .slice()
+    .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+    .slice(0, 20)) {
+    if (seenCwds.has(s.currentCwd) || seenCwds.size >= 5) continue;
+    seenCwds.add(s.currentCwd);
+    const summary = summarizeRunState(s.currentCwd);
+    if (!summary) continue;
+    conduitRecent.push({
+      cwd: s.currentCwd,
+      cwdShort: shortenHomePath(s.currentCwd),
+      dirName: summary.dirName,
+      baseBranch: summary.baseBranch ?? null,
+      passed: summary.passed.length,
+      failed: summary.failed.length,
+      skipped: summary.skipped.length,
+      pending: summary.pending.length,
+    });
+  }
+
   return {
     bridge: {
       pid: process.pid,
@@ -154,6 +213,8 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
       startedAt: deps.startedAt,
       uptimeSec: Math.round((Date.now() - deps.startedAt) / 1000),
       now: Date.now(),
+      plan: deps.config.runtime?.plan ?? 'kiro-unlimited+cursor-lite',
+      defaultRuntime: deps.config.runtime?.default ?? 'auto',
     },
     sessions,
     cron,
@@ -168,8 +229,48 @@ async function buildOverview(deps: DashboardDeps): Promise<object> {
     metricsAlerts,
     runtimeProfiles: registry.map((entry) => summarizeRuntimeEntry(entry)),
     quotaStatuses,
+    conduitActive,
+    conduitRecent,
     logs,
   };
+}
+
+async function readJsonBody(req: import('node:http').IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (!raw.trim()) return {};
+  return JSON.parse(raw) as unknown;
+}
+
+async function handleSessionRuntimePost(
+  deps: DashboardDeps,
+  body: unknown,
+): Promise<
+  { ok: true; conversationId: string; profileName: string } | { ok: false; error: string }
+> {
+  const obj = (body ?? {}) as Record<string, unknown>;
+  const conversationId = typeof obj.conversationId === 'string' ? obj.conversationId.trim() : '';
+  const profileName = typeof obj.profileName === 'string' ? obj.profileName.trim() : '';
+  if (!conversationId || !profileName) {
+    return { ok: false, error: 'conversationId and profileName required' };
+  }
+  if (profileName === 'auto' || profileName === 'clear') {
+    await deps.sessions.clearConversationRuntimeProfile(conversationId);
+    return { ok: true, conversationId, profileName: 'auto' };
+  }
+  try {
+    resolveRuntimeProfile(deps.config, profileName);
+  } catch {
+    const valid = listRuntimeProfileNames(deps.config).join(', ');
+    return { ok: false, error: `unknown profile; available: ${valid}` };
+  }
+  await deps.sessions.setConversationRuntimeProfile(
+    conversationId,
+    profileName,
+    deps.config.workspace.defaultCwd,
+  );
+  return { ok: true, conversationId, profileName };
 }
 
 /** 找到第一个存在的前端产物目录；找不到返回 undefined（server 会用文字兜底页）。 */
@@ -229,6 +330,24 @@ export function startDashboard(deps: DashboardDeps): DashboardHandle {
 
   const server: Server = createServer((req, res) => {
     const url = (req.url ?? '/').split('?')[0];
+
+    if (req.method === 'POST' && url === '/api/session/runtime') {
+      void readJsonBody(req)
+        .then((body) => handleSessionRuntimePost(deps, body))
+        .then((result) => {
+          res.writeHead(result.ok ? 200 : 400, {
+            'content-type': 'application/json; charset=utf-8',
+          });
+          res.end(JSON.stringify(result));
+        })
+        .catch((e) => {
+          log.warn({ err: e }, 'session runtime post failed');
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: String((e as Error).message) }));
+        });
+      return;
+    }
+
     if (req.method !== 'GET') {
       res.writeHead(405).end('method not allowed');
       return;

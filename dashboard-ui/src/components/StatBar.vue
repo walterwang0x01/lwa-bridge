@@ -13,7 +13,7 @@ const uptime = computed(() => (props.bridge ? fmtUptime(props.bridge.uptimeSec) 
 
 <template>
   <header class="flex flex-wrap items-center gap-3 border-b border-white/10 px-6 py-4">
-    <h1 class="text-lg font-semibold text-white">🌉 lark-kiro-bridge 控制台</h1>
+    <h1 class="text-lg font-semibold text-white">LWA 控制台</h1>
     <span
       class="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-neutral-400"
     >
@@ -34,6 +34,18 @@ const uptime = computed(() => (props.bridge ? fmtUptime(props.bridge.uptimeSec) 
       class="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-neutral-400"
     >
       PID {{ bridge.pid }}
+    </span>
+    <span
+      v-if="bridge?.plan"
+      class="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-neutral-400"
+    >
+      plan {{ bridge.plan }}
+    </span>
+    <span
+      v-if="bridge?.defaultRuntime"
+      class="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-neutral-400"
+    >
+      default {{ bridge.defaultRuntime }}
     </span>
     <span
       class="ml-auto rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-neutral-500"

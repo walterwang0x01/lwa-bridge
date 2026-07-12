@@ -26,6 +26,7 @@ export function helpMarkdown(): string {
     '`/runtime` — 查看当前可用 runtime profiles',
     '`/runtime check` — 检查 profile 可用性 / quota / 缺失配置',
     '`/runtime [kiro|cursor|gemini|openai|openai-*]` — 切换 Agent CLI 引擎',
+    '`/yolo [on|off]` — Run Everything / Ask each time（CLI 工具审批）',
     '`/config` — 查看 / 编辑访问控制 + 偏好（管理员）',
     '`/steering [list|view|edit|new|rm] [--global]` — 管理 Kiro steering 文件',
     '`/cron [list|add|rm|pause|resume|run|next|translate]` — 定时任务',

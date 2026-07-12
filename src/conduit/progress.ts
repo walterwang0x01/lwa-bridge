@@ -117,6 +117,25 @@ function countByStatus(tasks: Record<string, TaskProgress>): {
   return c;
 }
 
+/** CLI / 飞书卡片 / 底栏共用的单行摘要。 */
+export function formatProgressOneLiner(state: ConduitProgressState): string {
+  const parts: string[] = [];
+  if (state.totalWaves > 0) {
+    parts.push(`Wave ${state.currentWave}/${state.totalWaves}`);
+  }
+  const c = countByStatus(state.tasks);
+  const total = c.pending + c.running + c.passed + c.failed;
+  if (total > 0) {
+    parts.push(`✅${c.passed} 🏃${c.running} ⏳${c.pending}${c.failed ? ` ❌${c.failed}` : ''}`);
+  }
+  const running = Object.entries(state.tasks)
+    .filter(([, t]) => t.status === 'running')
+    .map(([id]) => id)
+    .slice(0, 2);
+  if (running.length) parts.push(running.join(', '));
+  return parts.length ? `Conduit ${parts.join(' · ')}` : 'Conduit running…';
+}
+
 /** CLI / 飞书卡片共用的短摘要。 */
 export function formatProgressText(state: ConduitProgressState): string {
   const lines: string[] = [];

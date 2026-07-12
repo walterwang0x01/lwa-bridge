@@ -289,6 +289,18 @@ describe('parseCommand', () => {
     });
   });
 
+  describe('/yolo', () => {
+    it('/yolo', () => {
+      expect(parseCommand('/yolo')).toEqual({ kind: 'yolo', mode: 'show' });
+    });
+    it('/yolo on', () => {
+      expect(parseCommand('/yolo on')).toEqual({ kind: 'yolo', mode: 'set', enabled: true });
+    });
+    it('/yolo off', () => {
+      expect(parseCommand('/yolo off')).toEqual({ kind: 'yolo', mode: 'set', enabled: false });
+    });
+  });
+
   describe('/model', () => {
     it('/model 不带参数 → show', () => {
       expect(parseCommand('/model')).toEqual({ kind: 'model', mode: 'show' });

@@ -7,10 +7,20 @@
  */
 export interface SessionSummary {
   chatId: string;
+  channel?: 'cli' | 'lark' | 'slack';
   currentCwd: string;
+  cwdShort?: string;
   cwdCount: number;
   lastActiveAt: number;
   idleTimeoutMinutes: number | null;
+  title?: string | null;
+  phase?: string | null;
+  runtimeProfile?: string | null;
+  lastUsedRuntimeProfile?: string | null;
+  lastUsedModel?: string | null;
+  filesTouched?: number;
+  liveContextPct?: number | null;
+  runEverything?: boolean | null;
 }
 
 export interface CronSummary {
@@ -134,6 +144,29 @@ export interface BridgeInfo {
   startedAt: number;
   uptimeSec: number;
   now: number;
+  plan?: string;
+  defaultRuntime?: string;
+}
+
+export interface ConduitActiveRow {
+  conversationId: string;
+  cwd: string;
+  cwdShort: string;
+  startedAt: number;
+  eventCount: number;
+  oneLiner: string;
+  wave: { current: number; total: number } | null;
+}
+
+export interface ConduitRecentRow {
+  cwd: string;
+  cwdShort: string;
+  dirName: string;
+  baseBranch: string | null;
+  passed: number;
+  failed: number;
+  skipped: number;
+  pending: number;
 }
 
 export interface Overview {
@@ -151,5 +184,7 @@ export interface Overview {
   metricsAlerts: MetricsAlertRow[];
   runtimeProfiles: RuntimeProfileRow[];
   quotaStatuses: QuotaStatusRow[];
+  conduitActive?: ConduitActiveRow[];
+  conduitRecent?: ConduitRecentRow[];
   logs: string[];
 }

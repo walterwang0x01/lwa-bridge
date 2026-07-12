@@ -109,6 +109,8 @@ export type ParsedCommand =
   | { kind: 'runtime'; mode: 'show' }
   | { kind: 'runtime'; mode: 'check' }
   | { kind: 'runtime'; mode: 'set'; name: string }
+  | { kind: 'yolo'; mode: 'show' }
+  | { kind: 'yolo'; mode: 'set'; enabled: boolean }
   | { kind: 'help' }
   | { kind: 'kiro-internal'; name: string }
   | { kind: 'unknown'; raw: string };
@@ -134,6 +136,9 @@ const COMMAND_ALIASES: Record<string, string> = {
   // /runtime 系列
   engine: 'runtime',
   cli: 'runtime',
+  // /yolo
+  yolo: 'yolo',
+  trust: 'yolo',
   // /help 系列
   h: 'help',
   '?': 'help',
@@ -513,6 +518,17 @@ export function parseCommand(text: string): ParsedCommand | null {
       const name = tail.trim();
       if (!/^[a-zA-Z0-9._-]{1,32}$/.test(name)) return { kind: 'unknown', raw: trimmed };
       return { kind: 'runtime', mode: 'set', name };
+    }
+    case 'yolo': {
+      if (!tail) return { kind: 'yolo', mode: 'show' };
+      const lower = tail.toLowerCase();
+      if (lower === 'on' || lower === 'enable' || lower === 'true' || lower === 'everything') {
+        return { kind: 'yolo', mode: 'set', enabled: true };
+      }
+      if (lower === 'off' || lower === 'disable' || lower === 'false' || lower === 'ask') {
+        return { kind: 'yolo', mode: 'set', enabled: false };
+      }
+      return { kind: 'unknown', raw: trimmed };
     }
     case 'model': {
       if (!tail) return { kind: 'model', mode: 'show' };

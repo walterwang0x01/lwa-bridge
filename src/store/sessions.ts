@@ -40,6 +40,13 @@ const ChatSessionSchema = z.object({
   lastCompactAt: z.number().int().nonnegative().optional(),
   /** 本会话触及的文件路径（compact 后可重读） */
   filesTouched: z.array(z.string()).optional(),
+  /** Auto 模式下上一轮实际使用的 runtime profile */
+  lastUsedRuntimeProfile: z.string().optional(),
+  lastUsedModel: z.string().optional(),
+  /** CLI 工具审批：true=Run Everything，false=Ask each time，undefined=跟 profile.force */
+  runEverything: z.boolean().optional(),
+  /** runtime 上报的实时上下文占用 %（kiro metadata） */
+  liveContextPct: z.number().min(0).max(100).optional(),
 });
 
 const SessionsFileSchema = z.object({
@@ -470,5 +477,76 @@ export class SessionStore {
     conversationId: string,
   ): Promise<'plan' | 'apply' | 'review' | undefined> {
     return withLock(() => readFile().chats[conversationId]?.phase);
+  }
+
+  async setLastUsedRuntime(
+    conversationId: string,
+    profileName: string,
+    model: string | undefined,
+    defaultCwd: string,
+  ): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[conversationId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      session.lastUsedRuntimeProfile = profileName;
+      if (model) session.lastUsedModel = model;
+      session.lastActiveAt = Date.now();
+      data.chats[conversationId] = session;
+      writeFile(data);
+    });
+  }
+
+  async setRunEverything(
+    conversationId: string,
+    enabled: boolean | undefined,
+    defaultCwd: string,
+  ): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[conversationId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      if (enabled === undefined) delete session.runEverything;
+      else session.runEverything = enabled;
+      session.lastActiveAt = Date.now();
+      data.chats[conversationId] = session;
+      writeFile(data);
+    });
+  }
+
+  async getRunEverything(conversationId: string): Promise<boolean | undefined> {
+    return withLock(() => readFile().chats[conversationId]?.runEverything);
+  }
+
+  async setLiveContextPct(
+    conversationId: string,
+    pct: number | undefined,
+    defaultCwd: string,
+  ): Promise<void> {
+    await withLock(() => {
+      const data = readFile();
+      const session =
+        data.chats[conversationId] ??
+        ({
+          currentCwd: defaultCwd,
+          sessionsByCwd: {},
+          lastActiveAt: Date.now(),
+        } as ChatSession);
+      if (pct === undefined) delete session.liveContextPct;
+      else session.liveContextPct = Math.min(100, Math.max(0, Math.round(pct)));
+      session.lastActiveAt = Date.now();
+      data.chats[conversationId] = session;
+      writeFile(data);
+    });
   }
 }

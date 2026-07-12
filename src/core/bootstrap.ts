@@ -344,42 +344,23 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
     getCwd: async () =>
       (await sessions.getConversation(cliConversationIdRef.current, resolveCliLaunchCwd(config)))
         .currentCwd,
-    getProfile: async () => {
-      try {
-        const stored = await sessions.getConversationRuntimeProfile(cliConversationIdRef.current);
-        const profileName =
-          stored ?? (typeof config.runtime?.default === 'string' ? config.runtime.default : 'auto');
-        if (profileName === 'auto') return { profileName: 'auto→(smart)' };
-        try {
-          const p = resolveRuntimeProfile(config, profileName);
-          return { profileName, model: p.model };
-        } catch {
-          return { profileName };
-        }
-      } catch {
-        return undefined;
-      }
-    },
-    getStatusExtras: async () => {
+    getStatusSnapshot: async () => {
       try {
         const { estimateSessionContext } = await import('../runtime/contextEstimate.js');
-        const { loadProjectMemory } = await import('../ingress/cli/projectMemory.js');
-        const { loadGlobalMemory } = await import('../ingress/cli/globalMemory.js');
+        const { buildCliStatusSnapshot } = await import('../ingress/cli/statusBar.js');
+        const { sharedConduitRegistry } = await import('../conduit/registry.js');
+        const { formatProgressOneLiner } = await import('../conduit/progress.js');
         const conversationId = cliConversationIdRef.current;
         const session = await sessions.getConversation(conversationId, resolveCliLaunchCwd(config));
-        const { profile } = (() => {
-          try {
-            const name =
-              session.runtimeProfile ??
-              (typeof config.runtime?.default === 'string' ? config.runtime.default : 'kiro');
-            if (name === 'auto') {
-              return { profile: resolveRuntimeProfile(config, 'kiro') };
-            }
-            return { profile: resolveRuntimeProfile(config, name) };
-          } catch {
-            return { profile: resolveRuntimeProfile(config, 'kiro') };
-          }
-        })();
+        const sticky = session.runtimeProfile;
+        const profileName =
+          sticky && sticky !== 'auto' ? sticky : (session.lastUsedRuntimeProfile ?? 'kiro');
+        let profile: import('../runtime/types.js').RuntimeProfile;
+        try {
+          profile = resolveRuntimeProfile(config, profileName);
+        } catch {
+          profile = resolveRuntimeProfile(config, 'kiro');
+        }
         const ctx = await estimateSessionContext({
           config,
           sessions,
@@ -387,14 +368,17 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
           cwd: session.currentCwd,
           profile,
         });
-        const memHits = [
-          ...loadProjectMemory(session.currentCwd).map((f) => f.name),
-          ...loadGlobalMemory().map((f) => f.name),
-        ];
-        return {
-          ctxPct: ctx.pct,
-          memLabel: memHits.length ? memHits.slice(0, 3).join('+') : undefined,
-        };
+        const activeConduit = sharedConduitRegistry.get(conversationId);
+        const snapshot = buildCliStatusSnapshot({
+          cwd: session.currentCwd,
+          session,
+          config,
+          ctxPct: session.liveContextPct ?? ctx.pct,
+        });
+        if (activeConduit && activeConduit.progress.eventCount > 0) {
+          snapshot.conduitHint = formatProgressOneLiner(activeConduit.progress);
+        }
+        return snapshot;
       } catch {
         return undefined;
       }
