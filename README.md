@@ -149,7 +149,12 @@ lwa          # TTY 下默认进入
 lwa chat     # 显式同义
 ```
 
-纯文本交互（无飞书卡片）：自然语言、`/help` `/model` `/runtime` `/status`；`.exit` 退出。不连飞书、不启 Dashboard。
+纯文本 / 原生 CLI：
+- `lwa code`（默认）→ 把终端交给 **原生** `kiro-cli chat` 或 `agent`（手感与官方 CLI 一致）
+- `lwa code --repl` → LWA ACP 文本 REPL（调试 / 网关 profile）
+- `lwa chat` → IM 演练 REPL（飞书人设，不连 WebSocket）
+
+`.exit` 仅用于 REPL。Gateway 用 `lwa serve`。
 
 飞书生产入口请用 `lwa serve`（见上）。通道配置见 [docs/MIGRATION_LWA.md](./docs/MIGRATION_LWA.md)。
 

@@ -143,6 +143,10 @@ export class CliIngressChannel implements IngressChannel {
     };
 
     const mode = ctx?.mode ?? 'code';
+    const rule = process.stdout.isTTY
+      ? '\x1b[90m────────────────────────────────────────\x1b[0m'
+      : '----------------------------------------';
+    console.log(rule);
     console.log(
       mode === 'chat'
         ? `${CLI_NAME} chat · local IM rehearsal (no Feishu WS)`
@@ -151,9 +155,10 @@ export class CliIngressChannel implements IngressChannel {
     console.log(await resolveLine());
     console.log(
       mode === 'chat'
-        ? 'Rehearse Feishu-style replies.  /help  ·  /new  ·  .exit\n'
-        : 'Ask for a code change in this repo.  /help  ·  /sessions  ·  /new  ·  .exit\n',
+        ? 'Rehearse Feishu-style replies.  /help  ·  /new  ·  .exit'
+        : 'Ask for a code change.  Tools fold inline.  /help  ·  /sessions  ·  /new  ·  .exit',
     );
+    console.log(rule);
 
     while (this.connected) {
       console.log(`\n${await resolveLine()}`);

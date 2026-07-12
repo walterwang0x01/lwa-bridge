@@ -263,6 +263,7 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
     activeCards,
     taskHistory,
     cliMode: cliOnly ? cliMode : undefined,
+    cliAllowResume: cliOnly ? Boolean(opts?.cliContinue || opts?.cliResumeId) : undefined,
     getCliConversationId: cliOnly ? () => cliConversationIdRef.current : undefined,
     onCliConversationSwitch: cliOnly
       ? (id) => {

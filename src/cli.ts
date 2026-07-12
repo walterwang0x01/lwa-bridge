@@ -44,12 +44,22 @@ function readPackageVersion(): string {
 
 async function runLocalRepl(
   mode: 'code' | 'chat' = 'code',
-  opts?: { continue?: boolean; resume?: string },
+  opts?: { continue?: boolean; resume?: string; repl?: boolean },
 ): Promise<void> {
   if (!existsSync(CONFIG_FILE)) {
     console.error(`❌ Missing config at ${CONFIG_FILE}. Run \`${cliCommand('init')}\` first.`);
     process.exit(1);
   }
+
+  // code + TTY：默认把终端交给原生 kiro-cli chat / agent（手感对齐官方 CLI）
+  if (mode === 'code' && process.stdin.isTTY && !opts?.repl) {
+    const code = await runNativeCodeHandoff({
+      continue: opts?.continue,
+      resume: opts?.resume,
+    });
+    process.exit(code);
+  }
+
   // REPL：默认压低日志，避免打断底部输入（可用 LARK_KIRO_LOG_LEVEL=info 打开）
   if (!process.env['LARK_KIRO_LOG_LEVEL']) {
     process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
@@ -60,6 +70,63 @@ async function runLocalRepl(
     cliContinue: opts?.continue,
     cliResumeId: opts?.resume,
   });
+}
+
+/** 启动原生 coding CLI；openai/gemini 等无原生 TUI 时回退 --repl。 */
+async function runNativeCodeHandoff(opts: {
+  continue?: boolean;
+  resume?: string;
+}): Promise<number> {
+  const { loadConfig } = await import('./lib/config.js');
+  const { SessionStore } = await import('./store/sessions.js');
+  const { resolveCliLaunchCwd } = await import('./ingress/cli/workspace.js');
+  const { resolveCodeHandoffProfile } = await import('./ingress/cli/codeHandoff.js');
+  const { buildNativeCodingTarget, launchNativeCodingCli, supportsNativeCodingHandoff } =
+    await import('./ingress/cli/nativeCli.js');
+
+  const config = loadConfig();
+  const sessions = new SessionStore();
+  const cwd = resolveCliLaunchCwd(config);
+  const sticky = await sessions.getConversationRuntimeProfile('cli-code');
+  const { profileName, profile } = resolveCodeHandoffProfile(config, sticky);
+
+  if (!supportsNativeCodingHandoff(profile.kind)) {
+    console.error(
+      `Profile \`${profileName}\` (${profile.kind}) has no native TUI. Falling back to ACP REPL.\n` +
+        `Tip: \`/runtime kiro\` or \`/runtime cursor\`, or run \`${cliCommand('code --repl')}\`.`,
+    );
+    if (!process.env['LARK_KIRO_LOG_LEVEL']) {
+      process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
+    }
+    await runBridge({
+      cliOnly: true,
+      cliMode: 'code',
+      cliContinue: opts.continue,
+      cliResumeId: opts.resume,
+    });
+    return 0;
+  }
+
+  const target = buildNativeCodingTarget({
+    profile,
+    profileName,
+    continueSession: Boolean(opts.continue) && !opts.resume,
+    resumeId: opts.resume,
+  });
+
+  try {
+    return await launchNativeCodingCli({ target, cwd });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      console.error(
+        `❌ Native CLI not found: \`${target.bin}\`.\n` +
+          `Install it or use \`${cliCommand('code --repl')}\` for ACP mode.`,
+      );
+      return 127;
+    }
+    throw e;
+  }
 }
 
 async function runGateway(opts: { chat?: boolean }): Promise<void> {
@@ -80,7 +147,9 @@ async function runGateway(opts: { chat?: boolean }): Promise<void> {
 
 program
   .name(CLI_NAME)
-  .description('LWA — local multi-agent workbench (code REPL + chat rehearsal + Feishu gateway)')
+  .description(
+    'LWA — local multi-agent workbench (native coding CLI + chat rehearsal + Feishu gateway)',
+  )
   .version(readPackageVersion())
   .action(async () => {
     try {
@@ -169,12 +238,17 @@ async function serveAction(opts: { chat?: boolean }): Promise<void> {
 
 program
   .command('code')
-  .description('Local coding REPL (default; Kiro-first plan routing)')
-  .option('--continue', 'Resume the most recent code session')
-  .option('--resume <id>', 'Resume a specific CLI session id')
-  .action(async (opts: { continue?: boolean; resume?: string }) => {
+  .description('Local coding: hand off to native kiro-cli chat / agent (use --repl for ACP)')
+  .option('--continue', 'Resume the most recent native/REPL session')
+  .option('--resume <id>', 'Resume a specific session id')
+  .option('--repl', 'Force LWA ACP text REPL instead of native CLI')
+  .action(async (opts: { continue?: boolean; resume?: string; repl?: boolean }) => {
     try {
-      await runLocalRepl('code', { continue: opts.continue, resume: opts.resume });
+      await runLocalRepl('code', {
+        continue: opts.continue,
+        resume: opts.resume,
+        repl: opts.repl,
+      });
     } catch (e) {
       const err = e as Error;
       console.error(`❌ ${err.message}`);

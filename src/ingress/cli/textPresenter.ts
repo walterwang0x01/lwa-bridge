@@ -52,11 +52,11 @@ export function cleanCliText(text: string): string {
 }
 
 export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
-  const title = mode === 'chat' ? 'LWA chat REPL (IM rehearsal)' : 'LWA coding REPL';
+  const title = mode === 'chat' ? 'LWA chat REPL (IM rehearsal)' : 'LWA coding ACP REPL (--repl)';
   const hint =
     mode === 'chat'
       ? 'Chat: rehearse Feishu-style replies locally (no WebSocket).'
-      : 'Chat: describe the change you want in this repo.';
+      : 'Default `lwa code` launches native kiro-cli chat / agent. This REPL is --repl mode.';
   return [
     title,
     '',
@@ -96,6 +96,6 @@ export function formatCliHelp(mode: 'code' | 'chat' = 'code'): string {
     '',
     'Meta: /help  .exit',
     '',
-    'Modes: lwa code [--continue|--resume <id>] | lwa chat | lwa serve',
+    'Modes: lwa code | lwa code --repl | lwa chat | lwa serve',
   ].join('\n');
 }

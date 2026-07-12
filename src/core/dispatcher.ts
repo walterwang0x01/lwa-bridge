@@ -120,6 +120,11 @@ export interface DispatcherOptions {
   taskHistory?: TaskHistoryStore;
   /** CLI 模式：影响路由表与 system prompt */
   cliMode?: 'code' | 'chat';
+  /**
+   * CLI code 是否允许 resume 旧 agent session。
+   * 默认 false（避免飞书污染的 kiro session）；`--continue` / `--resume` 时为 true。
+   */
+  cliAllowResume?: boolean;
   /** CLI 切换会话时回调（/resume） */
   onCliConversationSwitch?: (conversationId: string) => void;
   /** 读取当前 CLI conversation id */
@@ -144,6 +149,7 @@ export class Dispatcher {
   private readonly activeCards?: ActiveCardsStore;
   private readonly taskHistory?: TaskHistoryStore;
   private readonly cliMode?: 'code' | 'chat';
+  private readonly cliAllowResume: boolean;
   private readonly onCliConversationSwitch?: (conversationId: string) => void;
   private readonly getCliConversationId?: () => string;
 
@@ -159,6 +165,7 @@ export class Dispatcher {
     if (opts.activeCards) this.activeCards = opts.activeCards;
     if (opts.taskHistory) this.taskHistory = opts.taskHistory;
     if (opts.cliMode) this.cliMode = opts.cliMode;
+    this.cliAllowResume = opts.cliAllowResume === true;
     if (opts.onCliConversationSwitch) this.onCliConversationSwitch = opts.onCliConversationSwitch;
     if (opts.getCliConversationId) this.getCliConversationId = opts.getCliConversationId;
   }
@@ -4171,6 +4178,11 @@ export class Dispatcher {
     quoteSourceId?: string,
   ): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
+    // 本地 CLI：必须 await 整轮，禁止 rapid-fire（否则 promptLoop 会立刻出下一条 →）
+    if (this.isTextChannel(conversationId)) {
+      await this.executeKiroTask(msg, prompt, cwd, mediaPaths, perChatIdleMin);
+      return;
+    }
     // 命令型场景（doctor 等）prompt 极长且不该合并，跳过合并直接执行
     // 这里用启发式：prompt > 500 字符或 包含 "**最近日志**" 视为命令型
     const skipMerge = prompt.length > 500 || prompt.includes('**最近日志');
@@ -4282,7 +4294,8 @@ export class Dispatcher {
     await pipeline.submit({
       id: taskId,
       run: async (signal) => {
-        process.stdout.write('\n…\n');
+        const { CliTurnView } = await import('../ingress/cli/turnView.js');
+        let view: import('../ingress/cli/turnView.js').CliTurnView | undefined;
         try {
           const sessionTtlMs =
             this.config.kiro.sessionTtlHours > 0 ? this.config.kiro.sessionTtlHours * 3_600_000 : 0;
@@ -4303,7 +4316,6 @@ export class Dispatcher {
           }
           const { profileName, profile, reason, complexityScore, modelDecision } =
             await this.selectRuntimeForTask(conversationId, turnPrompt, 0);
-          const { shortenHomePath } = await import('../ingress/cli/workspace.js');
           const { buildCliCodingSystemPrompt, buildCliChatSystemPrompt } = await import(
             '../ingress/cli/codingPrompt.js'
           );
@@ -4328,14 +4340,29 @@ export class Dispatcher {
           if (reason.includes('gateway_skip') || reason.includes('gateway-circuit')) {
             process.stdout.write(`(gateway degraded → ${profileName})\n`);
           }
-          process.stdout.write(
-            `[${profileName}${profile.model ? ` · ${profile.model}` : ''}]  ${shortenHomePath(cwd)}\n\n`,
-          );
-          const storedSid = await this.sessions.getConversationAgentSession(
-            conversationId,
+
+          // kiro/cursor/gemini 不吃 profile.systemPromptPrefix；把本地人设打进本轮 prompt，
+          // 避免继续沿用飞书 session 里的旧人设。openai-compatible 已走 system message。
+          if (
+            systemPromptPrefix &&
+            profile.kind !== 'openai-compatible' &&
+            !turnPrompt.startsWith(systemPromptPrefix.slice(0, 40))
+          ) {
+            turnPrompt = `${systemPromptPrefix}\n\n---\n\n${turnPrompt}`;
+          }
+
+          view = new CliTurnView({
+            profileName,
+            model: profile.model,
             cwd,
-            sessionTtlMs,
-          );
+          });
+          view.start();
+
+          // code REPL：默认不 resume，避免粘住飞书人设；--continue/--resume 才放开
+          const allowResume = this.cliMode !== 'code' || this.cliAllowResume;
+          const storedSid = allowResume
+            ? await this.sessions.getConversationAgentSession(conversationId, cwd, sessionTtlMs)
+            : undefined;
 
           let pooled: Parameters<typeof runAgentTurn>[1]['pooled'];
           if (profile.kind === 'kiro-cli-acp') {
@@ -4361,9 +4388,9 @@ export class Dispatcher {
               idleTimeoutMs,
               signal,
               onEvent: (ev) => {
+                view?.onEvent(ev);
                 if (ev.kind === 'message' && ev.text) {
                   streamed += ev.text;
-                  process.stdout.write(ev.text);
                 }
                 for (const raw of extractPathsFromSessionEvent(ev)) {
                   const abs = normalizeArtifactPath(cwd, raw);
@@ -4390,9 +4417,9 @@ export class Dispatcher {
           } catch (e) {
             if (profile.kind === 'openai-compatible') {
               sharedGatewayHealth.recordFailure(profile, profileName, (e as Error).message);
-              process.stdout.write(
-                `\n(gateway error → circuit; next turns prefer kiro/cursor)\n${(e as Error).message}\n`,
-              );
+              view.end({
+                error: `gateway error → circuit; ${(e as Error).message}`,
+              });
               return;
             }
             throw e;
@@ -4403,25 +4430,24 @@ export class Dispatcher {
           }
 
           if (result.aborted) {
-            process.stdout.write('\n(aborted)\n');
+            view.end({ aborted: true });
             return;
           }
           if (result.idleTimedOut || result.timedOut) {
-            process.stdout.write('\n(timeout)\n');
+            view.end({ timedOut: true });
             return;
           }
           if (result.exitCode !== 0) {
             if (profile.kind === 'openai-compatible') {
               sharedGatewayHealth.recordFailure(profile, profileName, `exit ${result.exitCode}`);
             }
-            process.stdout.write(`\n(error: exit ${result.exitCode})\n`);
+            view.end({ error: `exit ${result.exitCode}` });
             return;
           }
 
-          if (!streamed && result.text) {
-            process.stdout.write(result.text);
-          }
-          process.stdout.write('\n');
+          const summary = view.end({
+            textFallback: !streamed && result.text ? result.text : undefined,
+          });
 
           if (result.newSessionId) {
             await this.sessions.setConversationKiroSession(
@@ -4450,7 +4476,7 @@ export class Dispatcher {
                 finishedAt: Date.now(),
                 terminal: 'done',
                 promptPreview: finalPrompt.slice(0, 100),
-                toolCallCount: 0,
+                toolCallCount: summary.toolCount,
                 artifacts: [...new Set(touchedThisTurn)].slice(0, 20),
                 runtimeKind: profile.kind,
                 runtimeProfile: profileName,
@@ -4459,7 +4485,8 @@ export class Dispatcher {
               .catch(() => undefined);
           }
         } catch (e) {
-          process.stdout.write(`\n(error: ${(e as Error).message})\n`);
+          if (view) view.end({ error: (e as Error).message });
+          else process.stdout.write(`\n(error: ${(e as Error).message})\n`);
         }
       },
     });
@@ -4508,9 +4535,13 @@ export class Dispatcher {
     const userPrompt = mediaPaths.length
       ? mediaPaths.map((p) => `@${p}`).join(' ') + (prompt ? '\n\n' + prompt : '')
       : prompt;
-    const finalPrompt = systemPrefix
-      ? `${systemPrefix}${planHint}\n\n---\n\n${userPrompt}`
-      : userPrompt;
+    // CLI 本地 REPL：不要把飞书 systemPromptPrefix 塞进 user prompt（否则会冒充飞书 bot）。
+    // coding/chat 人设由 executeCliTurn 的 profile.systemPromptPrefix 负责。
+    const finalPrompt = isCli
+      ? userPrompt
+      : systemPrefix
+        ? `${systemPrefix}${planHint}\n\n---\n\n${userPrompt}`
+        : userPrompt;
 
     const idleMin = this.effectiveIdleMinutes(perChatIdleMin);
     const idleTimeoutMs = idleMin > 0 ? idleMin * 60 * 1000 : 0;
