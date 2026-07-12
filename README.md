@@ -211,8 +211,9 @@ tailscale serve 5180
 | `/schedule new` | 弹一张表单卡片，0 cron 表达式建任务（小白入口；当前覆盖「每天 H:M」频率） |
 | `/exit <id\|#>` | 停止指定 bridge 进程（自己 / 他人） |
 | `/reconnect` | 强制重连飞书 WebSocket |
-| `/conduit run [--merge]` | 跑 [lwa-conduit](https://github.com/walterwang0x01/lwa-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片 |
+| `/conduit run [--merge]` | 跑 [lwa-conduit](https://github.com/walterwang0x01/lwa-conduit)（当前目录需有 `dag.yaml`）；`--merge` 弹二次确认卡片；进度为结构化 wave/task |
 | `/conduit plan <spec.md>` | 让 Kiro 把 markdown spec 拆成 `dag.yaml` 工作区 |
+| `/conduit status` | 查看上次 `.lwa-conduit/run-state.json` 摘要（不启动进程） |
 | `/skill source add <name> <git-url>` | 注册一个 Skill 来源（Git 仓库） |
 | `/skill sync <name>` | clone/pull 来源，列出可安装的 Skill（含供应链风险提示） |
 | `/skill install <name> <skill>` | 安装某个 Skill 到 `~/.kiro/skills`（不覆盖已存在） |

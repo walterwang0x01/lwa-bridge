@@ -88,6 +88,7 @@ export type ParsedCommand =
   | { kind: 'conduit'; mode: 'run' }
   | { kind: 'conduit'; mode: 'run-merge' }
   | { kind: 'conduit'; mode: 'plan'; spec: string }
+  | { kind: 'conduit'; mode: 'status' }
   | { kind: 'conduit'; mode: 'help' }
   | { kind: 'skill'; mode: 'list' }
   | { kind: 'skill'; mode: 'source-add'; name: string; url: string }
@@ -542,6 +543,7 @@ export function parseCommand(text: string): ParsedCommand | null {
       // /conduit            → 帮助
       // /conduit run        → 在当前 cwd 跑 lwa-conduit run（默认不 merge）
       // /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
+      // /conduit status     → 读 .lwa-conduit/run-state.json 摘要
       if (!tail) return { kind: 'conduit', mode: 'help' };
       const tokens = tail.split(/\s+/);
       const sub = (tokens[0] ?? '').toLowerCase();
@@ -557,6 +559,7 @@ export function parseCommand(text: string): ParsedCommand | null {
         if (!spec) return { kind: 'unknown', raw: trimmed };
         return { kind: 'conduit', mode: 'plan', spec };
       }
+      if (sub === 'status' || sub === 'st') return { kind: 'conduit', mode: 'status' };
       if (sub === 'help' || sub === '?') return { kind: 'conduit', mode: 'help' };
       return { kind: 'unknown', raw: trimmed };
     }

@@ -73,6 +73,8 @@ import {
 } from '../card/builders.js';
 import { ChatPipeline } from './pipeline.js';
 import { runConduit, type ConduitResult } from '../conduit/runner.js';
+import { formatProgressText } from '../conduit/progress.js';
+import { formatRunSummary, summarizeRunState } from '../conduit/summary.js';
 import { listProcesses, findProcess } from '../daemon/registry.js';
 import {
   MemoryStore,
@@ -2817,7 +2819,7 @@ export class Dispatcher {
               evt.messageId,
               '🚦 conduit run --merge',
             );
-            const card = this.conduitRunCard(r, true);
+            const card = this.conduitRunCard(r, true, cwd);
             try {
               await this.ingress.patchCard(evt.messageId, card);
             } catch {
@@ -3721,6 +3723,7 @@ export class Dispatcher {
         '`/conduit run` — 在当前目录跑编排（需要目录下有 `dag.yaml`）',
         '　默认**不合并**，只产出分支供 review；不会动你的工作区',
         '`/conduit plan <spec.md>` — 让 Kiro 把一份 markdown spec 拆成 `dag.yaml`',
+        '`/conduit status` — 查看上次 run-state 摘要（不启动进程）',
         '',
         `当前目录：\`${cwd}\``,
         '',
@@ -3729,6 +3732,35 @@ export class Dispatcher {
       await this.sendInteractiveCard(
         msg,
         buildAckCard({ state: 'done', title: '🚦 /conduit 帮助', body }),
+      );
+      return;
+    }
+
+    if (cmd.mode === 'status') {
+      const summary = summarizeRunState(cwd);
+      if (!summary) {
+        await this.sendInteractiveCard(
+          msg,
+          buildAckCard({
+            state: 'done',
+            title: '📊 conduit status',
+            body: [
+              `当前目录：\`${cwd}\``,
+              '',
+              '未找到 `.lwa-conduit/run-state.json`（或旧 `.kiro-conduit/`）。',
+              '先 `/conduit run` 或确认 cwd 正确。',
+            ].join('\n'),
+          }),
+        );
+        return;
+      }
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'done',
+          title: '📊 conduit status',
+          body: formatRunSummary(summary),
+        }),
       );
       return;
     }
@@ -3793,7 +3825,7 @@ export class Dispatcher {
           placeholderMessageId,
           '🚦 conduit run',
         );
-        await this.patchConduitFinal(placeholderMessageId, msg, this.conduitRunCard(r, false));
+        await this.patchConduitFinal(placeholderMessageId, msg, this.conduitRunCard(r, false, cwd));
       },
     });
   }
@@ -3810,11 +3842,19 @@ export class Dispatcher {
     runningTitle: string,
   ): Promise<ConduitResult> {
     let lastPatch = 0;
-    const onProgress = (tailStr: string): void => {
+    const onProgress = (info: {
+      textTail: string;
+      progress: import('../conduit/progress.js').ConduitProgressState;
+    }): void => {
       const now = Date.now();
       if (now - lastPatch < 2000 || !messageId) return;
       lastPatch = now;
-      const card = buildLoadingCard(`\`\`\`\n${tailStr}\n\`\`\``, runningTitle);
+      const structured =
+        info.progress.eventCount > 0 ? formatProgressText(info.progress) : '等待结构化事件…';
+      const body = [structured, '', info.textTail ? `\`\`\`\n${info.textTail}\n\`\`\`` : '']
+        .filter(Boolean)
+        .join('\n');
+      const card = buildLoadingCard(body, runningTitle);
       void this.ingress.patchCard(messageId, card).catch(() => {});
     };
     return runConduit(args, { cwd, signal, onProgress });
@@ -3836,7 +3876,7 @@ export class Dispatcher {
   }
 
   /** 根据 conduit 运行结果渲染终态卡片。merged=true 表示带了 --merge。 */
-  private conduitRunCard(r: ConduitResult, merged: boolean): object {
+  private conduitRunCard(r: ConduitResult, merged: boolean, cwd?: string): object {
     const title = r.notFound
       ? '❌ lwa-conduit 未安装'
       : r.aborted
@@ -3857,12 +3897,26 @@ export class Dispatcher {
           : r.ok
             ? merged
               ? '通过的分支已合并到 base branch。'
-              : '默认未合并，产出分支已供 review（见下方输出）。'
+              : '默认未合并，产出分支已供 review（见下方摘要）。'
             : `退出码 ${r.exitCode}。部分任务可能失败（已通过的仍会合进 integration 分支）。`;
+
+    const parts: string[] = [head];
+    if (r.progress && r.progress.eventCount > 0) {
+      parts.push('', '**进度**', formatProgressText(r.progress));
+    }
+    if (cwd) {
+      const summary = summarizeRunState(cwd);
+      if (summary) {
+        parts.push('', '**Run-state**', formatRunSummary(summary));
+      }
+    }
+    if (r.output) {
+      parts.push('', '**日志尾部**', '```', r.output, '```');
+    }
     return buildAckCard({
       state: r.ok && !r.aborted ? 'done' : r.aborted ? 'aborted' : 'error',
       title,
-      body: [head, '', '```', r.output || '（无输出）', '```'].filter(Boolean).join('\n'),
+      body: parts.filter((p) => p !== undefined).join('\n'),
     });
   }
 

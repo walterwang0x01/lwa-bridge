@@ -10,23 +10,32 @@
  *
  * 能力：
  *   - signal：被 AbortSignal 中止时给子进程发 SIGTERM，5s 后兜底 SIGKILL
- *   - onProgress：流式回调，边跑边把输出尾部喂给调用方（用于实时刷新卡片）
+ *   - onProgress：流式回调（人读日志尾部 + 可选结构化进度）
+ *   - run 子命令自动追加 `--events ndjson`
  *   - notFound：lwa-conduit 不在 PATH 时返回友好标记，而不是抛 ENOENT
  */
 import { execa } from 'execa';
 
 import { CONDUIT_CLI_NAME, LEGACY_CONDUIT_CLI_NAME } from '../lib/branding.js';
+import { consumeConduitEventLines } from './events.js';
+import { applyConduitEvent, createEmptyProgress, type ConduitProgressState } from './progress.js';
 
 /** conduit 可执行文件名（在 PATH 上）。LWA_CONDUIT_BIN 优先；回退 KIRO_CONDUIT_BIN。 */
 export function conduitBin(): string {
   return process.env.LWA_CONDUIT_BIN || process.env.KIRO_CONDUIT_BIN || CONDUIT_CLI_NAME;
 }
 
+export interface ConduitProgressInfo {
+  /** 过滤掉 NDJSON 事件后的人读日志尾部 */
+  textTail: string;
+  progress: ConduitProgressState;
+}
+
 export interface ConduitResult {
   /** 退出码为 0 视为成功 */
   ok: boolean;
   exitCode: number;
-  /** stdout + stderr 合并后的尾部（已截断到卡片可容纳的长度） */
+  /** stdout + stderr 合并后的人读日志尾部（已截断；不含 NDJSON 事件行） */
   output: string;
   /** 是否因超时被终止 */
   timedOut: boolean;
@@ -34,16 +43,23 @@ export interface ConduitResult {
   aborted: boolean;
   /** lwa-conduit 不在 PATH 上（未安装） */
   notFound: boolean;
+  /** 结构化进度终态（若启用了 --events） */
+  progress?: ConduitProgressState;
 }
 
 export interface RunConduitOptions {
   cwd: string;
-  /** 超时（默认 30 分钟）。超时会 SIGTERM → 5s 后 SIGKILL。 */
+  /** 超时（默认 30 分钟）。超时会 SIGTERM → 5s 后兜底 SIGKILL。 */
   timeoutMs?: number;
   /** 中止信号；abort 时终止子进程。 */
   signal?: AbortSignal;
-  /** 流式输出回调；每次有新输出时带上累积的尾部（已截断）。 */
-  onProgress?: (outputTail: string) => void;
+  /** 流式输出回调；每次有新输出时带上日志尾部 + 进度状态。 */
+  onProgress?: (info: ConduitProgressInfo) => void;
+  /**
+   * 是否为 `run` 自动追加 `--events ndjson`（默认 true）。
+   * 仅当 args[0]==='run' 且尚未带 `--events` 时生效。
+   */
+  autoEvents?: boolean;
 }
 
 /** 输出尾部保留的字符数（飞书单 element 30KB 上限，保守取 2500） */
@@ -52,6 +68,14 @@ const MAX_OUTPUT_TAIL = 2500;
 function tail(s: string, max: number): string {
   if (s.length <= max) return s;
   return `…（前文省略）\n${s.slice(-max)}`;
+}
+
+/** 给 `run` 子命令补上 `--events ndjson`（已有 `--events` 则不动）。 */
+export function withAutoEvents(args: string[], enabled = true): string[] {
+  if (!enabled) return args;
+  if (args[0] !== 'run') return args;
+  if (args.includes('--events')) return args;
+  return [...args, '--events', 'ndjson'];
 }
 
 /**
@@ -67,9 +91,10 @@ function tail(s: string, max: number): string {
  * 短暂残留（conduit 自身负责回收）。比"完全不杀"是实质改进。
  */
 export async function runConduit(args: string[], opts: RunConduitOptions): Promise<ConduitResult> {
-  const { cwd, timeoutMs = 30 * 60 * 1000, signal, onProgress } = opts;
+  const { cwd, timeoutMs = 30 * 60 * 1000, signal, onProgress, autoEvents = true } = opts;
+  const finalArgs = withAutoEvents(args, autoEvents);
 
-  const sub = execa(conduitBin(), args, {
+  const sub = execa(conduitBin(), finalArgs, {
     cwd,
     reject: false,
     timeout: timeoutMs,
@@ -79,12 +104,30 @@ export async function runConduit(args: string[], opts: RunConduitOptions): Promi
     forceKillAfterDelay: 5000, // SIGTERM 后 5s 仍活着就 SIGKILL
   });
 
-  // 流式：边跑边把输出尾部喂回调用方
-  let buf = '';
-  if (onProgress && sub.all) {
+  let humanBuf = '';
+  let lineCarry = '';
+  let progress = createEmptyProgress();
+
+  const ingest = (chunk: string): void => {
+    const { events, carry, humanLines } = consumeConduitEventLines(chunk, lineCarry);
+    lineCarry = carry;
+    for (const ev of events) {
+      progress = applyConduitEvent(progress, ev);
+    }
+    if (humanLines.length) {
+      humanBuf += `${humanLines.join('\n')}\n`;
+    }
+    if (onProgress) {
+      onProgress({
+        textTail: tail(humanBuf, MAX_OUTPUT_TAIL),
+        progress,
+      });
+    }
+  };
+
+  if (sub.all) {
     sub.all.on('data', (chunk: Buffer | string) => {
-      buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      onProgress(tail(buf, MAX_OUTPUT_TAIL));
+      ingest(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
     });
   }
 
@@ -95,16 +138,24 @@ export async function runConduit(args: string[], opts: RunConduitOptions): Promi
     return notFoundResult(result);
   }
 
-  const combined = result.all ?? buf;
+  // 收尾：处理未以换行结束的残留，以及未走 data 事件时的整段输出
+  const combined = result.all ?? '';
+  if (combined && !humanBuf && progress.eventCount === 0) {
+    ingest(`${combined}\n`);
+  } else if (lineCarry) {
+    ingest('\n');
+  }
+
   const exitCode = typeof result.exitCode === 'number' ? result.exitCode : -1;
   const aborted = signal?.aborted === true || result.isCanceled === true;
   return {
     ok: exitCode === 0 && !aborted,
     exitCode,
-    output: tail(combined || '', MAX_OUTPUT_TAIL),
+    output: tail(humanBuf || '', MAX_OUTPUT_TAIL),
     timedOut: result.timedOut === true,
     aborted,
     notFound: false,
+    progress: progress.eventCount > 0 ? progress : undefined,
   };
 }
 

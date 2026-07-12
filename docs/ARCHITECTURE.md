@@ -293,7 +293,7 @@ lwa-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 Ty
 
 ### 流式进度
 
-`runConduit` 支持 `onProgress` 回调，边跑边把 stdout/stderr 合并后的尾部（截断到 2500 字符）喂给调用方。`handleConduitCmd` 用它节流（2 秒一次）刷新占位卡片，避免飞书 `patchCard` 频率限制。这不是真正的结构化进度（lwa-conduit 内部有 EventBus 记录 wave/worker 状态，但 CLI 层只吐文本日志），只是"看得到它还活着、大概在干什么"，够用但不精确。
+`runConduit` 支持 `onProgress` 回调。Bridge 调用 `run` 时自动追加 `--events ndjson`：lwa-conduit 把 EventBus 事件以 `lwa.conduit.event/v1` NDJSON 写到 stderr。`handleConduitCmd` 解析后节流（2 秒一次）刷新占位卡片（wave / task 计数 + 人读日志尾部）。`/conduit status` 直接读 `.lwa-conduit/run-state.json` 摘要。
 
 ## `/skill` 与 `/agent`：Skill 市场与 Persona 系统
 

@@ -748,6 +748,14 @@ describe('/conduit', () => {
     });
   });
 
+  it('/conduit status → status', () => {
+    expect(parseCommand('/conduit status')).toEqual({ kind: 'conduit', mode: 'status' });
+  });
+
+  it('/conduit st → status', () => {
+    expect(parseCommand('/conduit st')).toEqual({ kind: 'conduit', mode: 'status' });
+  });
+
   it('/conduit 未知子命令 → unknown', () => {
     expect(parseCommand('/conduit foo')).toEqual({ kind: 'unknown', raw: '/conduit foo' });
   });
