@@ -1,16 +1,20 @@
-# 迁移到 `lwa` CLI 与 `~/.lwa` 数据目录
+# 迁移到 `lwa` CLI、`lwa-bridge` / `lwa-conduit` 与 `~/.lwa`
 
 ## 变更摘要
 
 | 项目 | 新 | 旧（仍兼容） |
 |------|-----|-------------|
 | **主 CLI 命令** | `lwa`（TTY 默认进纯净 REPL） | `lwa-bridge`、`lark-kiro-bridge` |
+| **npm 包名** | `lwa-bridge` | `lark-kiro-bridge`（bin 别名仍可用） |
+| **PyPI 包名** | `lwa-conduit` | `kiro-conduit`（entry point 别名仍可用） |
+| **Conduit CLI** | `lwa-conduit` | `kiro-conduit` |
 | **Gateway** | `lwa serve`（`lwa run` 别名） | `lark-kiro-bridge run` |
 | **数据目录** | `~/.lwa/` | `~/.lark-kiro-bridge/`（首次启动自动迁移） |
-| **npm 安装** | `npm i -g lark-kiro-bridge`（包名暂不变） | — |
+| **Conduit 项目目录** | `<repo>/.lwa-conduit/` | `<repo>/.kiro-conduit/`（首次运行自动迁移） |
 | **macOS 守护** | `ai.lwa.bot` | `ai.lark-kiro-bridge.bot` |
 | **Linux systemd** | `lwa.service` | `lark-kiro-bridge.service` |
 | **Windows 任务** | `LWA.Bot` | `LarkKiroBridge.Bot` |
+| **环境变量** | `LWA_CONDUIT_BIN` 等 | `KIRO_CONDUIT_*`（仍可读） |
 
 ## 两条路径（生产实践）
 
@@ -42,7 +46,12 @@ lwa serve
 ## 升级步骤
 
 ```bash
-npm i -g lark-kiro-bridge@latest
+# Bridge
+npm i -g lwa-bridge@latest
+
+# Conduit（若使用 /conduit 或本地并行编排）
+uv tool install lwa-conduit
+# 或 pipx install lwa-conduit
 
 lwa              # 本地 REPL
 lwa serve        # 飞书 Gateway
@@ -50,6 +59,8 @@ lwa serve --chat # Gateway + 本机 REPL（前台）
 ```
 
 首次运行时会自动把 `~/.lark-kiro-bridge` **重命名**为 `~/.lwa`（若 `~/.lwa` 尚不存在）。
+
+Conduit 首次运行会把项目内 `.kiro-conduit/` **重命名**为 `.lwa-conduit/`（若新目录尚不存在）。
 
 若两个目录都已存在，bridge **优先使用 `~/.lwa`**，并在控制台提示你手动合并或删除 legacy 目录。
 
@@ -73,3 +84,5 @@ lwa start
 | `lark-kiro-bridge models` | `lwa models` |
 | `lark-kiro-bridge init` | `lwa init` |
 | `lark-kiro-bridge start` | `lwa start` |
+| `kiro-conduit run` | `lwa-conduit run` |
+| `KIRO_CONDUIT_BIN` | `LWA_CONDUIT_BIN`（旧名仍可读） |

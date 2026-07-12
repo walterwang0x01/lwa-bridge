@@ -2,7 +2,7 @@
   "name": "dashboard-ui",
   "private": true,
   "version": "0.0.0",
-  "description": "LWA Bridge read-only Web Dashboard (Vue 3); static assets shipped by lark-kiro-bridge",
+  "description": "LWA Bridge read-only Web Dashboard (Vue 3); static assets shipped by lwa-bridge",
   "type": "module",
   "scripts": {
     "dev": "vite",

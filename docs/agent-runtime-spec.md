@@ -1,6 +1,6 @@
 # Agent Runtime 规范
 
-多 CLI 兼容层的跨项目约定（`lark-kiro-bridge` TypeScript + `kiro-conduit` Python）。
+多 CLI 兼容层的跨项目约定（`lark-kiro-bridge` TypeScript + `lwa-conduit` Python）。
 
 ## Runtime kinds
 
@@ -61,20 +61,20 @@
 完整生产实践：[`runtime-routing-production.md`](./runtime-routing-production.md)  
 示例配置：[`runtime-config.example.json`](./runtime-config.example.json)
 
-## kiro-conduit CLI
+## lwa-conduit CLI
 
 ```bash
-kiro-conduit run --workspace ./my-ws --runtime-kind kiro-cli-acp
-kiro-conduit run --workspace ./my-ws --runtime-kind cursor-agent-cli --kiro-cli agent
-kiro-conduit run --workspace ./my-ws --runtime-kind gemini-cli
-kiro-conduit report --base-repo .
-kiro-conduit report --quota-only
+lwa-conduit run --workspace ./my-ws --runtime-kind kiro-cli-acp
+lwa-conduit run --workspace ./my-ws --runtime-kind cursor-agent-cli --kiro-cli agent
+lwa-conduit run --workspace ./my-ws --runtime-kind gemini-cli
+lwa-conduit report --base-repo .
+lwa-conduit report --quota-only
 ```
 
 环境变量（配额）：
 
-- `KIRO_CONDUIT_QUOTA_OVERRIDES` — JSON `{"cursor-agent-cli":"depleted"}`
-- `KIRO_CONDUIT_KIRO_MONTHLY_LIMIT` / `CURSOR` / `GEMINI` — 本地月度计数上限
+- `LWA_CONDUIT_QUOTA_OVERRIDES` — JSON `{"cursor-agent-cli":"depleted"}`
+- `LWA_CONDUIT_KIRO_MONTHLY_LIMIT` / `CURSOR` / `GEMINI` — 本地月度计数上限
 
 生产建议：同一 DAG run 内同一角色保持 homogeneous runtime（不要混用两种 CLI）。
 
@@ -88,7 +88,7 @@ kiro-conduit report --quota-only
 - 自适应：`off` / `suggest` / `apply-safe` / `apply-aggressive`，按桶、多目标分数（成功率+耗时+改动+成本）
 - reviewer：`execution_ok` 与 `verdict_pass` 分开；审查 FAIL 不算 runtime 失败
 - `lark-kiro-bridge` Dashboard 展示按桶 metrics / score / adaptive 推荐 / **quota status**（60s 重探）
-- `kiro-conduit report` 打印分桶 metrics、avg_duration、score、推荐、**quota**
+- `lwa-conduit report` 打印分桶 metrics、avg_duration、score、推荐、**quota**
 
 ## 演进
 

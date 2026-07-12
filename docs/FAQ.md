@@ -1,6 +1,6 @@
 # FAQ & 故障排查
 
-> **LWA（Lark Local Agent Workbench）** 飞书入口是 **Bridge（lark-kiro-bridge）**；大 spec 编排见 **Conduit（kiro-conduit）**。体系介绍：[PITCH.md](./PITCH.md) · [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)
+> **LWA（Lark Local Agent Workbench）** 飞书入口是 **Bridge（lark-kiro-bridge）**；大 spec 编排见 **Conduit（lwa-conduit）**。体系介绍：[PITCH.md](./PITCH.md) · [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)
 
 ## FAQ — 用之前你可能想问的
 

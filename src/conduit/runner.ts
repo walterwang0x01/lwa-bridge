@@ -1,23 +1,25 @@
 /**
- * kiro-conduit 子进程封装
+ * lwa-conduit 子进程封装
  *
- * 把 kiro-conduit CLI（多 agent 并行编排器）当成一个外部工具 spawn，和 bridge
+ * 把 lwa-conduit CLI（多 agent 并行编排器）当成一个外部工具 spawn，和 bridge
  * 调 kiro-cli / lark-cli 是同一个模式：子进程 + 捕获输出。
  *
- * 串联前提：`kiro-conduit` 命令在 PATH 上（`uv tool install` / `pipx install`
- * kiro-conduit 即可）。bin 路径默认 `kiro-conduit`，可用环境变量
- * `KIRO_CONDUIT_BIN` 覆盖（指向绝对路径）。
+ * 串联前提：`lwa-conduit` 命令在 PATH 上（`uv tool install` / `pipx install`
+ * lwa-conduit 即可）。bin 路径默认 `lwa-conduit`，可用环境变量
+ * `LWA_CONDUIT_BIN` 覆盖（指向绝对路径）。
  *
  * 能力：
  *   - signal：被 AbortSignal 中止时给子进程发 SIGTERM，5s 后兜底 SIGKILL
  *   - onProgress：流式回调，边跑边把输出尾部喂给调用方（用于实时刷新卡片）
- *   - notFound：kiro-conduit 不在 PATH 时返回友好标记，而不是抛 ENOENT
+ *   - notFound：lwa-conduit 不在 PATH 时返回友好标记，而不是抛 ENOENT
  */
 import { execa } from 'execa';
 
-/** conduit 可执行文件名（在 PATH 上）。可用 KIRO_CONDUIT_BIN 覆盖为绝对路径。 */
+import { CONDUIT_CLI_NAME, LEGACY_CONDUIT_CLI_NAME } from '../lib/branding.js';
+
+/** conduit 可执行文件名（在 PATH 上）。LWA_CONDUIT_BIN 优先；回退 KIRO_CONDUIT_BIN。 */
 export function conduitBin(): string {
-  return process.env.KIRO_CONDUIT_BIN || 'kiro-conduit';
+  return process.env.LWA_CONDUIT_BIN || process.env.KIRO_CONDUIT_BIN || CONDUIT_CLI_NAME;
 }
 
 export interface ConduitResult {
@@ -30,7 +32,7 @@ export interface ConduitResult {
   timedOut: boolean;
   /** 是否被 signal 主动中止 */
   aborted: boolean;
-  /** kiro-conduit 不在 PATH 上（未安装） */
+  /** lwa-conduit 不在 PATH 上（未安装） */
   notFound: boolean;
 }
 
@@ -53,9 +55,9 @@ function tail(s: string, max: number): string {
 }
 
 /**
- * 跑一次 kiro-conduit 子命令。
+ * 跑一次 lwa-conduit 子命令。
  *
- * @param args  传给 kiro-conduit 的参数，如 ['run', '--workspace', '/path']
+ * @param args  传给 lwa-conduit 的参数，如 ['run', '--workspace', '/path']
  * @param opts  cwd / 超时 / 中止信号 / 流式回调
  *
  * 设计取舍：`reject: false` 让非 0 退出码不抛异常，由调用方据 ok 渲染卡片；
@@ -88,7 +90,7 @@ export async function runConduit(args: string[], opts: RunConduitOptions): Promi
 
   const result = await sub;
 
-  // ENOENT：kiro-conduit 不在 PATH
+  // ENOENT：lwa-conduit 不在 PATH
   if ((result as { code?: string }).code === 'ENOENT') {
     return notFoundResult(result);
   }
@@ -110,7 +112,7 @@ function notFoundResult(detail: unknown): ConduitResult {
   return {
     ok: false,
     exitCode: -1,
-    output: `未找到 \`${conduitBin()}\` 命令。请先安装：\n  uv tool install kiro-conduit\n（或 pipx install kiro-conduit / 从源码 uv tool install --editable <path>）\n\n${String(detail).slice(0, 300)}`,
+    output: `未找到 \`${conduitBin()}\` 命令。请先安装：\n  uv tool install ${CONDUIT_CLI_NAME}\n（或 pipx install ${CONDUIT_CLI_NAME} / 从源码 uv tool install --editable <path>）\n\n旧包名 \`${LEGACY_CONDUIT_CLI_NAME}\` 仍可用作兼容入口。\n\n${String(detail).slice(0, 300)}`,
     timedOut: false,
     aborted: false,
     notFound: true,

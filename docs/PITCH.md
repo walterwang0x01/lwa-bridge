@@ -19,7 +19,7 @@
 |------|----------------|--------|
 | 体系 | **LWA** | 本地多 CLI Agent 生产工作台 |
 | 飞书入口 | **Bridge**（lark-kiro-bridge） | 低延迟对话、轻量编辑、Dashboard 观测 |
-| DAG 编排 | **Conduit**（kiro-conduit） | 大 spec 拆 DAG、分角色并行、合并前审查 |
+| DAG 编排 | **Conduit**（lwa-conduit） | 大 spec 拆 DAG、分角色并行、合并前审查 |
 
 两个仓库互补，不是竞争关系：
 
@@ -60,8 +60,8 @@ npm install -g lark-kiro-bridge
 lark-kiro-bridge run
 
 # Conduit：终端编排（也可从飞书 /conduit 触发）
-pipx install kiro-conduit
-kiro-conduit run --workspace my-workspace/ --adaptive-mode suggest
+pipx install lwa-conduit
+lwa-conduit run --workspace my-workspace/ --adaptive-mode suggest
 ```
 
 ## 延伸阅读

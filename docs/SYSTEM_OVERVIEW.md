@@ -3,7 +3,7 @@
 **LWA** 是一套面向生产的本地多 CLI Agent 体系，由两个互补组件组成：
 
 - **Bridge（lark-kiro-bridge）** — 飞书里的低延迟对话入口、轻量编辑与可观测性
-- **Conduit（kiro-conduit）** — 大 spec 的 DAG 并行编排、分角色执行与合并前审查
+- **Conduit（lwa-conduit）** — 大 spec 的 DAG 并行编排、分角色执行与合并前审查
 
 默认策略：简单任务走 **Cursor Auto**（便宜、快），复杂任务自动升级 **Kiro**；按任务桶分桶学习，多目标自适应路由。
 
@@ -16,7 +16,7 @@
 ## 一句话定位
 
 - **Bridge（lark-kiro-bridge）**：把飞书对话变成一个可在本机项目上执行的低延迟 Agent 入口
-- **Conduit（kiro-conduit）**：把大 spec 变成可并行执行、可审查、可合并的 DAG 编排流程
+- **Conduit（lwa-conduit）**：把大 spec 变成可并行执行、可审查、可合并的 DAG 编排流程
 - **cursor-agent-cli**：便宜、快，适合简单任务与高吞吐实现
 - **kiro-cli-acp**：更强，适合复杂实现、规划与审查
 
@@ -49,7 +49,7 @@
 - task bucket（`chat` / `review` / `plan` / `edit` / `conduit`）
 - Dashboard 可视化
 
-### Conduit（kiro-conduit）
+### Conduit（lwa-conduit）
 
 适合：
 

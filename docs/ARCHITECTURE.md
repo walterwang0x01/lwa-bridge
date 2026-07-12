@@ -261,19 +261,19 @@ description: >-
 
 见 [SECURITY.md](../SECURITY.md#web-dashboard-local-http-server)：绑定 `127.0.0.1`、纯只读、不返回 secret、静态文件路径穿越防护。
 
-## `/conduit`：串联 kiro-conduit
+## `/conduit`：串联 lwa-conduit
 
-[kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) 是同作者的另一个项目——多 agent DAG 并行编排器（把大 spec 拆成任务图，多个 worktree 并行跑 Kiro，CIV 三角色 + 4 层验证，串行 merge）。lark-kiro-bridge 不重新实现这套编排逻辑，只是把它接进飞书交互。
+[lwa-conduit](https://github.com/walterwang0x01/lwa-conduit) 是同作者的另一个项目——多 agent DAG 并行编排器（把大 spec 拆成任务图，多个 worktree 并行跑 Kiro，CIV 三角色 + 4 层验证，串行 merge）。lark-kiro-bridge 不重新实现这套编排逻辑，只是把它接进飞书交互。
 
 ### 串联方式：spawn 子进程，不是库依赖
 
-`src/conduit/runner.ts` 的 `runConduit()` 用 execa spawn `kiro-conduit`（PATH 上的可执行文件，可用 `KIRO_CONDUIT_BIN` 环境变量覆盖成绝对路径），跟 bridge 调 `kiro-cli` / `lark-cli` 是同一个模式——**统一走"外部工具子进程"**，不引入 Python 互操作或者把 conduit 的逻辑搬进 bridge。
+`src/conduit/runner.ts` 的 `runConduit()` 用 execa spawn `lwa-conduit`（PATH 上的可执行文件，可用 `LWA_CONDUIT_BIN` 环境变量覆盖成绝对路径），跟 bridge 调 `kiro-cli` / `lark-cli` 是同一个模式——**统一走"外部工具子进程"**，不引入 Python 互操作或者把 conduit 的逻辑搬进 bridge。
 
-前提：`kiro-conduit` 命令要在 PATH 上（`uv tool install` 或 `pipx install` 装一次）。bridge 不负责装它，只负责调。
+前提：`lwa-conduit` 命令要在 PATH 上（`uv tool install` 或 `pipx install` 装一次）。bridge 不负责装它，只负责调。
 
 ### 为啥不直接 npm 依赖
 
-kiro-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 TypeScript/Node 项目——两个不同的运行时，没有"直接 import"这个选项，子进程是唯一合理的集成方式。这也符合 bridge 一贯的设计：不做 LLM/agent 编排本身（那是 kiro-cli 和 kiro-conduit 的工作），bridge 只做"消息转发 + 卡片渲染 + 外部工具调度"。
+lwa-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 TypeScript/Node 项目——两个不同的运行时，没有"直接 import"这个选项，子进程是唯一合理的集成方式。这也符合 bridge 一贯的设计：不做 LLM/agent 编排本身（那是 kiro-cli 和 lwa-conduit 的工作），bridge 只做"消息转发 + 卡片渲染 + 外部工具调度"。
 
 ### 三个安全设计
 
@@ -285,15 +285,15 @@ kiro-conduit 是 Python 项目（asyncio + Kiro CLI ACP 编排），bridge 是 T
 
 第一版只是把 `AbortSignal` 传给 execa，测试时发现：**卡片显示"⏹ 已中止"，但 conduit 进程和它已经 spawn 的 kiro-cli 子进程还在跑**。
 
-根因在 kiro-conduit 那一侧：它从未注册过信号处理器。Python 收到 SIGTERM 默认直接终止进程，正在跑的 `async with await AcpClient.spawn(...)` 块的 `__aexit__`（负责 terminate 子进程）根本来不及执行。
+根因在 lwa-conduit 那一侧：它从未注册过信号处理器。Python 收到 SIGTERM 默认直接终止进程，正在跑的 `async with await AcpClient.spawn(...)` 块的 `__aexit__`（负责 terminate 子进程）根本来不及执行。
 
-修法是在 kiro-conduit 的 `cli.py` 加 `_run_with_signal_handling()`：把 SIGTERM/SIGINT 转换成对 asyncio 主 task 的 `cancel()`。取消会像异常一样沿 await 链传播，途经的每个 `async with AcpClient` 块的 `__aexit__` 正常触发。**没有改动 orchestrator / AcpClient 本身**——它们的清理路径本来就是对的，只是从来没被信号真正触发过。
+修法是在 lwa-conduit 的 `cli.py` 加 `_run_with_signal_handling()`：把 SIGTERM/SIGINT 转换成对 asyncio 主 task 的 `cancel()`。取消会像异常一样沿 await 链传播，途经的每个 `async with AcpClient` 块的 `__aexit__` 正常触发。**没有改动 orchestrator / AcpClient 本身**——它们的清理路径本来就是对的，只是从来没被信号真正触发过。
 
 过程中还顺手改坏又修好了一件事：手动 `loop.create_task()` 替代 `asyncio.run()` 后，`main()` 对外一贯的 `raise SystemExit`（既有测试依赖这个契约）被意外吞成了 int 返回值，得显式 `except SystemExit: raise` 才恢复。这是"改一处基础设施代码，牵连到看似无关的错误处理路径"的典型例子——只跑类型检查看不出来，得跑既有测试套件才抓到。
 
 ### 流式进度
 
-`runConduit` 支持 `onProgress` 回调，边跑边把 stdout/stderr 合并后的尾部（截断到 2500 字符）喂给调用方。`handleConduitCmd` 用它节流（2 秒一次）刷新占位卡片，避免飞书 `patchCard` 频率限制。这不是真正的结构化进度（kiro-conduit 内部有 EventBus 记录 wave/worker 状态，但 CLI 层只吐文本日志），只是"看得到它还活着、大概在干什么"，够用但不精确。
+`runConduit` 支持 `onProgress` 回调，边跑边把 stdout/stderr 合并后的尾部（截断到 2500 字符）喂给调用方。`handleConduitCmd` 用它节流（2 秒一次）刷新占位卡片，避免飞书 `patchCard` 频率限制。这不是真正的结构化进度（lwa-conduit 内部有 EventBus 记录 wave/worker 状态，但 CLI 层只吐文本日志），只是"看得到它还活着、大概在干什么"，够用但不精确。
 
 ## `/skill` 与 `/agent`：Skill 市场与 Persona 系统
 
@@ -371,7 +371,7 @@ src/
 ├── daemon/                    # macOS launchd
 │   ├── launchd.ts             # plist 安装 / start / stop
 │   └── registry.ts            # 进程注册表
-├── conduit/                   # kiro-conduit 子进程封装
+├── conduit/                   # lwa-conduit 子进程封装
 │   └── runner.ts              # spawn + signal 转发 + 流式输出回调
 ├── dashboard/                 # 只读 Web Dashboard 后端
 │   ├── server.ts              # HTTP server：静态托管 + /api/overview
@@ -418,4 +418,4 @@ webhook 适合云上部署多实例集群——这不是 lark-kiro-bridge 的目
 
 - [飞书卡片 JSON 2.0](https://open.feishu.cn/document/feishu-cards/feishu-card-overview)
 - [飞书卡片回传交互](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks)
-- [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) —— `/conduit` 串联的多 agent 并行编排器，架构细节见其自己的 `docs/ARCHITECTURE.md`
+- [lwa-conduit](https://github.com/walterwang0x01/lwa-conduit) —— `/conduit` 串联的多 agent 并行编排器，架构细节见其自己的 `docs/ARCHITECTURE.md`

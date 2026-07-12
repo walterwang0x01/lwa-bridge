@@ -106,7 +106,7 @@ function checkConfig(ctx: SelftestCtx): CheckResult {
 /**
  * 2. 数据目录可读可写
  *
- * 检查 ~/.lark-kiro-bridge/ 及子目录存在 + 权限正确。
+ * 检查 ~/.lwa/ 及子目录存在 + 权限正确。
  * sessions.json / cron.json 不强制存在（用户可能没用过），存在的话校验可读。
  */
 function checkDataDirs(): CheckResult {

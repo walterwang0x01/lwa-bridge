@@ -3697,17 +3697,17 @@ export class Dispatcher {
   }
 
   /**
-   * /conduit — 串联 kiro-conduit（多 agent 并行编排器）
+   * /conduit — 串联 lwa-conduit（多 agent 并行编排器）
    *
    *   /conduit            → 帮助
-   *   /conduit run        → 在当前 cwd 跑 `kiro-conduit run --workspace <cwd>`
+   *   /conduit run        → 在当前 cwd 跑 `lwa-conduit run --workspace <cwd>`
    *                         默认不 merge（产出分支供 review），安全
    *   /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
    *
    * 设计取舍：
    *   - conduit 是分钟级长任务，用 sendInteractiveCardAsync 占位→结果，不做流式（MVP）
    *   - run 默认不加 --merge：绝不自动改用户分支，只产出 review 分支（安全优先）
-   *   - 串联靠 spawn `kiro-conduit` 子进程（同 kiro-cli/lark-cli 模式），需先装上 PATH
+   *   - 串联靠 spawn `lwa-conduit` 子进程（同 kiro-cli/lark-cli 模式），需先装上 PATH
    */
   private async handleConduitCmd(
     msg: IncomingMessage,
@@ -3716,7 +3716,7 @@ export class Dispatcher {
   ): Promise<void> {
     if (cmd.mode === 'help') {
       const body = [
-        '**kiro-conduit** — 多 agent 并行编排器（把大 spec 拆成 DAG 并行跑）。',
+        '**lwa-conduit** — 多 agent 并行编排器（把大 spec 拆成 DAG 并行跑）。',
         '',
         '`/conduit run` — 在当前目录跑编排（需要目录下有 `dag.yaml`）',
         '　默认**不合并**，只产出分支供 review；不会动你的工作区',
@@ -3724,7 +3724,7 @@ export class Dispatcher {
         '',
         `当前目录：\`${cwd}\``,
         '',
-        "<font color='grey'>前提：本机已 `uv tool install` / `pipx install` kiro-conduit</font>",
+        "<font color='grey'>前提：本机已 `uv tool install` / `pipx install` lwa-conduit</font>",
       ].join('\n');
       await this.sendInteractiveCard(
         msg,
@@ -3748,14 +3748,14 @@ export class Dispatcher {
           const r = await runConduit(['plan', '--spec', cmd.spec, '--out', outDir], { cwd });
           return buildAckCard({
             state: r.ok ? 'done' : 'error',
-            title: r.ok ? '🗺️ 拆分完成' : r.notFound ? '❌ kiro-conduit 未安装' : '❌ 拆分失败',
+            title: r.ok ? '🗺️ 拆分完成' : r.notFound ? '❌ lwa-conduit 未安装' : '❌ 拆分失败',
             body: [
               r.ok
                 ? `已生成 \`${outDir}/dag.yaml\`。review 后用 \`/conduit run\` 执行。`
                 : r.notFound
                   ? ''
                   : r.timedOut
-                    ? '超时（>30min）。大 spec 拆分较慢，建议本机直接跑 `kiro-conduit plan`。'
+                    ? '超时（>30min）。大 spec 拆分较慢，建议本机直接跑 `lwa-conduit plan`。'
                     : `退出码 ${r.exitCode}。`,
               '',
               '```',
@@ -3838,7 +3838,7 @@ export class Dispatcher {
   /** 根据 conduit 运行结果渲染终态卡片。merged=true 表示带了 --merge。 */
   private conduitRunCard(r: ConduitResult, merged: boolean): object {
     const title = r.notFound
-      ? '❌ kiro-conduit 未安装'
+      ? '❌ lwa-conduit 未安装'
       : r.aborted
         ? '⏹ 编排已中止'
         : r.ok
@@ -3853,7 +3853,7 @@ export class Dispatcher {
       : r.aborted
         ? '已发出终止信号，子进程正在收尾。'
         : r.timedOut
-          ? '超时（>30min）被终止。可在本机直接跑 `kiro-conduit run` 看完整过程。'
+          ? '超时（>30min）被终止。可在本机直接跑 `lwa-conduit run` 看完整过程。'
           : r.ok
             ? merged
               ? '通过的分支已合并到 base branch。'

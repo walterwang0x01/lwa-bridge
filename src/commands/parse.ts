@@ -540,7 +540,7 @@ export function parseCommand(text: string): ParsedCommand | null {
       return { kind: 'help' };
     case 'conduit': {
       // /conduit            → 帮助
-      // /conduit run        → 在当前 cwd 跑 kiro-conduit run（默认不 merge）
+      // /conduit run        → 在当前 cwd 跑 lwa-conduit run（默认不 merge）
       // /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
       if (!tail) return { kind: 'conduit', mode: 'help' };
       const tokens = tail.split(/\s+/);

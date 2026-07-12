@@ -6,10 +6,10 @@
 
 > **CLI**: primary command **`lwa`** (aliases: `lwa-bridge`, `lark-kiro-bridge`). Data dir **`~/.lwa`** (auto-migrates from `~/.lark-kiro-bridge`). See [docs/MIGRATION_LWA.md](./docs/MIGRATION_LWA.md).
 
-[![npm version](https://img.shields.io/npm/v/lark-kiro-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lark-kiro-bridge)
-[![npm downloads](https://img.shields.io/npm/dm/lark-kiro-bridge.svg)](https://www.npmjs.com/package/lark-kiro-bridge)
-[![license](https://img.shields.io/npm/l/lark-kiro-bridge.svg)](./LICENSE)
-[![node](https://img.shields.io/node/v/lark-kiro-bridge.svg)](https://nodejs.org/)
+[![npm version](https://img.shields.io/npm/v/lwa-bridge.svg?color=cb3837)](https://www.npmjs.com/package/lwa-bridge)
+[![npm downloads](https://img.shields.io/npm/dm/lwa-bridge.svg)](https://www.npmjs.com/package/lwa-bridge)
+[![license](https://img.shields.io/npm/l/lwa-bridge.svg)](./LICENSE)
+[![node](https://img.shields.io/node/v/lwa-bridge.svg)](https://nodejs.org/)
 [![GitHub stars](https://img.shields.io/github/stars/walterwang0x01/lark-kiro-bridge?style=social)](https://github.com/walterwang0x01/lwa-bridge)
 
 [🇨🇳 中文](./README.md) | 🇺🇸 English
@@ -20,7 +20,7 @@
 
 **Why this exists**: cloud AI coding assistants (Cursor / Copilot / Devin) can't touch your local project directories, and have no way to operate Feishu's own APIs. Bridge **=** running local commands inside Feishu **+** orchestrating Feishu APIs from chat — one bot for both.
 
-**LWA stack**: Bridge handles Feishu chat and light tasks; long-running parallel work goes to [Conduit (kiro-conduit)](https://github.com/walterwang0x01/lwa-conduit). See [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md).
+**LWA stack**: Bridge handles Feishu chat and light tasks; long-running parallel work goes to [Conduit (lwa-conduit)](https://github.com/walterwang0x01/lwa-conduit). See [docs/SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md).
 
 ```
 ┌───────────────────────────────────────┐
@@ -76,7 +76,7 @@
 - 🖥️ **`/ps` `/exit` process management** — List host bridge processes from Feishu, stop with one button
 - 📊 **`/doctor` self-diagnosis** — Feed logs back to Kiro to analyze its own failures
 - 🖥️ **Web Dashboard** — Read-only local console at `http://127.0.0.1:5180` (sessions/cron/processes/skills/logs), built with Vue 3, ships pre-built — open in a browser, no setup. Pair with Tailscale for phone access.
-- 🚦 **`/conduit`** — Bridges to [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit), a multi-agent parallel orchestrator: run a big spec from Feishu in one line (`plan` to decompose, `run` to execute, `--merge` with confirmation)
+- 🚦 **`/conduit`** — Bridges to [lwa-conduit](https://github.com/walterwang0x01/lwa-conduit), a multi-agent parallel orchestrator: run a big spec from Feishu in one line (`plan` to decompose, `run` to execute, `--merge` with confirmation)
 
 ## 🚀 Quick Start
 
@@ -92,7 +92,7 @@
 
 ```bash
 # 1. Install
-npm i -g lark-kiro-bridge
+npm i -g lwa-bridge
 
 # 2a. Local pure REPL (no Feishu)
 lwa
@@ -200,7 +200,7 @@ Install [Tailscale](https://tailscale.com/) and open the URL it gives you from y
 | `/schedule new` | Open a form card to create a scheduled task without cron syntax (covers "every day H:M") |
 | `/exit <id\|#>` | Stop a bridge process (self / others) |
 | `/reconnect` | Force reconnect Feishu WebSocket |
-| `/conduit run [--merge]` | Run [kiro-conduit](https://github.com/walterwang0x01/lwa-conduit) (current directory needs a `dag.yaml`); `--merge` triggers a confirmation card |
+| `/conduit run [--merge]` | Run [lwa-conduit](https://github.com/walterwang0x01/lwa-conduit) (current directory needs a `dag.yaml`); `--merge` triggers a confirmation card |
 | `/conduit plan <spec.md>` | Have Kiro decompose a markdown spec into a `dag.yaml` workspace |
 
 > By default everyone is admin (`access.admins` empty). Tighten before sharing with a team.
@@ -358,7 +358,7 @@ Conventions: TypeScript strict / Biome lint / vitest tests / conventional commit
 - **v0.7** ✅ `/schedule new` visual form (no cron syntax for non-engineers) + `/selftest` health checks + fix Feishu form 200530 hidden bug
 - **v0.8** ✅ Quoted-reply / merge-forward context restore + empty-task card discard + task plan card
 - **v0.9** ✅ Migrated Kiro integration to ACP (Agent Client Protocol): JSON-RPC over stdio, structured tool events drive cards, no more stdout parsing
-- **v0.10** ✅ Read-only Web Dashboard (Vue 3; sessions/cron/processes/skills/logs) + `/conduit` bridging to kiro-conduit's multi-agent parallel orchestration
+- **v0.10** ✅ Read-only Web Dashboard (Vue 3; sessions/cron/processes/skills/logs) + `/conduit` bridging to lwa-conduit's multi-agent parallel orchestration
 - **v1.0** Centralized server deployment / multi-user isolation / actionable dashboard (trigger tasks from the browser)
 
 ## 📄 License

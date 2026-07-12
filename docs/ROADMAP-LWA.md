@@ -5,7 +5,7 @@
 > 作用：在 **Bridge（lwa-bridge）** 与 **Conduit（lwa-conduit）** 之上，按季度排列「下一步做什么、为什么、怎么验收」。
 >
 > 本文**不替代**各仓库内部里程碑文档：
-> - Conduit 实现节奏 → [`kiro-conduit/docs/ROADMAP.md`](https://github.com/walterwang0x01/lwa-conduit/blob/main/docs/ROADMAP.md)
+> - Conduit 实现节奏 → [`lwa-conduit/docs/ROADMAP.md`](https://github.com/walterwang0x01/lwa-conduit/blob/main/docs/ROADMAP.md)
 > - Bridge 版本功能 → [`lwa-bridge/README.md`](https://github.com/walterwang0x01/lwa-bridge#路线图) 路线图章节
 
 ## 原则（全阶段不变）
@@ -60,7 +60,7 @@ Conduit M2       Ingress 抽象     Gemini 生产默认可选  审计导出
 |----|--------|----------|
 | **M2 实战** | 真实大 spec（≥8 PR）端到端 | ✅ stub 17 任务 / 8 波次集成测试；真实 spec 持续验证 |
 | Reviewer 指标稳定 | `execution_ok` / `verdict_pass` 分桶 report | ✅ |
-| PyPI 首发（可选） | `kiro-conduit` 0.1.0 | ✅ 版本 + release workflow + `pipx install` 文档 |
+| PyPI 首发（可选） | `lwa-conduit` 0.1.0 | ✅ 版本 + release workflow + `pipx install` 文档 |
 
 ### 跨项目
 
@@ -156,7 +156,7 @@ src/
 
 | 项 | 说明 |
 |----|------|
-| CI 触发 | GitHub Action 示例：PR 评论触发 `kiro-conduit run` |
+| CI 触发 | GitHub Action 示例：PR 评论触发 `lwa-conduit run` |
 | DAG 草稿（可选） | LLM 生成 DAG 草稿 + 人工 edit，不自动执行 |
 
 ---

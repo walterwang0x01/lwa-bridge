@@ -1,7 +1,7 @@
 /**
  * 全局日志器
  * - 开发模式（TTY）用 pino-pretty 输出彩色易读日志（单行紧凑）
- * - 生产模式输出 NDJSON，写入 ~/.lark-kiro-bridge/logs/YYYY-MM-DD.log
+ * - 生产模式输出 NDJSON，写入 ~/.lwa/logs/YYYY-MM-DD.log
  * - 启动时按 logRetentionDays（默认 7 天）清理旧日志
  *   ENV LARK_KIRO_LOG_DAYS 可覆盖，便于不读 config 的场景
  *

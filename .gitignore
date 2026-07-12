@@ -15,9 +15,9 @@ coverage/
 # npm pack 产物（本地试装用，不入库）
 *.tgz
 
-# kiro-conduit 运行产物（worktrees / run-state / 日志 / 初审报告）
+# lwa-conduit 运行产物（worktrees / run-state / 日志 / 初审报告）
 # 注意：.kiro/（spec、conduit-workspace 的 DAG 定义）有价值，不忽略
-.kiro-conduit/
+.lwa-conduit/
 
 # LWA parallel agent worktrees
 .lwa-worktrees/

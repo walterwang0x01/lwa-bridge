@@ -1,8 +1,6 @@
 # 阶段 B：仓库与包名重命名规划
 
-> **状态：B1 部分已执行（2026-07-10）** — CLI 主命令改为 `lwa`，数据目录 `~/.lwa`（自动迁移）；npm 包名仍为 `lark-kiro-bridge`；PyPI `kiro-conduit` 未改。
->
-> 全量 B1（包名 + CLI 改名）仍待决策，见文末决策门。
+> **状态：B1 已执行（2026-07-12）** — npm `lwa-bridge`、PyPI `lwa-conduit`、CLI `lwa` / `lwa-conduit`、Python 模块 `lwa_conduit`、数据目录 `~/.lwa` / `.lwa-conduit`；旧名保留兼容别名与迁移逻辑。
 
 ## 当前状态（方案 A，已落地）
 
@@ -10,11 +8,11 @@
 |------|------|----------|
 | 体系品牌 | **LWA**（Lark Local Agent Workbench） | ✅ 文档 / README / GitHub 描述 |
 | 产品名 | **Bridge** / **Conduit** | ✅ 对外话术 |
-| GitHub 仓库 | `lwa-bridge` / `lwa-conduit`（原 `lark-kiro-bridge` / `kiro-conduit` 重定向） | ✅ B3 已改 |
-| npm 包 | `lark-kiro-bridge` | ❌ 未改 |
-| PyPI 包 | `kiro-conduit` | ❌ 未改 |
-| CLI 命令 | `lark-kiro-bridge` / `kiro-conduit` | ❌ 未改 |
-| 代码标识符 | 同上 | ❌ 未改 |
+| GitHub 仓库 | `lwa-bridge` / `lwa-conduit`（原 `lark-kiro-bridge` / `lwa-conduit` 重定向） | ✅ B3 已改 |
+| npm 包 | `lwa-bridge` | ✅ B1 已改 |
+| PyPI 包 | `lwa-conduit` | ✅ B1 已改 |
+| CLI 命令 | `lwa` / `lwa-conduit` | ✅ B1 已改（旧名作 alias） |
+| 代码标识符 | `lwa_conduit` 等 | ✅ B1 已改 |
 
 原则：**对外讲 LWA，对内继续用稳定技术名**，避免用户升级踩坑。
 
@@ -38,7 +36,7 @@
 | 现名 | 候选 |
 |------|------|
 | `lark-kiro-bridge` | `lwa-bridge` |
-| `kiro-conduit` | `lwa-conduit` |
+| `lwa-conduit` | `lwa-conduit` |
 
 优点：与 LWA 品牌一致；缺点：npm/PyPI 上 `lwa-*` 可能被占，需先查重。
 
@@ -47,7 +45,7 @@
 | 现名 | 候选 |
 |------|------|
 | `lark-kiro-bridge` | `lark-agent-bridge` |
-| `kiro-conduit` | `agent-conduit` |
+| `lwa-conduit` | `agent-conduit` |
 
 优点：脱离单一 CLI 绑定；缺点：与 LWA 简称关联弱。
 
@@ -64,7 +62,7 @@
 ### 准备
 
 - [ ] 在 npm / PyPI 注册新包名（或确认 scoped 策略）
-- [ ] 统计下游引用：README 外链、Bridge `/conduit` 文档、`KIRO_CONDUIT_BIN` 用户
+- [ ] 统计下游引用：README 外链、Bridge `/conduit` 文档、`LWA_CONDUIT_BIN` 用户
 - [ ] 定 **deprecation 窗口**（建议 ≥ 3 个月双轨）
 
 ### GitHub
@@ -83,7 +81,7 @@
 
 - [ ] 新包 `lwa-conduit`（或选定名）首发
 - [ ] 旧包 README / PyPI 描述指向新包
-- [ ] `kiro-conduit` CLI 保留为 entry point alias（若技术上可行）
+- [ ] `lwa-conduit` CLI 保留为 entry point alias（若技术上可行）
 
 ### 用户数据
 

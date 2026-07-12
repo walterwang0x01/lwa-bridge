@@ -1,4 +1,4 @@
-// runConduit 单元测试：用可执行的 shell 脚本模拟 kiro-conduit 二进制，
+// runConduit 单元测试：用可执行的 shell 脚本模拟 lwa-conduit 二进制，
 // 覆盖退出码、abort 信号、notFound（未安装）、流式输出回调、输出截断。
 //
 // 用真实子进程（不 mock execa）——这类 spawn/signal 转发的代码正是最容易被
@@ -14,7 +14,7 @@ const TMP = mkdtempSync(join(tmpdir(), 'lkb-conduit-test-'));
 const FAKE_BIN_DIR = join(TMP, 'bin');
 mkdirSync(FAKE_BIN_DIR, { recursive: true });
 
-/** 写一个可执行的 shell 脚本充当假的 kiro-conduit 二进制。 */
+/** 写一个可执行的 shell 脚本充当假的 lwa-conduit 二进制。 */
 function writeFakeBin(name: string, script: string): string {
   const p = join(FAKE_BIN_DIR, name);
   writeFileSync(p, `#!/bin/sh\n${script}`, { mode: 0o755 });
@@ -22,23 +22,30 @@ function writeFakeBin(name: string, script: string): string {
   return p;
 }
 
-const originalEnv = process.env['KIRO_CONDUIT_BIN'];
+const originalEnv = process.env['LWA_CONDUIT_BIN'];
 
 afterAll(() => {
-  if (originalEnv === undefined) delete process.env['KIRO_CONDUIT_BIN'];
-  else process.env['KIRO_CONDUIT_BIN'] = originalEnv;
+  if (originalEnv === undefined) delete process.env['LWA_CONDUIT_BIN'];
+  else process.env['LWA_CONDUIT_BIN'] = originalEnv;
   rmSync(TMP, { recursive: true, force: true });
 });
 
 describe('conduitBin', () => {
-  it('默认返回 "kiro-conduit"', () => {
-    delete process.env['KIRO_CONDUIT_BIN'];
-    expect(conduitBin()).toBe('kiro-conduit');
+  it('默认返回 "lwa-conduit"', () => {
+    delete process.env['LWA_CONDUIT_BIN'];
+    expect(conduitBin()).toBe('lwa-conduit');
   });
 
-  it('KIRO_CONDUIT_BIN 环境变量能覆盖', () => {
-    process.env['KIRO_CONDUIT_BIN'] = '/custom/path/kiro-conduit';
-    expect(conduitBin()).toBe('/custom/path/kiro-conduit');
+  it('LWA_CONDUIT_BIN 环境变量能覆盖', () => {
+    process.env['LWA_CONDUIT_BIN'] = '/custom/path/lwa-conduit';
+    expect(conduitBin()).toBe('/custom/path/lwa-conduit');
+    delete process.env['LWA_CONDUIT_BIN'];
+  });
+
+  it('KIRO_CONDUIT_BIN 作为旧名回退', () => {
+    delete process.env['LWA_CONDUIT_BIN'];
+    process.env['KIRO_CONDUIT_BIN'] = '/legacy/kiro-conduit';
+    expect(conduitBin()).toBe('/legacy/kiro-conduit');
     delete process.env['KIRO_CONDUIT_BIN'];
   });
 });
@@ -46,7 +53,7 @@ describe('conduitBin', () => {
 describe('runConduit', () => {
   it('退出码 0 → ok=true', async () => {
     const bin = writeFakeBin('ok.sh', 'echo "workspace: /tmp/foo"\nexit 0\n');
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const r = await runConduit(['run'], { cwd: TMP });
     expect(r.ok).toBe(true);
     expect(r.exitCode).toBe(0);
@@ -58,7 +65,7 @@ describe('runConduit', () => {
 
   it('非 0 退出码 → ok=false，但不抛异常（reject: false 生效）', async () => {
     const bin = writeFakeBin('fail.sh', 'echo "some task failed" >&2\nexit 1\n');
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const r = await runConduit(['run'], { cwd: TMP });
     expect(r.ok).toBe(false);
     expect(r.exitCode).toBe(1);
@@ -70,18 +77,18 @@ describe('runConduit', () => {
       'mixed.sh',
       'echo "line-from-stdout"\necho "line-from-stderr" >&2\nexit 0\n',
     );
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const r = await runConduit(['run'], { cwd: TMP });
     expect(r.output).toContain('line-from-stdout');
     expect(r.output).toContain('line-from-stderr');
   });
 
-  it('kiro-conduit 不在 PATH（ENOENT）时返回 notFound，不抛异常', async () => {
-    process.env['KIRO_CONDUIT_BIN'] = join(TMP, 'this-binary-does-not-exist');
+  it('lwa-conduit 不在 PATH（ENOENT）时返回 notFound，不抛异常', async () => {
+    process.env['LWA_CONDUIT_BIN'] = join(TMP, 'this-binary-does-not-exist');
     const r = await runConduit(['run'], { cwd: TMP });
     expect(r.notFound).toBe(true);
     expect(r.ok).toBe(false);
-    expect(r.output).toContain('uv tool install kiro-conduit');
+    expect(r.output).toContain('uv tool install lwa-conduit');
   });
 
   it('AbortSignal 中止后真正终止子进程（不是"看起来中止但还在跑"）', async () => {
@@ -90,7 +97,7 @@ describe('runConduit', () => {
       'slow.sh',
       'trap \'kill "$child" 2>/dev/null; exit 0\' TERM INT\nsleep 10 &\nchild=$!\nwait "$child"\necho "should not reach here"\nexit 0\n',
     );
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
 
@@ -109,7 +116,7 @@ describe('runConduit', () => {
       'stream.sh',
       'echo "chunk1"\nsleep 0.05\necho "chunk2"\nsleep 0.05\necho "chunk3"\nexit 0\n',
     );
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const progressCalls: string[] = [];
     const r = await runConduit(['run'], {
       cwd: TMP,
@@ -129,7 +136,7 @@ describe('runConduit', () => {
       // 生成一段远超 2500 字符截断上限的输出，且尾部带一个可辨识标记
       'for i in $(seq 1 500); do echo "line-$i-filler-text-to-pad-length"; done\necho "TAIL_MARKER_XYZ"\nexit 0\n',
     );
-    process.env['KIRO_CONDUIT_BIN'] = bin;
+    process.env['LWA_CONDUIT_BIN'] = bin;
     const r = await runConduit(['run'], { cwd: TMP });
     expect(r.output).toContain('TAIL_MARKER_XYZ');
     expect(r.output).toContain('前文省略');

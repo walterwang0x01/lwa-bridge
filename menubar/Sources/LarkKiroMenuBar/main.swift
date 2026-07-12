@@ -15,23 +15,30 @@
 import AppKit
 import Foundation
 
-/// 找 lark-kiro-bridge 可执行文件：优先 PATH，其次几个常见的全局安装位置。
-/// 用户机器上通过 npm 全局装的话通常是 ~/.npm-global/bin 或 /usr/local/bin。
+/// 找 lwa / lwa-bridge 可执行文件：优先 PATH，其次几个常见的全局安装位置。
 func resolveBridgeBin() -> String? {
-    let candidates = [
-        "/usr/local/bin/lark-kiro-bridge",
-        "\(NSHomeDirectory())/.npm-global/bin/lark-kiro-bridge",
-        "/opt/homebrew/bin/lark-kiro-bridge",
+    let names = ["lwa", "lwa-bridge", "lark-kiro-bridge"]
+    let prefixes = [
+        "/usr/local/bin",
+        "\(NSHomeDirectory())/.npm-global/bin",
+        "/opt/homebrew/bin",
     ]
-    for c in candidates where FileManager.default.isExecutableFile(atPath: c) {
-        return c
+    for prefix in prefixes {
+        for name in names {
+            let candidate = "\(prefix)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
     }
     // PATH 里找
     if let path = ProcessInfo.processInfo.environment["PATH"] {
         for dir in path.split(separator: ":") {
-            let candidate = "\(dir)/lark-kiro-bridge"
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
+            for name in names {
+                let candidate = "\(dir)/\(name)"
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
             }
         }
     }
