@@ -32,12 +32,20 @@ describe('shellScreen', () => {
     expect(lines.secondary).toContain('~/x');
   });
 
-  it('ShellScreen.shouldUse is false when plain shell forced', () => {
-    const prev = process.env['LWA_PLAIN_SHELL'];
+  it('ShellScreen.shouldUse is false by default (alt-screen opt-in)', () => {
+    const prevAlt = process.env['LWA_ALT_SHELL'];
+    const prevPlain = process.env['LWA_PLAIN_SHELL'];
+    delete process.env['LWA_ALT_SHELL'];
+    delete process.env['LWA_PLAIN_SHELL'];
+    expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
+    process.env['LWA_ALT_SHELL'] = '1';
+    expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(true);
     process.env['LWA_PLAIN_SHELL'] = '1';
     expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
-    if (prev === undefined) delete process.env['LWA_PLAIN_SHELL'];
-    else process.env['LWA_PLAIN_SHELL'] = prev;
+    if (prevAlt === undefined) delete process.env['LWA_ALT_SHELL'];
+    else process.env['LWA_ALT_SHELL'] = prevAlt;
+    if (prevPlain === undefined) delete process.env['LWA_PLAIN_SHELL'];
+    else process.env['LWA_PLAIN_SHELL'] = prevPlain;
   });
 
   it('appendLine writes through injectable writer', () => {

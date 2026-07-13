@@ -80,7 +80,8 @@ export class ShellScreen {
   constructor(opts: ShellScreenOptions = {}) {
     this.write = opts.write ?? ((s) => process.stdout.write(s));
     this.footerLines = opts.footerLines ?? 3;
-    this.useAltScreen = opts.useAltScreen ?? true;
+    // 默认关闭：alt-screen + DECSTBM 与 readline 抢光标，会导致 turn 输出“消失”
+    this.useAltScreen = opts.useAltScreen ?? process.env['LWA_ALT_SHELL'] === '1';
     this.rows = opts.rows ?? process.stdout.rows ?? 24;
     this.cols = opts.cols ?? process.stdout.columns ?? 80;
   }
@@ -89,11 +90,16 @@ export class ShellScreen {
     return this.active;
   }
 
-  /** 是否适合启用全屏壳（TTY 且非 CI）。 */
+  /**
+   * 全屏壳（alt-screen）默认关闭；用环境变量显式打开：
+   *   LWA_ALT_SHELL=1 lwa code
+   * 普通模式走 channel 的行式 footer，保证 CliTurnView 输出可见。
+   */
   static shouldUse(opts?: { isTty?: boolean; mode?: 'code' | 'chat' }): boolean {
     const tty = opts?.isTty ?? Boolean(process.stdout.isTTY);
     if (!tty) return false;
     if (process.env['CI'] === 'true' || process.env['LWA_PLAIN_SHELL'] === '1') return false;
+    if (process.env['LWA_ALT_SHELL'] !== '1') return false;
     return (opts?.mode ?? 'code') === 'code';
   }
 
@@ -102,7 +108,8 @@ export class ShellScreen {
     this.active = true;
     this.rows = process.stdout.rows ?? this.rows;
     this.cols = process.stdout.columns ?? this.cols;
-    if (this.useAltScreen) this.write('\x1b[?1049h');
+    if (!this.useAltScreen) return;
+    this.write('\x1b[?1049h');
     this.applyScrollRegion();
     this.resizeHandler = () => {
       this.rows = process.stdout.rows ?? this.rows;
@@ -118,8 +125,10 @@ export class ShellScreen {
       process.stdout.off('resize', this.resizeHandler);
       this.resizeHandler = undefined;
     }
-    this.write('\x1b[r');
-    if (this.useAltScreen) this.write('\x1b[?1049l');
+    if (this.useAltScreen) {
+      this.write('\x1b[r');
+      this.write('\x1b[?1049l');
+    }
     this.active = false;
   }
 
@@ -136,9 +145,14 @@ export class ShellScreen {
     this.write(body.endsWith('\n') ? body : `${body}\n`);
   }
 
-  /** 绘制固定底栏（不移动 readline 光标）。 */
+  /** 绘制底栏。alt-screen 用绝对定位；否则普通换行（与 readline 兼容）。 */
   renderFooter(footer: ShellFooter): void {
     const { rule, primary, secondary } = formatShellFooterLines(footer, this.cols);
+    if (!this.useAltScreen) {
+      this.write(`\n${rule}\n${primary}\n`);
+      if (secondary) this.write(`${secondary}\n`);
+      return;
+    }
     const startRow = this.rows - this.footerLines + 1;
     this.write('\x1b[s');
     this.write(`\x1b[${startRow};1H\x1b[2K${rule}`);
