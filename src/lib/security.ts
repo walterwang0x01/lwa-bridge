@@ -2,7 +2,7 @@
  * 安全工具：cwd 白名单、路径规范化、访问控制判断
  */
 import { resolve, normalize } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Config } from './config.js';
 
@@ -30,16 +30,30 @@ export function resolvePath(p: string, baseCwd: string): string {
 /**
  * 判断 absPath 是否在 allowedRoots 任一根之下。
  * allowedRoots 也会先经过 resolvePath 规范化。
+ *
+ * 为防止 symlink 逃逸（白名单目录内的 symlink 指向外部路径），
+ * 对存在的路径优先使用 realpath 解析后的真实路径做边界判断；
+ * 路径尚不存在（比如即将创建的目录）则回退到词法判断，不影响现有行为。
  */
 export function isPathAllowed(absPath: string, allowedRoots: string[]): boolean {
-  const target = normalize(absPath);
+  const target = realOrNormalized(absPath);
   for (const root of allowedRoots) {
-    const r = normalize(resolve(root));
+    const r = realOrNormalized(resolve(root));
     // 加 path.sep 防止 /foo 误匹配 /foobar
     const rWithSep = r.endsWith('/') ? r : `${r}/`;
     if (target === r || target.startsWith(rWithSep)) return true;
   }
   return false;
+}
+
+/** 存在则返回 realpath（解析 symlink），否则回退到 normalize，保持对不存在路径的原有语义。 */
+function realOrNormalized(p: string): string {
+  const normalized = normalize(p);
+  try {
+    return realpathSync.native(normalized);
+  } catch {
+    return normalized;
+  }
 }
 
 /**
@@ -63,6 +77,10 @@ export function validateCwd(targetPath: string, config: Config, baseCwd: string)
   const stat = statSync(abs);
   if (!stat.isDirectory()) {
     throw new SecurityError(`不是目录：\`${abs}\``);
+  }
+  // 路径此刻已存在：再用 realpath 复核一次，防止校验后到使用前被替换为越界 symlink（TOCTOU）。
+  if (!isPathAllowed(abs, config.workspace.allowedRoots)) {
+    throw new SecurityError(`路径 \`${abs}\` 解析后不在白名单内（可能是符号链接指向白名单外）。`);
   }
   return abs;
 }

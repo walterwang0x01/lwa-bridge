@@ -27,10 +27,13 @@ interface PoolEntry {
   sessionId: string | undefined;
   /** 当前 session 的 cwd（切目录时需要重建 session） */
   sessionCwd: string | undefined;
-  /** 空闲回收定时器 */
+  /** 空闲回收定时器；只在 leaseCount === 0 时才应处于运行状态 */
   idleTimer: NodeJS.Timeout | null;
   /** client 是否已关闭/崩溃 */
   dead: boolean;
+  /** 当前正在使用该 entry 的 turn 数（acquire 时 +1，release 时 -1）。
+   *  >0 期间禁止空闲回收，防止长任务运行中被误杀。 */
+  leaseCount: number;
 }
 
 export class AcpPool {
@@ -60,6 +63,7 @@ export class AcpPool {
     // 进程已死或不存在 → 新建
     if (!entry || entry.dead) {
       entry = await this.createEntry(chatId, opts);
+      this.acquireLease(entry);
       return { client: entry.client, sessionId: entry.sessionId! };
     }
 
@@ -79,18 +83,33 @@ export class AcpPool {
         await this.destroyEntry(chatId, entry);
         entry = await this.createEntry(chatId, opts);
       }
+      this.acquireLease(entry);
       return { client: entry.client, sessionId: entry.sessionId! };
     }
 
     // 进程存活且 cwd 一致 → 直接复用(0 开销 🚀)
-    this.resetIdleTimer(chatId, entry);
+    this.acquireLease(entry);
     return { client: entry.client, sessionId: entry.sessionId! };
   }
 
-  /** turn 结束后归还：重置空闲计时器。 */
+  /**
+   * 建立一次 lease：leaseCount+1 并取消空闲计时器。
+   * turn 运行期间（leaseCount>0）绝不允许空闲回收误杀正在工作的进程。
+   */
+  private acquireLease(entry: PoolEntry): void {
+    entry.leaseCount += 1;
+    if (entry.idleTimer) {
+      clearTimeout(entry.idleTimer);
+      entry.idleTimer = null;
+    }
+  }
+
+  /** turn 结束后归还：leaseCount-1；只有归零（无其他并发 turn）才重启空闲计时器。 */
   release(chatId: string): void {
     const entry = this.pool.get(chatId);
-    if (entry) this.resetIdleTimer(chatId, entry);
+    if (!entry) return;
+    entry.leaseCount = Math.max(0, entry.leaseCount - 1);
+    if (entry.leaseCount === 0) this.resetIdleTimer(chatId, entry);
   }
 
   /** 更新 entry 的 sessionId（turn 成功后如果 sessionId 变了）。 */
@@ -156,9 +175,9 @@ export class AcpPool {
       sessionCwd: opts.cwd,
       idleTimer: null,
       dead: false,
+      leaseCount: 0,
     };
     this.pool.set(chatId, entry);
-    this.resetIdleTimer(chatId, entry);
     log().info({ chatId, sessionId, cwd: opts.cwd }, 'pool entry created');
     return entry;
   }
@@ -177,7 +196,13 @@ export class AcpPool {
 
   private resetIdleTimer(chatId: string, entry: PoolEntry): void {
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    if (entry.leaseCount > 0) {
+      // 仍有 turn 在跑：不启动计时器，回收判断留给下一次 leaseCount 归零时的 release。
+      entry.idleTimer = null;
+      return;
+    }
     entry.idleTimer = setTimeout(() => {
+      if (entry.leaseCount > 0) return; // 双重保险：定时器触发时若已被重新 lease，放弃回收
       log().info({ chatId }, 'idle timeout; recycling acp process');
       void this.destroyEntry(chatId, entry);
     }, this.idleMs);

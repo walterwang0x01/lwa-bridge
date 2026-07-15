@@ -5,6 +5,7 @@ import { execa, type ResultPromise } from 'execa';
 import { createInterface } from 'node:readline';
 import { getLogger } from '../lib/logger.js';
 import { parseGeminiStreamLine, type GeminiStreamState } from './geminiStreamParser.js';
+import { waitForExitOrKill } from './processTermination.js';
 import type {
   AgentRuntime,
   RuntimeCapabilities,
@@ -103,11 +104,7 @@ export class GeminiCliRuntime implements AgentRuntime {
 
   async close(): Promise<void> {
     if (this.proc && !this.proc.killed) {
-      try {
-        await this.proc;
-      } catch {
-        // ignore
-      }
+      await waitForExitOrKill(this.proc);
     }
     this.proc = null;
   }

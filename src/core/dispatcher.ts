@@ -644,6 +644,7 @@ export class Dispatcher {
         case 'reconnect':
         case 'config':
         case 'exit':
+        case 'doctor':
           return true;
         case 'memory':
           // list / view 只读，不要 admin；edit/new/rm 要

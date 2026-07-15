@@ -10,7 +10,16 @@
  */
 import pino, { type Logger } from 'pino';
 import { join } from 'node:path';
-import { readdirSync, statSync, unlinkSync, readFileSync } from 'node:fs';
+import {
+  readdirSync,
+  statSync,
+  unlinkSync,
+  readFileSync,
+  existsSync,
+  closeSync,
+  openSync,
+  chmodSync,
+} from 'node:fs';
 import { LOGS_DIR, ensureDataDirs } from './paths.js';
 
 function todayLogFile(): string {
@@ -19,6 +28,21 @@ function todayLogFile(): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return join(LOGS_DIR, `${yyyy}-${mm}-${dd}.log`);
+}
+
+/**
+ * 确保日志文件存在且权限为 0600（日志里可能出现请求体、消息内容等敏感信息）。
+ * 文件已存在时也强制 chmod 一次，修复历史遗留的宽松权限（如迁移自旧版本、umask 影响等）。
+ */
+export function ensureLogFileMode(path: string): void {
+  try {
+    if (!existsSync(path)) {
+      closeSync(openSync(path, 'a', 0o600));
+    }
+    chmodSync(path, 0o600);
+  } catch {
+    // 权限修复失败不应阻断启动；仅日志文件本身受影响
+  }
 }
 
 /**
@@ -107,13 +131,15 @@ export function getLogger(): Logger {
     });
   } else {
     // 生产：NDJSON 落盘
+    const logFile = todayLogFile();
+    ensureLogFileMode(logFile);
     cachedLogger = pino(
       {
         level,
         base: { pid: process.pid },
         redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
       },
-      pino.destination({ dest: todayLogFile(), append: true, sync: false }),
+      pino.destination({ dest: logFile, append: true, sync: false, mode: 0o600 }),
     );
   }
 
@@ -185,8 +211,28 @@ const SDK_NOISE_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * 敏感字段名匹配规则（大小写不敏感，忽略下划线/驼峰差异）。
+ * 用于在字符串化前清洗对象，防止凭证经由 formatSdkArgs 的 JSON.stringify
+ * 绕过 pino 的 REDACT_PATHS（后者只对结构化字段生效，不解析日志正文字符串）。
+ */
+const SENSITIVE_KEY_PATTERN =
+  /(secret|token|password|passwd|authorization|apikey|api_key|signingsecret|signing_secret|botToken|bot_token|appToken|app_token)$/i;
+
+/** 递归清洗对象里匹配 SENSITIVE_KEY_PATTERN 的字段值，避免原始凭证进入日志。 */
+function redactSensitive(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = SENSITIVE_KEY_PATTERN.test(key) ? '[REDACTED]' : redactSensitive(val, depth + 1);
+  }
+  return out;
+}
+
+/**
  * 把任意 args 拼成一行可读 message，给 pino 用。
  * SDK 常传 `[ 'xxx' ]` 这种单元素数组，我们解出来；其他情况用 JSON.stringify。
+ * 对象/数组在字符串化前先经 redactSensitive 清洗，防止凭证字段泄露到日志正文。
  */
 function formatSdkArgs(args: unknown[]): string {
   if (args.length === 0) return '';
@@ -196,12 +242,14 @@ function formatSdkArgs(args: unknown[]): string {
     if (Array.isArray(a)) {
       // SDK 经常传单元素数组，里面是字符串
       if (a.length === 1 && typeof a[0] === 'string') return a[0];
-      return a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+      return a
+        .map((x) => (typeof x === 'string' ? x : safeStringify(redactSensitive(x))))
+        .join(' ');
     }
     if (a instanceof Error) return a.message;
-    return safeStringify(a);
+    return safeStringify(redactSensitive(a));
   }
-  return args.map((x) => (typeof x === 'string' ? x : safeStringify(x))).join(' ');
+  return args.map((x) => (typeof x === 'string' ? x : safeStringify(redactSensitive(x)))).join(' ');
 }
 
 function safeStringify(v: unknown): string {

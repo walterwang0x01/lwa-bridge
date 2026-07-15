@@ -1,6 +1,15 @@
 // 三层访问控制 + DM 豁免 + 防自锁校验的单元测试
-import { describe, it, expect } from 'vitest';
-import { isUserAllowed, isAdmin, validateAccessChange } from './security.js';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it, expect } from 'vitest';
+import {
+  isUserAllowed,
+  isAdmin,
+  validateAccessChange,
+  isPathAllowed,
+  validateCwd,
+} from './security.js';
 import type { Config } from './config.js';
 
 function makeConfig(overrides: Partial<Config['access']> = {}): Config {
@@ -134,5 +143,48 @@ describe('validateAccessChange', () => {
       },
     });
     expect(errors.length).toBe(2);
+  });
+});
+
+describe('isPathAllowed symlink escape', () => {
+  const cleanupDirs: string[] = [];
+  afterEach(() => {
+    while (cleanupDirs.length) {
+      const dir = cleanupDirs.pop()!;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a real subdirectory inside the whitelist', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lwa-sec-'));
+    cleanupDirs.push(root);
+    const inner = join(root, 'project');
+    mkdirSync(inner);
+    expect(isPathAllowed(inner, [root])).toBe(true);
+  });
+
+  it('rejects a symlink inside the whitelist that points outside it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lwa-sec-'));
+    const outside = mkdtempSync(join(tmpdir(), 'lwa-outside-'));
+    cleanupDirs.push(root, outside);
+    const escapeLink = join(root, 'escape');
+    symlinkSync(outside, escapeLink);
+    expect(isPathAllowed(escapeLink, [root])).toBe(false);
+  });
+
+  it('validateCwd throws when the target is a symlink escaping the whitelist', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lwa-sec-'));
+    const outside = mkdtempSync(join(tmpdir(), 'lwa-outside-'));
+    cleanupDirs.push(root, outside);
+    const escapeLink = join(root, 'escape');
+    symlinkSync(outside, escapeLink);
+    const cfg: Config = {
+      lark: { appId: 'cli_x', appSecret: 'x' },
+      kiro: { binPath: 'kiro-cli', trustedTools: [], timeoutMs: 60_000, idleTimeoutMinutes: 5 },
+      workspace: { defaultCwd: root, allowedRoots: [root] },
+      access: { allowedUsers: [], allowedChats: [], admins: [] },
+      preferences: { requireMentionInGroup: true, cardUpdateIntervalMs: 800, logRetentionDays: 7 },
+    } as Config;
+    expect(() => validateCwd('escape', cfg, root)).toThrow(/白名单/);
   });
 });
