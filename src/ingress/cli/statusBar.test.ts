@@ -50,8 +50,8 @@ describe('statusBar', () => {
       ctxPct: 42,
     });
     expect(snap.routeMode).toBe('Auto');
-    expect(formatCliStatusBar(snap)).toBe('Auto · 42% · 2 files edited · Run Everything');
-    expect(formatCliSubStatusLine(snap)).toContain('kiro');
+    expect(formatCliStatusBar(snap)).toBe('Auto→kiro · ctx 42% · 2 files · Run Everything');
+    expect(formatCliSubStatusLine(snap)).not.toContain('kiro');
     expect(formatCliSubStatusLine(snap)).toContain('claude-test');
   });
 
@@ -68,7 +68,7 @@ describe('statusBar', () => {
       config: minimalConfig(),
       ctxPct: 10,
     });
-    expect(formatCliStatusBar(snap)).toContain('cursor · 10%');
+    expect(formatCliStatusBar(snap)).toContain('cursor · ctx 10%');
   });
 
   it('resolveApprovalMode respects session override', () => {

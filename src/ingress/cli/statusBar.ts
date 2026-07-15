@@ -70,14 +70,22 @@ export function buildCliStatusSnapshot(opts: {
   };
 }
 
-/** 主状态栏：Auto · 42% · 3 files edited · Run Everything */
-export function formatCliStatusBar(snapshot: CliStatusSnapshot): string {
-  const parts: string[] = [snapshot.routeMode];
-  parts.push(snapshot.ctxPct !== undefined ? `${snapshot.ctxPct}%` : '—%');
-  const n = snapshot.filesCount;
-  parts.push(`${n} file${n === 1 ? '' : 's'} edited`);
-  parts.push(snapshot.approval);
+/** 主状态左段：路由、可用的 context 用量和实际修改文件数。 */
+export function formatCliStatusPrimary(snapshot: CliStatusSnapshot): string {
+  const route =
+    snapshot.routeMode === 'Auto' && snapshot.engine
+      ? `Auto→${snapshot.engine}`
+      : snapshot.routeMode;
+  const parts: string[] = [route];
+  if (snapshot.ctxPct !== undefined) parts.push(`ctx ${snapshot.ctxPct}%`);
+  const files = snapshot.filesCount;
+  if (files > 0) parts.push(`${files} file${files === 1 ? '' : 's'}`);
   return parts.join(' · ');
+}
+
+/** 主状态栏单行：Auto · 42% · 3 files edited · Run Everything */
+export function formatCliStatusBar(snapshot: CliStatusSnapshot): string {
+  return `${formatCliStatusPrimary(snapshot)} · ${snapshot.approval}`;
 }
 
 /** 副状态行：~/proj · main · kiro · claude-sonnet（或 conduit 进度前缀） */
@@ -86,18 +94,19 @@ export function formatCliSubStatusLine(snapshot: CliStatusSnapshot): string {
   if (snapshot.conduitHint) parts.push(snapshot.conduitHint);
   parts.push(shortenHomePath(snapshot.cwd));
   if (snapshot.branch) parts.push(snapshot.branch);
-  if (snapshot.routeMode === 'Auto' && snapshot.engine) parts.push(snapshot.engine);
   if (snapshot.model) parts.push(snapshot.model);
   return parts.join(' · ');
 }
 
-/** 合并两行（prompt 前展示） */
+/** 合并两行（prompt 前展示）；docked 时 approval 画在底栏右侧 */
 export function formatCliFooter(snapshot: CliStatusSnapshot): {
   primary: string;
   secondary: string;
+  approval: string;
 } {
   return {
-    primary: formatCliStatusBar(snapshot),
+    primary: formatCliStatusPrimary(snapshot),
     secondary: formatCliSubStatusLine(snapshot),
+    approval: snapshot.approval,
   };
 }

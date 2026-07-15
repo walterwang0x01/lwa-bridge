@@ -1,26 +1,25 @@
 /**
- * 本地 coding TUI：状态头 + 工具折叠面板 + 流式正文。
+ * 本地 coding TUI：LWA Harbor 风格（竖轨 + 品牌色，不模仿 kiro）。
  */
 import type { UnifiedSessionEvent } from '../../runtime/types.js';
 import { shortenHomePath } from './workspace.js';
 import { ToolPanel, toolDetailLabel } from './toolPanel.js';
-
-const DIM = '\x1b[2m';
-const BOLD = '\x1b[1m';
-const RESET = '\x1b[0m';
-const CYAN = '\x1b[36m';
-const YELLOW = '\x1b[33m';
-const GRAY = '\x1b[90m';
+import {
+  formatThinkingLine,
+  formatTurnFooter,
+  formatTurnHeader,
+  muted,
+  paint,
+  T,
+  turnRail,
+} from './theme.js';
 
 export interface CliTurnViewOptions {
   profileName: string;
-  /** Auto 或粘性引擎名 */
   routeMode?: string;
   model?: string;
   cwd: string;
-  /** 非 TTY 时退化为纯文本（测试 / pipe） */
   isTty?: boolean;
-  /** TTY 下折叠工具行 */
   compactTools?: boolean;
   write?: (s: string) => void;
 }
@@ -31,9 +30,6 @@ export interface CliTurnViewSummary {
   durationMs: number;
 }
 
-/**
- * 一轮 agent turn 的终端视图。
- */
 export class CliTurnView {
   private readonly write: (s: string) => void;
   private readonly isTty: boolean;
@@ -51,32 +47,29 @@ export class CliTurnView {
     this.toolPanel = new ToolPanel({ compact, write: this.write });
   }
 
-  /** 回合开始：画头 */
   start(): void {
-    const model = this.opts.model ? ` · ${this.opts.model}` : '';
-    const cwd = shortenHomePath(this.opts.cwd);
-    const route = this.opts.routeMode ?? 'Auto';
-    const head =
-      route === 'Auto'
-        ? `${BOLD}Auto${RESET}${DIM} → ${this.opts.profileName}${RESET}${DIM}${model}${RESET}`
-        : `${BOLD}${route}${RESET}${DIM}${model}${RESET}`;
-    const bar = this.isTty
-      ? `${DIM}────────────────────────────────────────${RESET}`
-      : '----------------------------------------';
-    this.write(`\n${bar}\n`);
-    this.write(`${BOLD}${CYAN}▶${RESET} ${head}  ${GRAY}${cwd}${RESET}\n`);
-    this.write(`${DIM}… thinking${RESET}\n`);
-    this.thinkingOpen = true;
+    this.write(
+      formatTurnHeader({
+        routeMode: this.opts.routeMode ?? 'Auto',
+        engine: this.opts.profileName,
+        model: this.opts.model,
+        cwd: shortenHomePath(this.opts.cwd),
+      }),
+    );
+    if (this.isTty) {
+      this.write(formatThinkingLine());
+      this.thinkingOpen = true;
+    } else {
+      this.write(`${turnRail()} ${muted('thinking…')}\n`);
+    }
   }
 
-  /** 消费统一事件 */
   onEvent(ev: UnifiedSessionEvent): void {
     if (this.closed) return;
 
     if (ev.kind === 'thought' && ev.text) {
       if (!this.messageStarted && this.thinkingOpen && this.isTty) {
-        const snippet = ev.text.replace(/\s+/g, ' ').trim().slice(0, 50);
-        this.write(`\r${DIM}… thinking${RESET}${DIM}  ${snippet}${RESET}\x1b[K`);
+        this.write(formatThinkingLine(ev.text.replace(/\s+/g, ' ').trim()));
       }
       return;
     }
@@ -91,14 +84,14 @@ export class CliTurnView {
       this.clearThinkingLine();
       if (!this.messageStarted) {
         this.messageStarted = true;
-        this.write(`\n`);
+        this.write(`${turnRail()} `);
       }
       this.messageChars += ev.text.length;
+      // 多行时给后续行加轨（简单：仅首行加轨，正文原样流式）
       this.write(ev.text);
     }
   }
 
-  /** 回合结束 */
   end(opts?: {
     aborted?: boolean;
     timedOut?: boolean;
@@ -108,24 +101,19 @@ export class CliTurnView {
     this.clearThinkingLine();
     this.toolPanel.finish();
     if (!this.messageStarted && opts?.textFallback) {
-      this.write(`\n${opts.textFallback}`);
+      this.write(`\n${turnRail()} ${opts.textFallback}`);
       this.messageChars += opts.textFallback.length;
       this.messageStarted = true;
     }
-    if (opts?.aborted) this.write(`\n${YELLOW}(aborted)${RESET}\n`);
-    else if (opts?.timedOut) this.write(`\n${YELLOW}(timeout)${RESET}\n`);
-    else if (opts?.error) this.write(`\n${YELLOW}(error: ${opts.error})${RESET}\n`);
+    if (opts?.aborted) this.write(`\n${turnRail()} ${paint(T.warn, 'aborted')}\n`);
+    else if (opts?.timedOut) this.write(`\n${turnRail()} ${paint(T.warn, 'timeout')}\n`);
+    else if (opts?.error) this.write(`\n${turnRail()} ${paint(T.err, opts.error)}\n`);
     else this.write('\n');
 
     const durationMs = Date.now() - this.startedAt;
     const tools = this.toolPanel.count;
     const secs = (durationMs / 1000).toFixed(1);
-    this.write(
-      `${DIM}────────────────────────────────────────${RESET}\n` +
-        `${GRAY}done · ${secs}s` +
-        (tools ? ` · ${tools} tool${tools === 1 ? '' : 's'}` : '') +
-        `${RESET}\n`,
-    );
+    this.write(formatTurnFooter({ secs, toolCount: tools }));
     this.closed = true;
     return { toolCount: tools, messageChars: this.messageChars, durationMs };
   }
@@ -137,7 +125,6 @@ export class CliTurnView {
   }
 }
 
-/** 单测兼容 */
 export function formatToolLineForTest(
   name: string,
   status: string,

@@ -156,8 +156,8 @@ lwa chat     # 显式同义
 
 底部状态栏示例：`Auto · 42% · 3 files edited · Run Everything`
 
-默认用行式状态栏（兼容 readline，回复可见）。实验性全屏壳：
-`LWA_ALT_SHELL=1 lwa code`
+默认 **docked Shell**（内容区滚动 + 输入行固定在倒数第二行 + 最底状态栏，对齐 Cursor Agent）。完整终端回滚：
+`LWA_PLAIN_SHELL=1 lwa code`
 
 `.exit` 仅用于 REPL。Gateway 用 `lwa serve`。
 

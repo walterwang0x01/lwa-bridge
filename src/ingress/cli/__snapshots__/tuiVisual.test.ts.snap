@@ -1,0 +1,54 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`TUI visual regression > keeps CJK paths and emoji inside terminal cell budgets 1`] = `
+[
+  "                 ◆ LWA",
+  "            LWA · 代码工作台",
+  " 跨 Kiro、Cursor 与网关的本地智能工作台",
+  "           输入 / 查看命令 👩‍💻",
+  "❯ 修复登录问题 👩‍💻",
+  "▌ 自动→kiro · 上下文 42%        全部执行",
+]
+`;
+
+exports[`TUI visual regression > keeps light and dark input surfaces visually distinct 1`] = `
+{
+  "dark": "<ESC>[48;2;23;31;42m<ESC>[38;2;226;232;240m❯·你好·👩‍💻·········<ESC>[0m",
+  "light": "<ESC>[48;2;248;250;252m<ESC>[38;2;30;41;59m❯·你好·👩‍💻·········<ESC>[0m",
+}
+`;
+
+exports[`TUI visual regression > keeps startup composition balanced at 40x16 1`] = `
+"04│                 ◆ LWA
+06│    LWA · code · multi-engine shell
+07│Local agent workbench across Kiro, Curs…
+09│Type / for commands · /help to get star…
+15│❯ Ask LWA to build, debug, or explain…
+16│▌ Auto→kiro · ctx 6%      Run Everything"
+`;
+
+exports[`TUI visual regression > keeps startup composition balanced at 80x24 1`] = `
+"05│                           ██╗     ██╗    ██╗ █████╗
+06│                           ██║     ██║ █╗ ██║██╔══██╗
+07│                           ██║     ██║███╗██║███████║
+08│                           ███████╗╚███╔███╔╝██║  ██║
+09│                           ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝
+11│                        LWA · code · multi-engine shell
+12│            Local agent workbench across Kiro, Cursor, and gateways
+14│                   Type / for commands · /help to get started
+23│❯ Ask LWA to build, debug, or explain…
+24│▌ Auto→kiro · ctx 6% · ~/lwa-bridge · main · claude-test          Run Everything"
+`;
+
+exports[`TUI visual regression > keeps startup composition balanced at 120x32 1`] = `
+"07│                                               ██╗     ██╗    ██╗ █████╗
+08│                                               ██║     ██║ █╗ ██║██╔══██╗
+09│                                               ██║     ██║███╗██║███████║
+10│                                               ███████╗╚███╔███╔╝██║  ██║
+11│                                               ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝
+13│                                            LWA · code · multi-engine shell
+14│                                Local agent workbench across Kiro, Cursor, and gateways
+16│                                       Type / for commands · /help to get started
+31│❯ Ask LWA to build, debug, or explain…
+32│▌ Auto→kiro · ctx 6% · ~/lwa-bridge · main · claude-test                                                  Run Everything"
+`;

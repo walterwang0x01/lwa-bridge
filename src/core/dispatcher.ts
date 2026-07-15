@@ -249,13 +249,14 @@ export class Dispatcher {
       { taskBucket, monthUsageByKind, harnessMode, health: sharedGatewayHealth },
     );
 
-    // sticky：真实任务后锁定；纯闲聊不粘，避免 "hi" 锁死 cursor
+    // sticky：飞书等长期会话可锁引擎；本地 CLI Shell 不自动 sticky，保持 Auto 可见可切
     if (!explicitProfileName) {
       const table = resolveModeRouteTable(this.config, harnessMode);
       const score = picked.complexityScore ?? 0;
       const threshold = this.config.runtime?.router?.rules?.complexityThreshold ?? 4;
       const shouldStick =
         table.sticky &&
+        !this.isTextChannel(conversationId) &&
         (taskBucket !== 'chat' || score >= threshold) &&
         picked.profileName &&
         !picked.profileName.startsWith('auto→');
@@ -1986,6 +1987,37 @@ export class Dispatcher {
   ): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
     if (cmd.mode === 'show') {
+      if (this.isTextChannel(conversationId)) {
+        const { profileName, profile } = await this.resolveChatRuntime(conversationId);
+        const { pickFromList } = await import('../ingress/cli/slashPicker.js');
+        const names = listRuntimeProfileNames(this.config);
+        await this.respondText(
+          msg,
+          `current: ${profileName} (${profile.kind})\nPick an engine (↑↓ · Enter · Esc):`,
+        );
+        const picked = await pickFromList({
+          title: 'Select engine',
+          items: [
+            { value: 'auto', label: 'Auto', hint: 'clear sticky · smart route' },
+            ...names.map((n) => {
+              let kind = '';
+              try {
+                kind = resolveRuntimeProfile(this.config, n).kind;
+              } catch {
+                kind = '?';
+              }
+              return {
+                value: n,
+                label: n,
+                hint: n === profileName ? `← current · ${kind}` : kind,
+              };
+            }),
+          ],
+        });
+        if (!picked) return;
+        await this.handleRuntimeCmd(msg, { kind: 'runtime', mode: 'set', name: picked }, _cwd);
+        return;
+      }
       const { profileName, profile } = await this.resolveChatRuntime(conversationId);
       const names = listRuntimeProfileNames(this.config);
       const lines = names.map((n) => {
@@ -2268,76 +2300,133 @@ export class Dispatcher {
     );
   }
 
-  /** CLI 纯文本 /model：展示当前 runtime+model，kiro 可列模型并切换。 */
+  /** CLI 纯文本 /model：统一列出 Auto / 引擎 / kiro / gateway 并可 ↑↓ 选择。 */
   private async handleModelCmdCli(
     msg: IncomingMessage,
     cmd: Extract<ParsedCommand, { kind: 'model' }>,
   ): Promise<void> {
     const conversationId = this.conversationIdOfMessage(msg);
     const { profileName, profile } = await this.resolveChatRuntime(conversationId);
-    const profiles = listRuntimeProfileNames(this.config).join(' | ');
+    const { pickFromList } = await import('../ingress/cli/slashPicker.js');
+    const { buildUnifiedModelPickerItems, decodeModelPick } = await import(
+      '../ingress/cli/modelPicker.js'
+    );
 
     if (cmd.mode === 'show') {
-      const lines = [
-        `current: ${profileName} (${profile.kind})`,
-        `model: ${profile.model ?? this.config.kiro.model ?? '-'}`,
-        `runtimes: ${profiles}`,
-        '',
-        'switch engine: /runtime <name>',
-        'diagnose: /runtime check',
-      ];
-      if (profile.kind === 'kiro-cli-acp') {
-        const list = await listModels(profile.bin || this.config.kiro.binPath);
-        if (list?.models.length) {
-          lines.push('', 'kiro models:');
-          for (const m of list.models.slice(0, 20)) {
-            const mark = m.name === (this.config.kiro.model ?? list.defaultModel) ? ' *' : '';
-            lines.push(`  ${m.name}${mark}`);
-          }
-          if (list.models.length > 20) lines.push(`  … +${list.models.length - 20} more`);
-          lines.push('', 'set: /model <name>   reset: /model auto');
-        }
-      } else if (profile.kind === 'openai-compatible') {
-        const registry = await discoverRuntimeRegistry(this.config);
-        const entry = registry.find((e) => e.profileName === profileName);
-        if (entry?.models.length) {
-          lines.push('', `gateway models (${entry.models.length}):`);
-          lines.push(formatModelTierSummary(entry.models, 15));
-          lines.push('', 'switch profile: /runtime openai-fast|openai-strong');
-        } else {
-          lines.push(
-            '',
-            `openai models: ${entry?.detail ?? 'unavailable'}`,
-            'switch profile: /runtime openai-fast|openai-strong',
-            `or: ${cliCommand('models')}`,
-          );
-        }
+      const sticky = await this.sessions.getConversationRuntimeProfile(conversationId);
+      const routeMode = !sticky || sticky === 'auto' ? 'Auto' : sticky;
+      await this.respondText(
+        msg,
+        [
+          `route: ${routeMode}`,
+          `current engine: ${profileName} (${profile.kind})`,
+          `current model: ${profile.model ?? this.config.kiro.model ?? '-'}`,
+          '',
+          'Pick Auto / engine / kiro model / gateway model (↑↓ · Enter · Esc):',
+        ].join('\n'),
+      );
+
+      const items = await buildUnifiedModelPickerItems({
+        config: this.config,
+        currentProfileName: profileName,
+        routeMode,
+      });
+      if (!items.length) {
+        await this.respondText(msg, 'no engines/models available — check /runtime check');
+        return;
       }
-      await this.respondText(msg, lines.join('\n'));
+
+      const raw = await pickFromList({ title: 'Select model / engine', items });
+      if (!raw) return;
+      const pick = decodeModelPick(raw);
+      if (!pick) {
+        await this.respondText(msg, `unknown selection`);
+        return;
+      }
+
+      if (pick.kind === 'engine') {
+        await this.handleRuntimeCmd(
+          msg,
+          { kind: 'runtime', mode: 'set', name: pick.name },
+          this.config.workspace.defaultCwd,
+        );
+        return;
+      }
+
+      if (pick.kind === 'kiro-model') {
+        if (pick.name === 'auto') {
+          this.config = patchAndSaveConfig(this.config, (draft) => {
+            delete draft.kiro.model;
+          });
+          clearModelCache();
+        } else {
+          this.config = patchAndSaveConfig(this.config, (draft) => {
+            draft.kiro.model = pick.name;
+          });
+        }
+        const stickyNow = sticky ?? 'auto';
+        if (stickyNow !== 'kiro') {
+          await this.sessions.setConversationRuntimeProfile(
+            conversationId,
+            'kiro',
+            this.config.workspace.defaultCwd,
+          );
+          await this.evictChatFromAllPools(conversationId);
+        }
+        await this.respondText(
+          msg,
+          pick.name === 'auto'
+            ? 'ok — kiro model reset to auto · engine kiro'
+            : `ok — kiro model → ${pick.name} · engine kiro`,
+        );
+        return;
+      }
+
+      // openai-model：写入该 profile.model 并切引擎（静默 sticky，单条回复）
+      const resolved = resolveRuntimeProfile(this.config, pick.profile);
+      this.config = patchAndSaveConfig(this.config, (draft) => {
+        if (!draft.runtime) return;
+        if (!draft.runtime.profiles) draft.runtime.profiles = {};
+        draft.runtime.profiles[pick.profile] = {
+          ...resolved,
+          ...draft.runtime.profiles[pick.profile],
+          model: pick.model,
+        };
+      });
+      await this.sessions.setConversationRuntimeProfile(
+        conversationId,
+        pick.profile,
+        this.config.workspace.defaultCwd,
+      );
+      await this.evictChatFromAllPools(conversationId);
+      await this.respondText(msg, `ok — ${pick.profile} · ${pick.model}`);
+      return;
+    }
+
+    if (cmd.mode === 'reset') {
+      // CLI：/model auto 同时清 sticky，与 picker 里 Auto 语义对齐
+      this.config = patchAndSaveConfig(this.config, (draft) => {
+        delete draft.kiro.model;
+      });
+      clearModelCache();
+      await this.sessions.clearConversationRuntimeProfile(conversationId);
+      await this.evictChatFromAllPools(conversationId);
+      await this.respondText(msg, 'ok — model reset + Auto routing restored');
       return;
     }
 
     if (profile.kind !== 'kiro-cli-acp') {
       await this.respondText(
         msg,
-        `current engine ${profileName} does not support /model switch.\nUse /runtime <profile> instead.`,
+        `Use /model (no args) to pick engines & gateway models.\nOr: /runtime <profile> · /runtime auto`,
       );
-      return;
-    }
-
-    if (cmd.mode === 'reset') {
-      this.config = patchAndSaveConfig(this.config, (draft) => {
-        delete draft.kiro.model;
-      });
-      clearModelCache();
-      await this.respondText(msg, 'ok — model reset to kiro default (auto)');
       return;
     }
 
     const list = await listModels(profile.bin || this.config.kiro.binPath);
     const target = this.resolveModelName(cmd.name, list);
     if (list && target === undefined) {
-      await this.respondText(msg, `unknown model: ${cmd.name}\nUse /model to list.`);
+      await this.respondText(msg, `unknown model: ${cmd.name}\nUse /model to pick from list.`);
       return;
     }
     const finalName = target ?? cmd.name;
@@ -4490,8 +4579,9 @@ export class Dispatcher {
                 ? { force: false }
                 : {}),
           };
+          const { cliWrite, getActiveShell } = await import('../ingress/cli/shellScreen.js');
           if (reason.includes('gateway_skip') || reason.includes('gateway-circuit')) {
-            process.stdout.write(`(gateway degraded → ${profileName})\n`);
+            cliWrite(`(gateway degraded → ${profileName})\n`);
           }
 
           // kiro/cursor/gemini 不吃 profile.systemPromptPrefix；把本地人设打进本轮 prompt，
@@ -4504,11 +4594,13 @@ export class Dispatcher {
             turnPrompt = `${systemPromptPrefix}\n\n---\n\n${turnPrompt}`;
           }
 
+          getActiveShell()?.focusContent();
           view = new CliTurnView({
             profileName,
             routeMode,
             model: profile.model,
             cwd,
+            write: cliWrite,
           });
           view.start();
 
@@ -4653,7 +4745,10 @@ export class Dispatcher {
           }
         } catch (e) {
           if (view) view.end({ error: (e as Error).message });
-          else process.stdout.write(`\n(error: ${(e as Error).message})\n`);
+          else {
+            const { cliWrite } = await import('../ingress/cli/shellScreen.js');
+            cliWrite(`\n(error: ${(e as Error).message})\n`);
+          }
         }
       },
     });

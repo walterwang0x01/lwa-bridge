@@ -53,6 +53,7 @@ describe('CliTurnView', () => {
     expect(out).toContain('Read');
     expect(out).toContain('Hello from agent');
     expect(out).toContain('done ·');
+    expect(out).not.toContain('▶'); // Harbor 用竖轨，不用 kiro 式三角
     expect(summary.toolCount).toBe(1);
     expect(summary.messageChars).toBe('Hello from agent'.length);
   });

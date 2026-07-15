@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatShellFooterLines,
-  scrollRegionBottom,
+  contentBottomRow,
+  inputPaneTopRow,
+  inputRow,
   ShellScreen,
+  statusRow,
   truncateToCols,
   visibleWidth,
 } from './shellScreen.js';
@@ -17,50 +19,90 @@ describe('shellScreen', () => {
     expect(visibleWidth(truncateToCols(long, 20))).toBeLessThanOrEqual(20);
   });
 
-  it('scrollRegionBottom reserves footer', () => {
-    expect(scrollRegionBottom(24, 3)).toBe(20);
-    expect(scrollRegionBottom(10, 3)).toBeGreaterThanOrEqual(3);
+  it('layout: content / adaptive input pane / status', () => {
+    // 24 行默认布局：内容 1..22，单行输入 23，状态 24
+    expect(contentBottomRow(24)).toBe(22);
+    expect(inputPaneTopRow(24)).toBe(23);
+    expect(inputRow(24)).toBe(23);
+    expect(statusRow(24)).toBe(24);
+    expect(statusRow(4)).toBe(4);
   });
 
-  it('formatShellFooterLines builds three lines', () => {
-    const lines = formatShellFooterLines(
-      { primary: 'Auto · 10% · 0 files edited · Run Everything', secondary: '~/x · main' },
-      40,
-    );
-    expect(lines.rule).toContain('─');
-    expect(lines.primary).toContain('Auto');
-    expect(lines.secondary).toContain('~/x');
-  });
-
-  it('ShellScreen.shouldUse is false by default (alt-screen opt-in)', () => {
-    const prevAlt = process.env['LWA_ALT_SHELL'];
-    const prevPlain = process.env['LWA_PLAIN_SHELL'];
-    delete process.env['LWA_ALT_SHELL'];
+  it('shouldUse on for code TTY; plain disables', () => {
+    const prev = process.env['LWA_PLAIN_SHELL'];
     delete process.env['LWA_PLAIN_SHELL'];
-    expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
-    process.env['LWA_ALT_SHELL'] = '1';
     expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(true);
     process.env['LWA_PLAIN_SHELL'] = '1';
     expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
-    if (prevAlt === undefined) delete process.env['LWA_ALT_SHELL'];
-    else process.env['LWA_ALT_SHELL'] = prevAlt;
-    if (prevPlain === undefined) delete process.env['LWA_PLAIN_SHELL'];
-    else process.env['LWA_PLAIN_SHELL'] = prevPlain;
+    if (prev === undefined) delete process.env['LWA_PLAIN_SHELL'];
+    else process.env['LWA_PLAIN_SHELL'] = prev;
   });
 
-  it('appendLine writes through injectable writer', () => {
+  it('docked mode uses alt-screen and paints status at bottom', () => {
     const chunks: string[] = [];
     const screen = new ShellScreen({
-      useAltScreen: false,
+      docked: true,
       write: (s) => chunks.push(s),
       rows: 20,
       cols: 60,
     });
     screen.enter();
+    expect(screen.isDocked).toBe(true);
+    screen.renderBanner('code · multi-engine shell', '/help');
+    screen.renderFooter({ primary: 'Auto · 1% · 0 files edited', approval: 'Run Everything' });
+    screen.focusInput();
+    screen.afterInput();
     screen.appendLine('hello');
-    screen.renderFooter({ primary: 'Auto · 1%', secondary: '~/p' });
+    screen.redrawContent();
     screen.exit();
-    expect(chunks.join('')).toContain('hello\n');
-    expect(chunks.join('')).toContain('Auto');
+    const out = chunks.join('');
+    expect(out).toContain('\x1b[?1049h');
+    expect(out).toContain('LWA');
+    expect(out).toContain('Auto · 1%');
+    expect(out).toContain('Run Everything');
+    expect(out).toContain('hello');
+    expect(out).toContain('\x1b[?1049l');
+    expect(out).toContain('\x1b[20;1H');
+  });
+
+  it('replaceLastBlock replaces stream patch without stacking', () => {
+    const chunks: string[] = [];
+    const screen = new ShellScreen({
+      write: (s) => chunks.push(s),
+      rows: 20,
+      cols: 60,
+      docked: true,
+    });
+    screen.enter();
+    screen.appendBlock('v1\nline2');
+    screen.replaceLastBlock('v2 only');
+    screen.redrawContent();
+    screen.exit();
+    const out = chunks.join('');
+    expect(out).toContain('v2 only');
+    expect(out).not.toContain('v1');
+    expect(out).not.toContain('line2');
+  });
+
+  it('content is bottom-aligned above the input pane', () => {
+    const chunks: string[] = [];
+    const screen = new ShellScreen({
+      write: (s) => chunks.push(s),
+      rows: 12,
+      cols: 40,
+      docked: true,
+      inputPaneHeight: 3,
+    });
+    screen.enter();
+    chunks.length = 0;
+    screen.appendLine('only');
+    screen.redrawContent();
+    // 内容底行 = 12-3-1 = 8；短 transcript 应画在靠近第 8 行，而非第 1 行
+    const out = chunks.join('');
+    expect(out).toContain('\x1b[8;1H');
+    expect(out).toContain('only');
+    // 第 1 行应被清成空（贴底留白）
+    expect(out).toContain('\x1b[1;1H\x1b[2K');
+    screen.exit();
   });
 });

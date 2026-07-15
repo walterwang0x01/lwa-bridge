@@ -2,13 +2,7 @@
  * 工具调用折叠面板：运行中一行摘要，结束后一行汇总。
  */
 import type { UnifiedSessionEvent } from '../../runtime/types.js';
-
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
-const CYAN = '\x1b[36m';
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const GRAY = '\x1b[90m';
+import { muted, paint, T, turnRail } from './theme.js';
 
 export interface ToolPanelEntry {
   id: string;
@@ -25,9 +19,11 @@ function truncate(s: string, max: number): string {
 
 export function toolDetailLabel(name: string, raw: Record<string, unknown> = {}): string {
   const title =
-    (typeof raw.title === 'string' && raw.title) ||
-    (typeof raw.toolName === 'string' && raw.toolName) ||
-    name;
+    (typeof raw.title === 'string' && raw.title.trim()) ||
+    (typeof raw.toolName === 'string' && raw.toolName.trim()) ||
+    (typeof raw.kind === 'string' && raw.kind.trim()) ||
+    name.trim() ||
+    'tool';
   const input = raw.rawInput ?? raw.input ?? raw.arguments;
   let detail = '';
   if (typeof input === 'string') detail = input;
@@ -39,12 +35,18 @@ export function toolDetailLabel(name: string, raw: Record<string, unknown> = {})
   return detail ? `${base} ${truncate(detail, 48)}` : base;
 }
 
+function entryTitle(e: ToolPanelEntry): string {
+  const fromLabel = e.label.replace(/\s+/g, ' ').trim().split(' ')[0] ?? '';
+  const name = (e.name || fromLabel || e.id || 'tool').trim();
+  return truncate(name || 'tool', 20);
+}
+
 function statusIcon(status: string): string {
   const s = status.toLowerCase();
-  if (s.includes('error') || s.includes('fail')) return `${YELLOW}✗${RESET}`;
-  if (s.includes('complet') || s === 'done' || s === 'success') return `${GREEN}✓${RESET}`;
-  if (s.includes('run') || s.includes('progress') || s === 'pending') return `${CYAN}●${RESET}`;
-  return `${DIM}·${RESET}`;
+  if (s.includes('error') || s.includes('fail')) return paint(T.err, '✗');
+  if (s.includes('complet') || s === 'done' || s === 'success') return paint(T.ok, '✓');
+  if (s.includes('run') || s.includes('progress') || s === 'pending') return paint(T.run, '●');
+  return muted('·');
 }
 
 function isTerminalStatus(status: string): boolean {
@@ -58,24 +60,22 @@ export function formatToolRunningLine(entries: ToolPanelEntry[]): string {
   if (entries.length === 0) return '';
   const names = (running.length > 0 ? running : entries)
     .slice(0, 3)
-    .map((e) => truncate(e.name, 20))
-    .join(`${GRAY} · ${RESET}`);
-  const extra = entries.length > 3 ? ` ${GRAY}+${entries.length - 3}${RESET}` : '';
+    .map((e) => entryTitle(e))
+    .join(muted(' · '));
+  const extra = entries.length > 3 ? muted(` +${entries.length - 3}`) : '';
+  const rail = turnRail();
   if (running.length > 0) {
-    return `  ${CYAN}●${RESET} ${DIM}tools${RESET} (${running.length} running${done ? `, ${done} done` : ''}): ${names}${extra}`;
+    return `${rail} ${paint(T.run, '●')} ${muted('tools')} (${running.length} running${done ? `, ${done} done` : ''}): ${names}${extra}`;
   }
-  return `  ${DIM}tools${RESET} (${done} done): ${names}${extra}`;
+  return `${rail} ${muted('tools')} (${done} done): ${names}${extra}`;
 }
 
 /** 结束汇总行 */
 export function formatToolSummaryLine(entries: ToolPanelEntry[]): string {
   if (entries.length === 0) return '';
-  const parts = entries.slice(0, 6).map((e) => {
-    const icon = statusIcon(e.status);
-    return `${icon} ${truncate(e.name, 16)}`;
-  });
-  const extra = entries.length > 6 ? ` ${GRAY}+${entries.length - 6}${RESET}` : '';
-  return `  ${DIM}▸${RESET} ${entries.length} tool${entries.length === 1 ? '' : 's'}: ${parts.join(`${GRAY} · ${RESET}`)}${extra}`;
+  const parts = entries.slice(0, 6).map((e) => `${statusIcon(e.status)} ${entryTitle(e)}`);
+  const extra = entries.length > 6 ? muted(` +${entries.length - 6}`) : '';
+  return `${turnRail()} ${muted('▸')} ${entries.length} tool${entries.length === 1 ? '' : 's'}: ${parts.join(muted(' · '))}${extra}`;
 }
 
 /**
@@ -96,15 +96,21 @@ export class ToolPanel {
   onEvent(ev: UnifiedSessionEvent): boolean {
     if (ev.kind !== 'tool') return false;
     const label = toolDetailLabel(ev.name, ev.raw ?? {});
+    const display =
+      (typeof ev.raw?.title === 'string' && ev.raw.title.trim()) ||
+      (typeof ev.raw?.toolName === 'string' && ev.raw.toolName.trim()) ||
+      ev.name.trim() ||
+      label.split(/\s+/)[0] ||
+      'tool';
     this.entries.set(ev.toolCallId, {
       id: ev.toolCallId,
-      name: ev.name,
+      name: display,
       status: ev.status,
       label,
     });
 
     if (!this.compact) {
-      this.write(`  ${statusIcon(ev.status)} ${label}\n`);
+      this.write(`${turnRail()} ${statusIcon(ev.status)} ${label}\n`);
       return true;
     }
 
@@ -118,16 +124,16 @@ export class ToolPanel {
       return true;
     }
 
-    this.write(`  ${statusIcon(ev.status)} ${label}\n`);
+    this.write(`${turnRail()} ${statusIcon(ev.status)} ${label}\n`);
     return true;
   }
 
-  /** turn 结束：折叠为单行摘要 */
   finish(): string {
     const list = [...this.entries.values()];
     if (list.length === 0) return '';
     if (!this.compact) return '';
     if (this.runningLineWritten) {
+      // 清 openLine（勿先 \n commit，否则 transcript 会残留旧 running 行）
       this.write('\r\x1b[K');
       this.runningLineWritten = false;
     }
@@ -143,10 +149,11 @@ export class ToolPanel {
   private redrawRunningLine(): void {
     const line = formatToolRunningLine([...this.entries.values()]);
     if (!line) return;
+    // 不带 \n：留在 openLine，\r 更新才能原地替换；避免把过期 running 行写入 transcript
     if (this.runningLineWritten) {
       this.write(`\r\x1b[K${line}`);
     } else {
-      this.write(`${line}\n`);
+      this.write(line);
       this.runningLineWritten = true;
     }
   }

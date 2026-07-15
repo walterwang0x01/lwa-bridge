@@ -38,7 +38,7 @@ export function helpMarkdown(): string {
     '**其他**',
     '`/help` — 显示这条帮助',
     '其他斜杠命令会被原样转发给 Kiro（你可以自己定义）',
-    '⚠️ kiro-cli 内置 TUI 命令（`/agent` `/tools` `/compact` `/login` `/logout`）在非交互模式下不可用',
+    '⚠️ kiro-cli 纯 TUI 命令（`/tools` `/login` `/logout`）在 ACP 模式下不可用；`/model` `/agent` `/compact` `/sessions` 已由 LWA 自己处理',
     '',
     '**直接发文字** — 转发给 Kiro CLI 当作问题处理。',
     '**发图片或文件** — 自动下载到本地，把路径喂给 Kiro。',

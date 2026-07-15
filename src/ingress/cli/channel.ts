@@ -1,12 +1,15 @@
 /**
  * 本地终端入口：纯文本 REPL，不依赖飞书卡片交互。
- * code 模式 + TTY 时启用 ShellScreen（滚动区 + 固定底栏）。
+ * code 模式 + TTY 时启用 ShellScreen（内容滚动 + 固定输入 + 底栏状态）。
  */
 import { createInterface, type Interface } from 'node:readline/promises';
 import { CLI_NAME } from '../../lib/branding.js';
 import { cardToPlainText, cleanCliText, formatCliHelp } from './textPresenter.js';
 import { formatCliFooter, type CliStatusSnapshot } from './statusBar.js';
-import { ShellScreen } from './shellScreen.js';
+import { setActiveShell, ShellScreen } from './shellScreen.js';
+import { formatShellStatusBlock } from './theme.js';
+import { pickSlashCommand, setCliInteract } from './slashPicker.js';
+import { readLiveLine } from './liveInput.js';
 import type {
   IngressChannel,
   IngressInboundHandlers,
@@ -118,6 +121,7 @@ export class CliIngressChannel implements IngressChannel {
   close(): void {
     this.connected = false;
     this.handlers = null;
+    setActiveShell(null);
     this.shell?.exit();
     this.shell = null;
     this.rl.close();
@@ -135,11 +139,13 @@ export class CliIngressChannel implements IngressChannel {
     if (useShell) {
       this.shell = new ShellScreen();
       this.shell.enter();
+      setActiveShell(this.shell);
     }
 
     try {
       await this.runPromptLoop(conversationId, senderPrincipalId, ctx, mode);
     } finally {
+      setActiveShell(null);
       this.shell?.exit();
       this.shell = null;
     }
@@ -153,7 +159,11 @@ export class CliIngressChannel implements IngressChannel {
   ): Promise<void> {
     const activeId = () => ctx?.getConversationId?.() ?? conversationId;
 
-    const resolveFooter = async (): Promise<{ primary: string; secondary: string } | string> => {
+    const resolveFooter = async (): Promise<{
+      primary: string;
+      secondary: string;
+      approval?: string;
+    }> => {
       const snapshot = ctx?.getStatusSnapshot ? await ctx.getStatusSnapshot() : undefined;
       if (snapshot) return formatCliFooter(snapshot);
       const cwd = ctx ? await ctx.getCwd() : process.cwd();
@@ -162,59 +172,81 @@ export class CliIngressChannel implements IngressChannel {
 
     const printFooter = async (): Promise<void> => {
       const foot = await resolveFooter();
-      const primary = typeof foot === 'string' ? foot : foot.primary;
-      const secondary = typeof foot === 'string' ? '' : foot.secondary;
-      if (this.shell?.isActive) {
-        this.shell.renderFooter({ primary, secondary });
+      if (this.shell?.isDocked) {
+        this.shell.renderFooter({
+          primary: foot.primary,
+          secondary: foot.secondary,
+          approval: foot.approval,
+        });
         return;
       }
       if (process.stdout.isTTY) {
-        console.log(`\n\x1b[1m${primary}\x1b[0m`);
-        if (secondary) console.log(`\x1b[90m${secondary}\x1b[0m`);
+        process.stdout.write(formatShellStatusBlock(foot.primary, foot.secondary));
       } else {
-        console.log(`\n${primary}`);
-        if (secondary) console.log(secondary);
+        console.log(`\n${foot.primary}`);
+        if (foot.secondary) console.log(foot.secondary);
       }
     };
 
-    const title =
-      mode === 'chat'
-        ? `${CLI_NAME} chat · local IM rehearsal (no Feishu WS)`
-        : `${CLI_NAME} code · Auto Shell (kiro / cursor / gateway)`;
-    const hint =
-      mode === 'chat'
-        ? 'Rehearse Feishu-style replies.  /help  ·  /new  ·  .exit'
-        : 'Ask for a code change.  /runtime auto|kiro|cursor  ·  /yolo  ·  /help  ·  .exit';
+    const title = mode === 'chat' ? 'chat · local IM rehearsal' : 'code · multi-engine shell';
+    const hint = mode === 'chat' ? '/help · /new · .exit' : '/ · /runtime · /yolo · /help · .exit';
 
     if (this.shell?.isActive) {
       this.shell.renderBanner(title, hint);
-      await printFooter();
     } else {
-      const rule = process.stdout.isTTY
-        ? '\x1b[90m────────────────────────────────────────\x1b[0m'
-        : '----------------------------------------';
-      console.log(rule);
-      console.log(title);
-      await printFooter();
+      console.log(`${CLI_NAME} ${title}`);
       console.log(hint);
-      console.log(rule);
     }
 
-    while (this.connected) {
-      await printFooter();
-      const text = (await this.rl.question('→ ')).trim();
-      if (!text) continue;
-      if (text === '.exit' || text === '.quit') break;
-      if (text === '.help') {
-        const help = formatCliHelp(mode);
-        if (this.shell?.isActive) this.shell.appendBlock(help);
-        else console.log(help);
-        continue;
+    setCliInteract({
+      ask: async (prompt) => {
+        if (this.shell?.isDocked) this.shell.focusInput();
+        const ans = await this.rl.question(prompt);
+        if (this.shell?.isDocked) this.shell.afterInput();
+        return ans;
+      },
+      pauseReadline: () => this.rl.pause(),
+      resumeReadline: () => this.rl.resume(),
+    });
+
+    try {
+      while (this.connected) {
+        await printFooter();
+        if (this.shell?.isDocked) this.shell.focusInput();
+        // docked：敲 `/` 即时出菜单；plain：仍用 readline
+        let text = await readLiveLine({
+          shell: this.shell,
+          mode,
+          fallbackAsk: (p) => this.rl.question(p),
+          pauseReadline: () => this.rl.pause(),
+          resumeReadline: () => this.rl.resume(),
+        });
+        // liveInput.finish 已 afterInput；plain 路径无需
+        if (!this.shell?.isDocked && this.shell?.isActive) this.shell.afterInput();
+        // 保留末尾空格（/cd ）；只去掉首空白与尾换行
+        text = text.replace(/^\s+/, '').replace(/\n+$/g, '');
+        if (!text.trim()) continue;
+        if (text === '.exit' || text === '.quit') break;
+        if (text === '.help') {
+          const help = formatCliHelp(mode);
+          if (this.shell?.isActive) this.shell.appendBlock(help);
+          else console.log(help);
+          continue;
+        }
+        // 兼容：非 live 路径只交 `/` 时仍弹一次菜单
+        if (text === '/' && !this.shell?.isDocked) {
+          const picked = await pickSlashCommand(mode);
+          if (!picked) continue;
+          text = picked.trim();
+          if (!text) continue;
+        }
+        const cid = activeId();
+        const msg = this.makeTextMessage(cid, senderPrincipalId, text);
+        this.messages.set(msg.messageId, { conversationId: cid, text });
+        await this.handlers!.onMessage(msg);
       }
-      const cid = activeId();
-      const msg = this.makeTextMessage(cid, senderPrincipalId, text);
-      this.messages.set(msg.messageId, { conversationId: cid, text });
-      await this.handlers!.onMessage(msg);
+    } finally {
+      setCliInteract(null);
     }
   }
 
@@ -252,6 +284,7 @@ export class CliIngressChannel implements IngressChannel {
   private emitOutput(text: string): void {
     if (!text) return;
     if (this.shell?.isActive) {
+      if (this.shell.isDocked) this.shell.focusContent();
       this.shell.appendBlock(text);
       return;
     }
@@ -286,7 +319,14 @@ export class CliIngressChannel implements IngressChannel {
     const body = text ? `\n${text}\n` : '';
     if (!body) return;
     if (this.shell?.isActive) {
-      this.shell.appendBlock(text);
+      if (this.shell.isDocked) this.shell.focusContent();
+      // docked：同 message 的 patch 替换而非追加，避免全文重复堆叠
+      if (this.shell.isDocked && this.streamMessageId === messageId) {
+        this.shell.replaceLastBlock(text);
+      } else {
+        this.streamMessageId = messageId;
+        this.shell.appendBlock(text);
+      }
       return;
     }
     if (!process.stdout.isTTY) {
