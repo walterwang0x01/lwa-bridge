@@ -118,6 +118,7 @@ export function desiredInputPaneHeight(totalLines: number, termRows: number): nu
 
 const INPUT_CONT_INDENT = '  ';
 export const INPUT_PLACEHOLDER = 'Ask LWA to build, debug, or explain…';
+export const CLI_INTERRUPT_VALUE = '.exit';
 
 /** 把 wrapped 行转成可绘制文本（仅首行带 prompt，续行缩进）。 */
 export function formatInputPaneDisplayLine(
@@ -177,6 +178,9 @@ export function simulateLiveInputKeys(
 ): { buffer: string; submitted?: string } {
   let buffer = init;
   for (const key of keys) {
+    if (key === '\u0003') {
+      return { buffer, submitted: CLI_INTERRUPT_VALUE };
+    }
     if (key === '\r' || key === '\n') {
       const d = applyEnterKey(buffer);
       if ('next' in d) buffer = d.next;
@@ -370,7 +374,7 @@ export async function readLiveLine(opts: {
 
         if (key === '\u0003') {
           cleanup();
-          resolve(finish(''));
+          resolve(finish(CLI_INTERRUPT_VALUE));
           return;
         }
 

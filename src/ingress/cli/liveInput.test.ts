@@ -131,12 +131,13 @@ describe('buildInputPanePaint multiline (screenshot scenario)', () => {
     expect(paint.lines[2]!.plain).toBe('  sssss\\');
   });
 
-  it('submit only on bare Enter', () => {
+  it('submit only on bare Enter and maps Ctrl+C to exit', () => {
     const { submitted } = simulateLiveInputKeys(['h', 'i', '\r']);
     expect(submitted).toBe('hi');
     const mid = simulateLiveInputKeys(['a', '\\', '\r', 'b']);
     expect(mid.buffer).toBe('a\nb');
     expect(mid.submitted).toBeUndefined();
+    expect(simulateLiveInputKeys(['h', 'i', '\u0003']).submitted).toBe('.exit');
   });
 
   it('formatInputPaneDisplayLine indents continuations', () => {

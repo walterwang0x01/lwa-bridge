@@ -385,54 +385,63 @@ export async function runBridge(opts?: RunBridgeOptions): Promise<RunBridgeHandl
     },
   };
 
-  if (attachCli) {
-    void cliIngressChannel
-      .promptLoop(cliConversationIdRef.current, 'cli-user', cliPromptCtx)
-      .catch((e) => log.warn({ err: e }, 'cli chat attach failed'));
-  } else if (cliOnly) {
-    await cliIngressChannel.promptLoop(cliConversationIdRef.current, 'cli-user', cliPromptCtx);
-  }
-
-  let stopped = false;
-  const stop = async () => {
-    if (stopped) return;
-    stopped = true;
-    log.info('shutting down');
-    try {
-      cronScheduler.stop();
-    } catch {
-      // ignore
-    }
-    if (dashboard) {
-      await dashboard.close().catch(() => undefined);
-    }
-    if (cliChannelRef) {
+  let stopPromise: Promise<void> | undefined;
+  let signalHandler: (sig: NodeJS.Signals) => Promise<void>;
+  const stop = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      process.off('SIGINT', signalHandler);
+      process.off('SIGTERM', signalHandler);
+      log.info('shutting down');
       try {
-        cliChannelRef.close();
+        cronScheduler.stop();
       } catch {
         // ignore
       }
-    }
-    if (!cliOnly) {
-      try {
-        if (enableLark) larkRef.close();
-        for (const ch of startedChannels) {
-          if (ch.id !== 'cli' && ch.id !== 'lark') ch.close();
+      if (dashboard) {
+        await dashboard.close().catch(() => undefined);
+      }
+      if (cliChannelRef) {
+        try {
+          cliChannelRef.close();
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
-    }
-    await unregisterSelf().catch(() => undefined);
+      if (!cliOnly) {
+        try {
+          if (enableLark) larkRef.close();
+          for (const ch of startedChannels) {
+            if (ch.id !== 'cli' && ch.id !== 'lark') ch.close();
+          }
+        } catch {
+          // ignore
+        }
+      }
+      await unregisterSelf().catch(() => undefined);
+    })();
+    return stopPromise;
   };
 
-  const signalHandler = async (sig: NodeJS.Signals) => {
+  signalHandler = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'received signal');
     await stop();
     process.exit(0);
   };
   process.once('SIGINT', signalHandler);
   process.once('SIGTERM', signalHandler);
+
+  try {
+    if (attachCli) {
+      void cliIngressChannel
+        .promptLoop(cliConversationIdRef.current, 'cli-user', cliPromptCtx)
+        .catch((e) => log.warn({ err: e }, 'cli chat attach failed'));
+    } else if (cliOnly) {
+      await cliIngressChannel.promptLoop(cliConversationIdRef.current, 'cli-user', cliPromptCtx);
+    }
+  } finally {
+    if (cliOnly) await stop();
+  }
 
   return { stop };
 }

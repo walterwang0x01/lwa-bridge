@@ -20,6 +20,8 @@ export class ChatPipeline {
   private currentAbort: AbortController | null = null;
   private currentTaskId: string | null = null;
   private currentPromise: Promise<void> | null = null;
+  /** 串行化“抢占旧任务 → 安装新任务”状态切换，不阻塞后续 submit 发起抢占。 */
+  private transition: Promise<void> = Promise.resolve();
 
   constructor(
     public readonly chatId: string,
@@ -36,34 +38,39 @@ export class ChatPipeline {
    *   - 再启动新任务
    */
   async submit(task: PipelineTask): Promise<void> {
-    if (this.currentAbort) {
-      this.log.info({ oldTask: this.currentTaskId, newTask: task.id }, 'preempting current task');
-      this.currentAbort.abort();
-      // 等旧任务结束（不抛错）
-      try {
-        await this.currentPromise;
-      } catch {
-        // ignore
-      }
-    }
-    const ctrl = new AbortController();
-    this.currentAbort = ctrl;
-    this.currentTaskId = task.id;
-    const p = (async () => {
-      try {
-        await task.run(ctrl.signal);
-      } catch (e) {
-        this.log.error({ err: e, taskId: task.id }, 'task threw');
-      } finally {
-        if (this.currentAbort === ctrl) {
-          this.currentAbort = null;
-          this.currentTaskId = null;
-          this.currentPromise = null;
+    let taskPromise: Promise<void> | undefined;
+    const begin = this.transition.then(async () => {
+      if (this.currentAbort) {
+        this.log.info({ oldTask: this.currentTaskId, newTask: task.id }, 'preempting current task');
+        this.currentAbort.abort();
+        try {
+          await this.currentPromise;
+        } catch {
+          // ignore
         }
       }
-    })();
-    this.currentPromise = p;
-    await p;
+
+      const ctrl = new AbortController();
+      this.currentAbort = ctrl;
+      this.currentTaskId = task.id;
+      taskPromise = (async () => {
+        try {
+          await task.run(ctrl.signal);
+        } catch (e) {
+          this.log.error({ err: e, taskId: task.id }, 'task threw');
+        } finally {
+          if (this.currentAbort === ctrl) {
+            this.currentAbort = null;
+            this.currentTaskId = null;
+            this.currentPromise = null;
+          }
+        }
+      })();
+      this.currentPromise = taskPromise;
+    });
+    this.transition = begin.catch(() => undefined);
+    await begin;
+    await taskPromise;
   }
 
   /** 主动中止当前任务（/stop 命令）。返回是否真的中止了某任务。 */

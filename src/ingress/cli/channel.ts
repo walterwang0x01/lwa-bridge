@@ -225,16 +225,17 @@ export class CliIngressChannel implements IngressChannel {
         if (!this.shell?.isDocked && this.shell?.isActive) this.shell.afterInput();
         // 保留末尾空格（/cd ）；只去掉首空白与尾换行
         text = text.replace(/^\s+/, '').replace(/\n+$/g, '');
-        if (!text.trim()) continue;
-        if (text === '.exit' || text === '.quit') break;
-        if (text === '.help') {
+        const command = text.trim();
+        if (!command) continue;
+        if (command === '.exit' || command === '.quit') break;
+        if (command === '.help') {
           const help = formatCliHelp(mode);
           if (this.shell?.isActive) this.shell.appendBlock(help);
           else console.log(help);
           continue;
         }
         // 兼容：非 live 路径只交 `/` 时仍弹一次菜单
-        if (text === '/' && !this.shell?.isDocked) {
+        if (command === '/' && !this.shell?.isDocked) {
           const picked = await pickSlashCommand(mode);
           if (!picked) continue;
           text = picked.trim();
