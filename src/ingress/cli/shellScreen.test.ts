@@ -28,14 +28,26 @@ describe('shellScreen', () => {
     expect(statusRow(4)).toBe(4);
   });
 
-  it('shouldUse on for code TTY; plain disables', () => {
-    const prev = process.env['LWA_PLAIN_SHELL'];
-    delete process.env['LWA_PLAIN_SHELL'];
-    expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(true);
-    process.env['LWA_PLAIN_SHELL'] = '1';
-    expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
-    if (prev === undefined) delete process.env['LWA_PLAIN_SHELL'];
-    else process.env['LWA_PLAIN_SHELL'] = prev;
+  it('shouldUse on for code TTY; plain and CI disable', () => {
+    const prevPlain = process.env['LWA_PLAIN_SHELL'];
+    const prevCi = process.env['CI'];
+    try {
+      delete process.env['LWA_PLAIN_SHELL'];
+      delete process.env['CI'];
+      expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(true);
+
+      process.env['LWA_PLAIN_SHELL'] = '1';
+      expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
+
+      delete process.env['LWA_PLAIN_SHELL'];
+      process.env['CI'] = 'true';
+      expect(ShellScreen.shouldUse({ isTty: true, mode: 'code' })).toBe(false);
+    } finally {
+      if (prevPlain === undefined) delete process.env['LWA_PLAIN_SHELL'];
+      else process.env['LWA_PLAIN_SHELL'] = prevPlain;
+      if (prevCi === undefined) delete process.env['CI'];
+      else process.env['CI'] = prevCi;
+    }
   });
 
   it('docked mode uses alt-screen and paints status at bottom', () => {
