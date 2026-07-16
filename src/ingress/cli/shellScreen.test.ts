@@ -50,6 +50,33 @@ describe('shellScreen', () => {
     }
   });
 
+  it('LWA_FORCE_ALT_SHELL overrides a false-negative process.stdout.isTTY (PyCharm-style terminals)', () => {
+    const prevForce = process.env['LWA_FORCE_ALT_SHELL'];
+    const prevPlain = process.env['LWA_PLAIN_SHELL'];
+    const prevCi = process.env['CI'];
+    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    try {
+      delete process.env['LWA_PLAIN_SHELL'];
+      delete process.env['CI'];
+      Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+
+      delete process.env['LWA_FORCE_ALT_SHELL'];
+      // 不传 isTty：模拟嵌入式终端把 process.stdout.isTTY 报告为假阴性的真实场景。
+      expect(ShellScreen.shouldUse({ mode: 'code' })).toBe(false);
+
+      process.env['LWA_FORCE_ALT_SHELL'] = '1';
+      expect(ShellScreen.shouldUse({ mode: 'code' })).toBe(true);
+    } finally {
+      if (isTtyDescriptor) Object.defineProperty(process.stdout, 'isTTY', isTtyDescriptor);
+      if (prevForce === undefined) delete process.env['LWA_FORCE_ALT_SHELL'];
+      else process.env['LWA_FORCE_ALT_SHELL'] = prevForce;
+      if (prevPlain === undefined) delete process.env['LWA_PLAIN_SHELL'];
+      else process.env['LWA_PLAIN_SHELL'] = prevPlain;
+      if (prevCi === undefined) delete process.env['CI'];
+      else process.env['CI'] = prevCi;
+    }
+  });
+
   it('docked mode uses alt-screen and paints status at bottom', () => {
     const chunks: string[] = [];
     const screen = new ShellScreen({

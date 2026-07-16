@@ -35,6 +35,18 @@ interface CliStoredMessage {
   text: string;
 }
 
+/**
+ * 计算非 docked 兜底路径下状态栏内容的去重 key。
+ * 抽成纯函数便于独立单测；语义：primary/secondary/approval 三者完全相同才视为“未变化”。
+ */
+export function plainFooterKey(foot: {
+  primary: string;
+  secondary: string;
+  approval?: string;
+}): string {
+  return `${foot.primary}\u0000${foot.secondary}\u0000${foot.approval ?? ''}`;
+}
+
 export class CliIngressChannel implements IngressChannel {
   readonly id = 'cli' as const;
   readonly port: IngressPort;
@@ -48,6 +60,8 @@ export class CliIngressChannel implements IngressChannel {
   private streamMessageId?: string;
   private streamLineCount = 0;
   private shell: ShellScreen | null = null;
+  /** 非 docked 兜底路径下缓存的上一次状态栏文本，避免每轮循环无变化也重复追加打印。 */
+  private lastPlainFooterKey: string | null = null;
 
   constructor() {
     this.rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -180,6 +194,12 @@ export class CliIngressChannel implements IngressChannel {
         });
         return;
       }
+      // 非 docked 兜底路径没有"清空重绘"能力，process.stdout.write 是纯追加打印；
+      // 若状态较上一轮未变化就不再重复打印，避免历史状态栏在滚动区无限堆积
+      // （PyCharm 等嵌入式终端常因 process.stdout.isTTY 假阴性走到这条路径）。
+      const footerKey = plainFooterKey(foot);
+      if (footerKey === this.lastPlainFooterKey) return;
+      this.lastPlainFooterKey = footerKey;
       if (process.stdout.isTTY) {
         process.stdout.write(formatShellStatusBlock(foot.primary, foot.secondary));
       } else {

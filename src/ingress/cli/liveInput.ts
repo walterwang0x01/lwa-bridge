@@ -237,7 +237,12 @@ export async function readLiveLine(opts: {
   if (!canLive) {
     if (opts.shell?.isDocked) opts.shell.suspendIngest(true);
     try {
-      return (await opts.fallbackAsk(shellPrompt())).replace(/^\s+/, '').replace(/\n+$/g, '');
+      // 用纯文本 prompt（不带颜色转义）：部分嵌入式终端（如 PyCharm 内置终端）
+      // 对带 ANSI 序列的 prompt 计算可见宽度不准，导致 readline 内部回显定位错乱，
+      // 表现为输入行出现拼接乱码（例如 “/m> /> ,,,,ssss”）。
+      return (await opts.fallbackAsk(stripAnsi(shellPrompt())))
+        .replace(/^\s+/, '')
+        .replace(/\n+$/g, '');
     } finally {
       if (opts.shell?.isDocked) opts.shell.suspendIngest(false);
     }

@@ -246,7 +246,11 @@ export class ShellScreen {
   }
 
   static shouldUse(opts?: { isTty?: boolean; mode?: 'code' | 'chat' }): boolean {
-    const tty = opts?.isTty ?? Boolean(process.stdout.isTTY);
+    // 部分嵌入式终端（如 PyCharm 内置终端）对 process.stdout.isTTY 报告假阴性，
+    // 导致误判为非 TTY 而退化到无清屏能力的追加打印路径（状态栏堆积、输入回显错位）。
+    // 提供显式开关：LWA_FORCE_ALT_SHELL=1 时跳过 isTTY 检测，直接尝试进入 docked 模式。
+    const forced = process.env['LWA_FORCE_ALT_SHELL'] === '1';
+    const tty = opts?.isTty ?? (forced || Boolean(process.stdout.isTTY));
     if (!tty) return false;
     if (process.env['CI'] === 'true' || process.env['LWA_PLAIN_SHELL'] === '1') return false;
     return (opts?.mode ?? 'code') === 'code';

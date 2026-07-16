@@ -7,6 +7,7 @@ import {
   formatInputPaneDisplayLine,
   inputDisplayWidth,
   isPrintableInput,
+  readLiveLine,
   simulateLiveInputKeys,
   wrapInputPane,
 } from './liveInput.js';
@@ -143,5 +144,37 @@ describe('buildInputPanePaint multiline (screenshot scenario)', () => {
   it('formatInputPaneDisplayLine indents continuations', () => {
     expect(formatInputPaneDisplayLine('❯ hi', '❯ ', '❯ ', 0)).toBe('❯ hi');
     expect(formatInputPaneDisplayLine('second', '❯ ', '❯ ', 1)).toBe('  second');
+  });
+});
+
+/**
+ * 复现：非 docked / 非 raw 兜底路径（PyCharm 内置终端等 process.stdout.isTTY 假阴性场景）下，
+ * readLiveLine 退化为 rl.question(shellPrompt())；带 ANSI 颜色的 prompt 在部分终端里
+ * 会让 readline 内部回显宽度计算错乱，产生类似 “/m> /> ,,,,ssss” 的拼接乱码。
+ * 修复：fallback 分支改用纯文本 prompt（去除颜色转义），不影响 docked/raw 分支。
+ */
+describe('readLiveLine fallback prompt (non-raw terminals)', () => {
+  it('passes a plain-text prompt (no ANSI escape codes) to fallbackAsk', async () => {
+    let receivedPrompt = '';
+    const result = await readLiveLine({
+      shell: null,
+      mode: 'code',
+      fallbackAsk: async (p) => {
+        receivedPrompt = p;
+        return 'hello';
+      },
+    });
+    expect(result).toBe('hello');
+    expect(receivedPrompt.includes('\u001b[')).toBe(false);
+    expect(receivedPrompt).toContain('❯');
+  });
+
+  it('still trims leading whitespace and trailing newlines from the fallback answer', async () => {
+    const result = await readLiveLine({
+      shell: null,
+      mode: 'code',
+      fallbackAsk: async () => '   /model\n\n',
+    });
+    expect(result).toBe('/model');
   });
 });
