@@ -264,6 +264,10 @@ export class CliIngressChannel implements IngressChannel {
         const cid = activeId();
         const msg = this.makeTextMessage(cid, senderPrincipalId, text);
         this.messages.set(msg.messageId, { conversationId: cid, text });
+        // 非 docked 简化模式没有清屏重绘能力，所有内容在滚动区里纯追加；
+        // 提交后先打一行空行分隔，让"用户输入 → 处理中 → 回复"这一轮有清晰起点，
+        // 避免处理反馈和上一轮内容、底部状态栏文字混在一起显得毫无响应。
+        if (!this.shell?.isDocked) console.log('');
         await this.handlers!.onMessage(msg);
       }
     } finally {

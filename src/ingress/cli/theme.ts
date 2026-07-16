@@ -219,5 +219,7 @@ export function formatTurnFooter(opts: { secs: string; toolCount: number }): str
   const rail = turnRail();
   const tools =
     opts.toolCount > 0 ? ` · ${opts.toolCount} tool${opts.toolCount === 1 ? '' : 's'}` : '';
-  return `${rail} ${muted(`done · ${opts.secs}s${tools}`)}\n`;
+  // 末尾多留一个空行：非 docked 简化模式没有清屏重绘能力，
+  // 这里是"本轮回复结束"与"下一轮状态栏/输入提示"之间唯一的视觉分隔。
+  return `${rail} ${muted(`done · ${opts.secs}s${tools}`)}\n\n`;
 }

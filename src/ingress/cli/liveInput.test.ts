@@ -169,6 +169,21 @@ describe('readLiveLine fallback prompt (non-raw terminals)', () => {
     expect(receivedPrompt).toContain('❯');
   });
 
+  it('leads with a blank line so each turn has a clear visual starting point', async () => {
+    // 非 docked 简化模式没有清屏重绘能力；上一轮的回复、状态栏文字和新一轮的
+    // 输入提示符如果紧贴在一起，用户很容易误以为程序完全没反应。
+    let receivedPrompt = '';
+    await readLiveLine({
+      shell: null,
+      mode: 'code',
+      fallbackAsk: async (p) => {
+        receivedPrompt = p;
+        return 'hi';
+      },
+    });
+    expect(receivedPrompt.startsWith('\n')).toBe(true);
+  });
+
   it('still trims leading whitespace and trailing newlines from the fallback answer', async () => {
     const result = await readLiveLine({
       shell: null,

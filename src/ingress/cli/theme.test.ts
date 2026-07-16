@@ -5,6 +5,7 @@ import {
   formatInputPaneLine,
   formatShellBanner,
   formatShellStatusBlock,
+  formatTurnFooter,
   resolveThemeMode,
   shellPrompt,
 } from './theme.js';
@@ -77,5 +78,13 @@ describe('theme Harbor', () => {
   it('resolves explicit theme before COLORFGBG', () => {
     expect(resolveThemeMode({ LWA_THEME: 'dark', COLORFGBG: '0;15' })).toBe('dark');
     expect(resolveThemeMode({ COLORFGBG: '0;15' })).toBe('light');
+  });
+
+  it('turn footer trails with a blank line to separate it from the next status bar', () => {
+    // 非 docked 简化模式没有清屏重绘能力；"本轮回复结束" 和 "下一轮状态栏/输入提示"
+    // 如果紧贴打印会显得混乱，容易让用户误以为程序卡死没反应。
+    const footer = formatTurnFooter({ secs: '1.2', toolCount: 0 });
+    expect(footer.endsWith('\n\n')).toBe(true);
+    expect(stripAnsi(footer)).toContain('done · 1.2s');
   });
 });
