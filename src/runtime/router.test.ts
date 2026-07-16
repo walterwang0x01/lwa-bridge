@@ -145,6 +145,47 @@ describe('chooseRuntimeProfile', () => {
     expect(decision.selectedModel).toBe('claude-sonnet-5');
   });
 
+  it('cursor-agent-cli 未配置模型时 selectedModel 为 undefined（不下发字面 "Auto" 给 CLI）', async () => {
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+    });
+    const decision = await chooseModelForProfile(
+      cfg,
+      { kind: 'cursor-agent-cli', bin: 'agent', force: true },
+      { prompt: '帮我总结这段话' },
+    );
+    // 复现：之前这里返回字面字符串 'Auto'，被 CursorCliRuntime 当作真实模型名
+    // 拼进 `--model Auto`，Cursor Agent 不认识该模型导致该次调用挂起无输出（thinking 卡死），
+    // 同时这个字符串还被持久化为 session.lastUsedModel，状态栏显示成 current model: Auto。
+    expect(decision.selectedModel).toBeUndefined();
+    expect(decision.reason).toBe('cursor-fixed-auto');
+  });
+
+  it('cursor-agent-cli 显式配置 modelRouting.cursor.model 时按配置返回', async () => {
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+      modelRouting: { cursor: { model: 'claude-opus-4-8' } },
+    });
+    const decision = await chooseModelForProfile(
+      cfg,
+      { kind: 'cursor-agent-cli', bin: 'agent', force: true },
+      { prompt: '帮我总结这段话' },
+    );
+    expect(decision.selectedModel).toBe('claude-opus-4-8');
+  });
+
+  it('cursor-agent-cli profile.model 优先于占位兜底', async () => {
+    const cfg = ConfigSchema.parse({
+      lark: { appId: 'a', appSecret: 'b' },
+    });
+    const decision = await chooseModelForProfile(
+      cfg,
+      { kind: 'cursor-agent-cli', bin: 'agent', force: true, model: 'claude-sonnet-4.6' },
+      { prompt: '帮我总结这段话' },
+    );
+    expect(decision.selectedModel).toBe('claude-sonnet-4.6');
+  });
+
   it('openai-compatible 返回固定模型选择', async () => {
     const cfg = ConfigSchema.parse({
       lark: { appId: 'a', appSecret: 'b' },

@@ -170,7 +170,13 @@ export const ConfigSchema = z.object({
       cursor: z
         .object({
           mode: z.enum(['fixed']).default('fixed'),
-          model: z.string().default('Auto'),
+          /**
+           * cursor-agent-cli 使用的模型名。留空（undefined）表示让 Cursor Agent
+           * 按自身内部逻辑自主选择；绝不能默认成字面字符串（如 'Auto'），
+           * 否则会被真实拼进 `--model <值>` 传给 CLI，Cursor 不认识该模型名，
+           * 导致该次调用挂起无输出（thinking 卡死），详见 router.ts chooseModelForProfile。
+           */
+          model: z.string().optional(),
         })
         .default({}),
     })
@@ -305,7 +311,35 @@ export function loadConfig(): Config {
         .join('\n')}`,
     );
   }
-  return result.data;
+  return sanitizeLegacyPlaceholderModel(result.data);
+}
+
+/**
+ * 已知的路由占位符（历史上曾被当作真实模型名误用）。
+ * 与 runtime/cursorCliRuntime.ts 的黑名单同源但不跨层依赖，因为 config.ts
+ * 是更底层的模块，不应反向依赖 runtime/。
+ */
+const LEGACY_PLACEHOLDER_MODEL_NAMES = new Set(['auto', 'default', 'none']);
+
+/**
+ * 兜底清洗历史配置文件：早期版本 `modelRouting.cursor.model` 的 schema 默认值是
+ * 字面字符串 'Auto'，一旦配置文件被 saveConfig 落盘过，这个占位符就会持久化到磁盘，
+ * 仅修复 schema 默认值（改为 optional）无法清除已经写入的历史脏数据——因为
+ * z.string().optional() 校验一个已经是 'Auto' 的字段时会原样保留。
+ * 这里在每次 loadConfig 时做一次内存态清洗（不主动改写磁盘文件），
+ * 确保历史配置也能立即恢复到"未配置 = undefined = 让 Cursor Agent 自己选"的正确语义。
+ */
+function sanitizeLegacyPlaceholderModel(cfg: Config): Config {
+  const cursorModel = cfg.modelRouting?.cursor?.model;
+  if (cursorModel === undefined) return cfg;
+  if (!LEGACY_PLACEHOLDER_MODEL_NAMES.has(cursorModel.trim().toLowerCase())) return cfg;
+  return {
+    ...cfg,
+    modelRouting: {
+      ...cfg.modelRouting,
+      cursor: { ...cfg.modelRouting.cursor, model: undefined },
+    },
+  };
 }
 
 /**

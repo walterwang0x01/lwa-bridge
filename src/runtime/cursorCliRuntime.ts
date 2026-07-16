@@ -15,6 +15,21 @@ import type {
 
 const log = () => getLogger().child({ module: 'cursor-cli-runtime' });
 
+/**
+ * 已知的路由占位符/伪模型名黑名单：这些值语义上表示"让 Cursor Agent 自己选"，
+ * 绝不能作为真实 --model 参数下发给 CLI（Cursor 不认识这些名字，会导致该次调用
+ * 挂起无输出或直接报错）。纵深防御：即便上游路由逻辑再次意外把占位符写进
+ * profile.model，这里也会拦截，不影响正常配置的真实模型名。
+ */
+const PLACEHOLDER_MODEL_NAMES = new Set(['auto', 'default', 'none']);
+
+export function isRealModelName(model: string | undefined): model is string {
+  if (!model) return false;
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) return false;
+  return !PLACEHOLDER_MODEL_NAMES.has(normalized);
+}
+
 const CAPABILITIES: RuntimeCapabilities = {
   acp: false,
   streaming: true,
@@ -59,7 +74,7 @@ export class CursorCliRuntime implements AgentRuntime {
     const sid = sessionId || this.sessionId;
     const args = ['--print', '--output-format', 'stream-json'];
     if (this.profile.force !== false) args.push('-f');
-    if (this.profile.model) args.push('--model', this.profile.model);
+    if (isRealModelName(this.profile.model)) args.push('--model', this.profile.model);
     if (sid) args.push('--resume', sid);
     args.push('-p', text);
 

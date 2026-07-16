@@ -277,9 +277,13 @@ export async function chooseModelForProfile(
   ctx: RuntimeRouteContext,
 ): Promise<ModelRouteDecision> {
   if (profile.kind === 'cursor-agent-cli') {
+    // cursor-agent-cli 没有配置模型时，应让 Cursor Agent 自己按内部逻辑选模型，
+    // 即 selectedModel 保持 undefined（CursorCliRuntime 遇到 falsy model 不会拼接
+    // --model 参数）。之前这里用字面字符串 'Auto' 兜底，会被真实拼进 CLI 参数
+    // （--model Auto），Cursor Agent 不认识该模型名，导致该次调用挂起无输出。
     return {
       mode: 'fixed',
-      selectedModel: cfg.modelRouting.cursor.model ?? profile.model ?? 'Auto',
+      selectedModel: cfg.modelRouting.cursor.model ?? profile.model,
       reason: 'cursor-fixed-auto',
       complexityScore: complexityScore(cfg, ctx),
       availableModelCount: 1,
