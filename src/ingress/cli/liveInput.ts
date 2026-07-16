@@ -18,6 +18,7 @@ import {
   contentBottomRow,
   DEFAULT_INPUT_PANE_HEIGHT,
   inputPaneTopRow,
+  positiveOr,
   type ShellScreen,
 } from './shellScreen.js';
 
@@ -39,6 +40,46 @@ export function isPrintableInput(key: string): boolean {
     if (code < 0x20) return false;
   }
   return true;
+}
+
+/**
+ * 把一次 stdin 'data' 事件收到的原始 chunk 拆成多个独立的逻辑按键。
+ *
+ * 背景：终端/pty 不保证"一次按键 = 一次 data 事件"——用户打字速度较快、网络
+ * 延迟、部分 IDE 集成终端都会把多个按键合并进同一个 chunk（例如快速输入 "hi"
+ * 后立刻回车，可能整体到达为 "hi\r"）。旧实现对整个 chunk 做单一按键的精确
+ * 匹配（如 `key === '\r'`），遇到这种合并 chunk 时既不匹配任何特殊键，也无法
+ * 通过 isPrintableInput 的可打印校验（因为混入了控制字符），导致整个 chunk被
+ * 静默丢弃——表现为用户在 docked 模式提交消息后界面完全无响应（thinking 都不
+ * 出现，因为回车本身都没被处理到）。
+ * 拆分规则：以 ESC (\u001b) 开头的转义序列（方向键等，含紧随的 CSI 字节）整体
+ * 作为一个 token；其余按 Unicode 码点逐个拆开（\r \n \t \x7f 等控制字符各自
+ * 成为独立 token，与普通字符一样能被后续的单键判断正确识别）。
+ */
+export function splitKeys(chunk: string): string[] {
+  const keys: string[] = [];
+  let i = 0;
+  while (i < chunk.length) {
+    if (chunk[i] === '\u001b') {
+      // CSI 序列：ESC [ <终结字节>；覆盖当前用到的 \u001b[A / \u001b[B 等方向键。
+      // 简化：这些序列固定 3 字符（ESC [ <字母>），足够覆盖当前场景。
+      if (chunk[i + 1] === '[') {
+        const end = Math.min(i + 3, chunk.length);
+        keys.push(chunk.slice(i, end));
+        i = end;
+      } else {
+        keys.push(chunk.slice(i, i + 1));
+        i += 1;
+      }
+      continue;
+    }
+    // 用 code point 遍历，避免把一个多字节字符（如中文、emoji）拆成半个乱码。
+    const codePoint = chunk.codePointAt(i)!;
+    const char = String.fromCodePoint(codePoint);
+    keys.push(char);
+    i += char.length;
+  }
+  return keys;
 }
 
 export function backspaceBuffer(buffer: string): string {
@@ -205,8 +246,8 @@ export function applyEnterKey(buffer: string): { submit: string } | { next: stri
 
 function geom(shell: ShellScreen | null): { rows: number; cols: number; pane: number } {
   return {
-    rows: shell?.termRows ?? process.stdout.rows ?? 24,
-    cols: shell?.termCols ?? process.stdout.columns ?? 80,
+    rows: positiveOr(shell?.termRows, positiveOr(process.stdout.rows, 24)),
+    cols: positiveOr(shell?.termCols, positiveOr(process.stdout.columns, 80)),
     pane: shell?.paneHeight ?? DEFAULT_INPUT_PANE_HEIGHT,
   };
 }
@@ -374,11 +415,12 @@ export async function readLiveLine(opts: {
     paintInput();
 
     return await new Promise<string>((resolve) => {
-      const onData = (chunk: string | Buffer) => {
-        const key = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      let settled = false;
+      const onKey = (key: string) => {
         if (!key) return;
 
         if (key === '\u0003') {
+          settled = true;
           cleanup();
           resolve(finish(CLI_INTERRUPT_VALUE));
           return;
@@ -410,6 +452,7 @@ export async function readLiveLine(opts: {
           if (menuOpen && items[menuIdx] && !buffer.includes('\n')) {
             out = items[menuIdx]!.insert;
           }
+          settled = true;
           cleanup();
           resolve(finish(out.replace(/^\s+/, '').replace(/\n+$/g, '')));
           return;
@@ -456,6 +499,26 @@ export async function readLiveLine(opts: {
           if (buffer.startsWith('/')) menuIdx = 0;
           paintInput();
           refreshMenu();
+        }
+      };
+
+      // 一次 'data' 事件可能携带多个逻辑按键合并后的 chunk（见 splitKeys 注释），
+      // 必须先拆分再逐个处理，否则混合了普通字符和控制字符的 chunk 会被整体
+      // 丢弃（既不匹配任何单键分支，也无法通过 isPrintableInput 校验）。
+      // 一旦某个 key 触发了 resolve（Enter 提交/Ctrl+C），说明这次 readLiveLine
+      // 调用已经结束；chunk 里排在它后面的字符属于用户下一次输入，用
+      // stdin.unshift() 塞回流里，交给下一次 readLiveLine 的监听器读取，
+      // 不能在本次循环里继续消费掉，否则这些字符会被静默丢弃。
+      const onData = (chunk: string | Buffer) => {
+        const raw = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        const keys = splitKeys(raw);
+        for (let idx = 0; idx < keys.length; idx++) {
+          if (settled) {
+            const rest = keys.slice(idx).join('');
+            if (rest) stdin.unshift(Buffer.from(rest, 'utf8'));
+            return;
+          }
+          onKey(keys[idx]!);
         }
       };
 

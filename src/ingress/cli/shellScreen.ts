@@ -27,6 +27,18 @@ export function visibleWidth(text: string): number {
   return displayWidth(text);
 }
 
+/**
+ * 返回 value（若为正数），否则返回 fallback。
+ *
+ * 用于 process.stdout.rows/columns：这两个值在部分终端环境下会上报为 0（而非
+ * undefined），例如 SSH 会话刚建立、某些伪终端实现。`value ?? fallback` 只在
+ * value 是 null/undefined 时才生效，0 会直接通过并导致布局计算（分区高度、
+ * 光标定位）全部失效，界面表现为静默无响应（无渲染、无报错）。
+ */
+export function positiveOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function truncateToCols(text: string, cols: number): string {
   if (cols < 8) return text;
   return truncateDisplay(text, cols);
@@ -109,8 +121,12 @@ export class ShellScreen {
   constructor(opts: ShellScreenOptions = {}) {
     this.docked = opts.docked ?? process.env['LWA_PLAIN_SHELL'] !== '1';
     this.inputPaneHeight = Math.max(1, opts.inputPaneHeight ?? DEFAULT_INPUT_PANE_HEIGHT);
-    this.rows = opts.rows ?? process.stdout.rows ?? 24;
-    this.cols = opts.cols ?? process.stdout.columns ?? 80;
+    // process.stdout.rows/columns 在某些终端环境下会短暂或持续上报为 0（而不是
+    // undefined），例如 SSH 会话刚建立、部分伪终端实现；`?? 24` 这种写法只在值是
+    // null/undefined 时才生效，0 会直接通过，导致后续所有布局计算（光标定位、
+    // 分区高度）失效，界面静默无响应。用 positiveOr() 同时防御 0 和 NaN。
+    this.rows = positiveOr(opts.rows, positiveOr(process.stdout.rows, 24));
+    this.cols = positiveOr(opts.cols, positiveOr(process.stdout.columns, 80));
     this.writeFn =
       opts.write ??
       ((s) => {
@@ -259,8 +275,8 @@ export class ShellScreen {
   enter(): void {
     if (this.active) return;
     this.active = true;
-    this.rows = process.stdout.rows ?? this.rows;
-    this.cols = process.stdout.columns ?? this.cols;
+    this.rows = positiveOr(process.stdout.rows, this.rows);
+    this.cols = positiveOr(process.stdout.columns, this.cols);
     this.bannerPrinted = false;
     if (!this.docked) return;
 
@@ -277,8 +293,8 @@ export class ShellScreen {
     this.welcomeActive = false;
     this.applyLayout();
     this.resizeHandler = () => {
-      this.rows = process.stdout.rows ?? this.rows;
-      this.cols = process.stdout.columns ?? this.cols;
+      this.rows = positiveOr(process.stdout.rows, this.rows);
+      this.cols = positiveOr(process.stdout.columns, this.cols);
       this.applyLayout();
       this.renderFooter(this.lastFooter);
       this.focusInput();

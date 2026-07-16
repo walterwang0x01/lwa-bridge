@@ -3,6 +3,7 @@ import {
   contentBottomRow,
   inputPaneTopRow,
   inputRow,
+  positiveOr,
   ShellScreen,
   statusRow,
   truncateToCols,
@@ -143,5 +144,34 @@ describe('shellScreen', () => {
     // 第 1 行应被清成空（贴底留白）
     expect(out).toContain('\x1b[1;1H\x1b[2K');
     screen.exit();
+  });
+});
+
+/**
+ * 复现：process.stdout.rows/columns 在部分终端环境下会上报为数字 0（而非
+ * undefined/null），例如某些伪终端实现、SSH 会话刚建立时。ShellScreen 构造
+ * 函数/enter()/resize 回调里原先用 `value ?? fallback`，这个写法只在 value 是
+ * null/undefined 时才生效——0 会直接通过并成为 this.rows/this.cols，导致所有
+ * 依赖行列数的布局计算（输入框位置、状态栏行、光标定位）全部失效，docked
+ * 模式表现为界面完全无响应（截图现象：thinking 卡住不动，其实是从未正确渲染
+ * 也从未正确接收按键）。positiveOr 同时防御 0、NaN 和 undefined/null。
+ */
+describe('positiveOr', () => {
+  it('returns the value when it is a positive finite number', () => {
+    expect(positiveOr(24, 999)).toBe(24);
+    expect(positiveOr(1, 999)).toBe(1);
+  });
+
+  it('falls back when the value is 0 (not just null/undefined)', () => {
+    expect(positiveOr(0, 24)).toBe(24);
+  });
+
+  it('falls back when the value is undefined', () => {
+    expect(positiveOr(undefined, 80)).toBe(80);
+  });
+
+  it('falls back when the value is NaN or negative', () => {
+    expect(positiveOr(Number.NaN, 24)).toBe(24);
+    expect(positiveOr(-5, 24)).toBe(24);
   });
 });

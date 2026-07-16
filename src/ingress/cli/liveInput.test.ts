@@ -1,3 +1,45 @@
+/**
+ * 复现：docked（raw mode）模式下，终端/pty 会把多个按键合并进同一次 stdin
+ * 'data' 事件（例如用户快速输入 "hi" 后立刻回车，到达时可能是整块 "hi\r"）。
+ * 旧实现对整个 chunk 做单一按键的精确匹配，遇到混合了普通字符和控制字符的
+ * chunk（如 "hi\r"）时既不匹配任何特殊键分支，也无法通过 isPrintableInput
+ * 校验，导致整个 chunk 被静默丢弃——表现为用户提交消息后界面完全无响应
+ * （截图现象：thinking 都不出现，因为回车本身都没被处理到）。
+ * splitKeys 把合并 chunk 拆成独立的逻辑按键，交给现有的单键处理逻辑逐个处理。
+ */
+describe('splitKeys', () => {
+  it('splits a plain-text-then-enter chunk into individual keys', () => {
+    expect(splitKeys('hi\r')).toEqual(['h', 'i', '\r']);
+  });
+
+  it('keeps a lone control character as a single key', () => {
+    expect(splitKeys('\r')).toEqual(['\r']);
+    expect(splitKeys('\u0003')).toEqual(['\u0003']);
+  });
+
+  it('keeps a CSI arrow-key escape sequence as one token, not split byte-by-byte', () => {
+    expect(splitKeys('\u001b[A')).toEqual(['\u001b[A']);
+    expect(splitKeys('\u001b[B')).toEqual(['\u001b[B']);
+  });
+
+  it('handles an arrow key immediately followed by plain text in the same chunk', () => {
+    expect(splitKeys('\u001b[Axy')).toEqual(['\u001b[A', 'x', 'y']);
+  });
+
+  it('does not split a multi-byte / surrogate-pair character (CJK, emoji)', () => {
+    expect(splitKeys('你好')).toEqual(['你', '好']);
+    expect(splitKeys('😀a')).toEqual(['😀', 'a']);
+  });
+
+  it('splits a backspace mixed into a text chunk', () => {
+    expect(splitKeys('ab\x7f')).toEqual(['a', 'b', '\x7f']);
+  });
+
+  it('returns an empty array for an empty chunk', () => {
+    expect(splitKeys('')).toEqual([]);
+  });
+});
+
 import { describe, expect, it } from 'vitest';
 import {
   backspaceBuffer,
@@ -9,6 +51,7 @@ import {
   isPrintableInput,
   readLiveLine,
   simulateLiveInputKeys,
+  splitKeys,
   wrapInputPane,
 } from './liveInput.js';
 import { contentBottomRow, inputPaneTopRow } from './shellScreen.js';
