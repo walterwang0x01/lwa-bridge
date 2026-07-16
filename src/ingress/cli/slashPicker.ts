@@ -144,6 +144,10 @@ export async function pickFromList(opts: {
   interact.pauseReadline?.();
   const shell = getActiveShell();
   shell?.suspendChromeRepaint(true);
+  // 挂起内容重绘摄入：pickFromList 用 writePassthrough 直接画菜单，不经过 menuOverlay，
+  // 若渲染期间任何异步写入触发了 ShellScreen 的 30ms 防抖重绘，会把菜单整体覆盖清空
+  // （表现为"菜单有时不显示"）。挂起后台摄入即可避免这次竞态。
+  shell?.suspendIngest(true);
   const stdin = process.stdin;
   const wasRaw = stdin.isRaw;
   let idx = 0;
@@ -289,6 +293,7 @@ export async function pickFromList(opts: {
     });
   } finally {
     shell?.suspendChromeRepaint(false);
+    shell?.suspendIngest(false);
     interact.resumeReadline?.();
     shell?.afterInput();
   }

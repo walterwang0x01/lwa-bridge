@@ -230,4 +230,31 @@ describe('SessionStore', () => {
       expect(s.currentCwd).toBe('/cwd');
     });
   });
+
+  describe('clearConversationRuntimeProfile', () => {
+    it('clears the sticky profile AND the last-used engine cache (Auto status bar bug)', async () => {
+      // 模拟：先手动选了一个引擎并跑完一轮 turn（写入 lastUsedRuntimeProfile/lastUsedModel）
+      await store.get('chat_1', '/proj');
+      await store.setConversationRuntimeProfile('chat_1', 'openai-strong', '/proj');
+      await store.setLastUsedRuntime('chat_1', 'openai-strong', 'claude-opus-4-8', '/proj');
+
+      let session = await store.get('chat_1', '/proj');
+      expect(session.runtimeProfile).toBe('openai-strong');
+      expect(session.lastUsedRuntimeProfile).toBe('openai-strong');
+      expect(session.lastUsedModel).toBe('claude-opus-4-8');
+
+      // 用户切回 Auto：粘性 profile 和缓存的旧引擎名都应被清掉，
+      // 否则状态栏会在下一条消息真正跑完之前继续显示旧引擎（Auto→openai-strong）。
+      await store.clearConversationRuntimeProfile('chat_1');
+
+      session = await store.get('chat_1', '/proj');
+      expect(session.runtimeProfile).toBeUndefined();
+      expect(session.lastUsedRuntimeProfile).toBeUndefined();
+      expect(session.lastUsedModel).toBeUndefined();
+    });
+
+    it('is a no-op for a chat that has never been seen', async () => {
+      await expect(store.clearConversationRuntimeProfile('never_seen')).resolves.toBeUndefined();
+    });
+  });
 });

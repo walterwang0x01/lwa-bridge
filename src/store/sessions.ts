@@ -294,13 +294,16 @@ export class SessionStore {
     await this.setRuntimeProfile(conversationId, profileName, defaultCwd);
   }
 
-  /** 清除会话粘性 runtime（恢复 auto 路由）。 */
+  /** 清除会话粘性 runtime（恢复 auto 路由）；同时清掉 lastUsedRuntimeProfile 缓存，
+   *  避免状态栏在下一条消息真正跑完之前，继续显示切换前的旧引擎名。 */
   async clearConversationRuntimeProfile(conversationId: string): Promise<void> {
     await withLock(() => {
       const data = readFile();
       const session = data.chats[conversationId];
       if (!session) return;
       delete session.runtimeProfile;
+      delete session.lastUsedRuntimeProfile;
+      delete session.lastUsedModel;
       session.lastActiveAt = Date.now();
       writeFile(data);
     });
