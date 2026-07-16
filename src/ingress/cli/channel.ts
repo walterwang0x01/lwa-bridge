@@ -47,6 +47,41 @@ export function plainFooterKey(foot: {
   return `${foot.primary}\u0000${foot.secondary}\u0000${foot.approval ?? ''}`;
 }
 
+/**
+ * 单行输入的先进先出队列，配合 readline 的持久 'line' 监听器使用。
+ *
+ * 背景：readline 的 `question()` 内部用一次性的 `once('line', …)` 监听器接收输入；
+ * 若用户在上一条消息处理期间（onMessage 的 await 阶段）敲了 Enter 提交，此时没有
+ * 任何 question() 在等待，这个 'line' 事件会在无人监听的情况下触发并永久丢失
+ * （这不同于 rl.pause()/process.stdin.pause()，那两者要么不确定丢字符，要么在
+ * resume 后立刻同步触发 'line'，同样可能发生在无人监听的窗口里）。
+ * 用一个持久监听器把每一行都先交给这个队列：push() 收到行时，若已有消费者在
+ * take() 等待就直接唤醒，否则先存入队列；take() 被调用时，队列非空就立刻出队，
+ * 否则挂起等待下一次 push()。这样无论用户何时提交，输入都不会丢失。
+ */
+export class LineQueue {
+  private readonly pending: string[] = [];
+  private waiter: ((line: string) => void) | null = null;
+
+  push(line: string): void {
+    if (this.waiter) {
+      const waiter = this.waiter;
+      this.waiter = null;
+      waiter(line);
+    } else {
+      this.pending.push(line);
+    }
+  }
+
+  take(): Promise<string> {
+    const queued = this.pending.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    return new Promise((resolve) => {
+      this.waiter = resolve;
+    });
+  }
+}
+
 export class CliIngressChannel implements IngressChannel {
   readonly id = 'cli' as const;
   readonly port: IngressPort;
@@ -62,9 +97,12 @@ export class CliIngressChannel implements IngressChannel {
   private shell: ShellScreen | null = null;
   /** 非 docked 兜底路径下缓存的上一次状态栏文本，避免每轮循环无变化也重复追加打印。 */
   private lastPlainFooterKey: string | null = null;
+  /** 见 LineQueue 类注释：取代 rl.question() 的一次性监听，避免输入在处理期间丢失。 */
+  private readonly lineQueue = new LineQueue();
 
   constructor() {
     this.rl = createInterface({ input: process.stdin, output: process.stdout });
+    this.rl.on('line', (line) => this.lineQueue.push(line));
     this.port = {
       channel: 'cli',
       getCachedBotPrincipalId: () => this.botPrincipalId,
@@ -124,6 +162,18 @@ export class CliIngressChannel implements IngressChannel {
         detail: 'cli ingress has no audio attachments',
       }),
     };
+  }
+
+  /**
+   * 取代 `this.rl.question(prompt)`：与构造函数里注册的持久 'line' 监听器配合，
+   * 保证消息处理期间用户提交的输入不会因为"当时没有 question() 在等待"而丢失。
+   * 队列里已有行时直接出队（不需要重新打印 prompt，因为这一行本来就已经在
+   * 之前的某个时刻回显在终端上了）；否则打印 prompt 并挂起等待下一行。
+   */
+  private readLine(prompt: string): Promise<string> {
+    const result = this.lineQueue.take();
+    process.stdout.write(prompt);
+    return result;
   }
 
   async startInbound(handlers: IngressInboundHandlers): Promise<void> {
@@ -221,7 +271,7 @@ export class CliIngressChannel implements IngressChannel {
     setCliInteract({
       ask: async (prompt) => {
         if (this.shell?.isDocked) this.shell.focusInput();
-        const ans = await this.rl.question(prompt);
+        const ans = await this.readLine(prompt);
         if (this.shell?.isDocked) this.shell.afterInput();
         return ans;
       },
@@ -237,7 +287,7 @@ export class CliIngressChannel implements IngressChannel {
         let text = await readLiveLine({
           shell: this.shell,
           mode,
-          fallbackAsk: (p) => this.rl.question(p),
+          fallbackAsk: (p) => this.readLine(p),
           pauseReadline: () => this.rl.pause(),
           resumeReadline: () => this.rl.resume(),
         });
