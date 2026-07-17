@@ -9,7 +9,7 @@ import { formatCliFooter, type CliStatusSnapshot } from './statusBar.js';
 import { setActiveShell, ShellScreen } from './shellScreen.js';
 import { formatShellStatusBlock } from './theme.js';
 import { pickSlashCommand, setCliInteract } from './slashPicker.js';
-import { readLiveLine } from './liveInput.js';
+import { readLiveLine, suppressInputDuring } from './liveInput.js';
 import type {
   IngressChannel,
   IngressInboundHandlers,
@@ -318,7 +318,18 @@ export class CliIngressChannel implements IngressChannel {
         // 提交后先打一行空行分隔，让"用户输入 → 处理中 → 回复"这一轮有清晰起点，
         // 避免处理反馈和上一轮内容、底部状态栏文字混在一起显得毫无响应。
         if (!this.shell?.isDocked) console.log('');
-        await this.handlers!.onMessage(msg);
+        if (this.shell?.isDocked) {
+          // docked 模式：处理期间保持 raw mode 并吞掉按键回显，避免用户在等待
+          // 期间的按键被终端默认行为直接写到 thinking 动画所在的屏幕位置，与其
+          // 交织产生拼接乱码（见 suppressInputDuring 注释）。raw mode 下 Ctrl+C
+          // 不会自动转成 SIGINT（终端默认行为被禁用），手动触发一次以复用
+          // bootstrap.ts 里已经注册的正常退出/清理流程。
+          await suppressInputDuring(async () => this.handlers!.onMessage(msg), {
+            onInterrupt: () => process.kill(process.pid, 'SIGINT'),
+          });
+        } else {
+          await this.handlers!.onMessage(msg);
+        }
       }
     } finally {
       setCliInteract(null);

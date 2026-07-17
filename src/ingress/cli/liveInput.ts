@@ -161,6 +161,64 @@ const INPUT_CONT_INDENT = '  ';
 export const INPUT_PLACEHOLDER = 'Ask LWA to build, debug, or explain…';
 export const CLI_INTERRUPT_VALUE = '.exit';
 
+/**
+ * docked 模式下，在 awaited 的异步任务（如 onMessage 处理一轮对话）执行期间
+ * 抑制键盘输入的视觉污染。
+ *
+ * 背景：readLiveLine 每次返回时会把 stdin 还原成进入时的原始 raw 状态——第一次
+ * 调用时这个原始状态是 false（程序刚启动尚未进入过 raw mode），所以每次用户
+ * 提交完消息、readLiveLine 返回后，stdin 会被切回非-raw 模式。而 onMessage 的
+ * await 阶段（可能长达数十秒）里，stdin 一直是这个非-raw 状态：终端本身会对
+ * 用户按键做默认的行缓冲和回显，这些回显会直接写到当前光标位置——也就是
+ * CliTurnView 用 \r 覆写的 thinking 动画那一行附近，与 thinking 内容交织，
+ * 产生 "thinking…> hi> > hi>" 这种拼接现象（用户在等待期间习惯性按键触发）。
+ *
+ * 修复：在任务执行期间主动进入 raw mode 并吞掉除 Ctrl+C 外的所有按键（不回显、
+ * 不缓冲、不产生任何终端输出），任务结束后还原成调用前的 raw 状态。Ctrl+C 仍
+ * 能通过 onInterrupt 回调让调用方决定如何处理（如取消当前任务）。
+ */
+export async function suppressInputDuring<T>(
+  task: () => Promise<T>,
+  opts?: { onInterrupt?: () => void },
+): Promise<T> {
+  const stdin = process.stdin;
+  const canRaw = typeof stdin.setRawMode === 'function';
+  if (!canRaw) return task();
+
+  const wasRaw = stdin.isRaw;
+  const wasEncoding = typeof stdin.setEncoding === 'function';
+  const onData = (chunk: string | Buffer) => {
+    const raw = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (raw.includes('\u0003')) opts?.onInterrupt?.();
+    // 其余按键（普通字符、方向键、Enter 等）在任务执行期间被静默吞掉：既不
+    // 回显、也不缓冲进任何队列——用户应等当前这一轮结束后再输入下一条。
+  };
+
+  // this.rl（readline.Interface）从程序启动起就持续监听 stdin 的 'keypress'
+  // 事件（由 emitKeypressEvents 内部挂载），即使这里临时切到 raw mode，它自身
+  // 的按键处理器（_ttyWrite）依然会被同步触发并按它自己的（非-raw）逻辑回显
+  // 字符——这正是拼接乱码的来源。任务执行期间临时移除所有 'keypress' 监听器，
+  // 只留下我们自己的 'data' 处理器，结束后原样恢复。
+  const savedKeypressListeners = stdin.listeners('keypress');
+  for (const l of savedKeypressListeners) stdin.removeListener('keypress', l as never);
+
+  try {
+    if (wasEncoding) stdin.setEncoding('utf8');
+    stdin.on('data', onData);
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    return await task();
+  } finally {
+    stdin.off('data', onData);
+    for (const l of savedKeypressListeners) stdin.on('keypress', l as never);
+    try {
+      stdin.setRawMode?.(wasRaw ?? false);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /** 把 wrapped 行转成可绘制文本（仅首行带 prompt，续行缩进）。 */
 export function formatInputPaneDisplayLine(
   rawLine: string | undefined,
@@ -290,7 +348,6 @@ export async function readLiveLine(opts: {
     }
   }
 
-  opts.pauseReadline?.();
   const shell = opts.shell!;
   shell.suspendChromeRepaint(true);
   shell.suspendIngest(true);
@@ -546,7 +603,5 @@ export async function readLiveLine(opts: {
     shell.suspendIngest(false);
     shell.suspendChromeRepaint(false);
     throw e;
-  } finally {
-    opts.resumeReadline?.();
   }
 }

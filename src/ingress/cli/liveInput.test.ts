@@ -40,7 +40,7 @@ describe('splitKeys', () => {
   });
 });
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   backspaceBuffer,
   buildInputPanePaint,
@@ -52,6 +52,7 @@ import {
   readLiveLine,
   simulateLiveInputKeys,
   splitKeys,
+  suppressInputDuring,
   wrapInputPane,
 } from './liveInput.js';
 import { contentBottomRow, inputPaneTopRow } from './shellScreen.js';
@@ -234,5 +235,119 @@ describe('readLiveLine fallback prompt (non-raw terminals)', () => {
       fallbackAsk: async () => '   /model\n\n',
     });
     expect(result).toBe('/model');
+  });
+});
+
+/**
+ * 复现（docked 模式）：readLiveLine 每次结束时把 stdin 还原成调用前的原始 raw
+ * 状态（首次是 false），channel.ts 的 while 循环从 readLiveLine 返回到下一次
+ * 调用之间要 await onMessage()（可能数十秒）。这段时间 stdin 处于非-raw 状态，
+ * 终端会对用户按键做默认行缓冲和回显，直接写到 CliTurnView 用 \r 覆写的
+ * thinking 动画所在行，产生 "thinking…> hi> > hi>" 拼接（截图复现的真实成因）。
+ * suppressInputDuring 在任务执行期间保持 raw mode 并吞掉除 Ctrl+C 外的按键，
+ * 同时临时移除 readline.Interface 挂在 stdin 上的 'keypress' 监听器（否则它
+ * 会在 resume() 时抢先按非-raw 逻辑处理并回显第一个按键）。
+ */
+describe('suppressInputDuring', () => {
+  function mockStdin(overrides: Partial<Record<string, unknown>> = {}) {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const stdin = {
+      isRaw: false,
+      setRawMode: vi.fn((v: boolean) => {
+        stdin.isRaw = v;
+      }),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        arr.push(fn);
+        listeners.set(event, arr);
+        return stdin;
+      }),
+      off: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          arr.filter((f) => f !== fn),
+        );
+        return stdin;
+      }),
+      removeListener: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          arr.filter((f) => f !== fn),
+        );
+        return stdin;
+      }),
+      listeners: vi.fn((event: string) => [...(listeners.get(event) ?? [])]),
+      emit(event: string, ...args: unknown[]) {
+        for (const fn of listeners.get(event) ?? []) fn(...args);
+      },
+      ...overrides,
+    };
+    return stdin;
+  }
+
+  it('sets raw mode true during the task and restores the prior state after', async () => {
+    const stdin = mockStdin();
+    vi.stubGlobal('process', { ...process, stdin, pid: process.pid, kill: vi.fn() });
+    const order: string[] = [];
+    await suppressInputDuring(async () => {
+      order.push('task');
+      expect(stdin.isRaw).toBe(true);
+    });
+    expect(order).toEqual(['task']);
+    expect(stdin.isRaw).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('removes keypress listeners during the task and restores them after', async () => {
+    const keypressHandler = vi.fn();
+    const stdin = mockStdin();
+    stdin.on('keypress', keypressHandler);
+    vi.stubGlobal('process', { ...process, stdin, pid: process.pid, kill: vi.fn() });
+
+    let keypressCountDuringTask = -1;
+    await suppressInputDuring(async () => {
+      keypressCountDuringTask = stdin.listeners('keypress').length;
+    });
+    expect(keypressCountDuringTask).toBe(0);
+    expect(stdin.listeners('keypress')).toEqual([keypressHandler]);
+    vi.unstubAllGlobals();
+  });
+
+  it('calls onInterrupt when Ctrl+C is received during the task, without resolving early', async () => {
+    const stdin = mockStdin();
+    vi.stubGlobal('process', { ...process, stdin, pid: process.pid, kill: vi.fn() });
+    const onInterrupt = vi.fn();
+    let resolveTask: (() => void) | undefined;
+    const taskPromise = suppressInputDuring(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveTask = resolve;
+        }),
+      { onInterrupt },
+    );
+    stdin.emit('data', '\u0003');
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    resolveTask?.();
+    await taskPromise;
+    vi.unstubAllGlobals();
+  });
+
+  it('does not call onInterrupt for ordinary keys, and swallows them silently', async () => {
+    const stdin = mockStdin();
+    vi.stubGlobal('process', { ...process, stdin, pid: process.pid, kill: vi.fn() });
+    const onInterrupt = vi.fn();
+    await suppressInputDuring(
+      async () => {
+        stdin.emit('data', 'hi');
+        stdin.emit('data', '\r');
+      },
+      { onInterrupt },
+    );
+    expect(onInterrupt).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
