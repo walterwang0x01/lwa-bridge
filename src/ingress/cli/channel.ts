@@ -7,7 +7,7 @@ import { CLI_NAME } from '../../lib/branding.js';
 import { cardToPlainText, cleanCliText, formatCliHelp } from './textPresenter.js';
 import { formatCliFooter, type CliStatusSnapshot } from './statusBar.js';
 import { setActiveShell, ShellScreen } from './shellScreen.js';
-import { formatShellStatusBlock } from './theme.js';
+import { formatShellStatusBlock, shellPrompt } from './theme.js';
 import { pickSlashCommand, setCliInteract } from './slashPicker.js';
 import { readLiveLine, suppressInputDuring } from './liveInput.js';
 import type {
@@ -319,6 +319,11 @@ export class CliIngressChannel implements IngressChannel {
         // 避免处理反馈和上一轮内容、底部状态栏文字混在一起显得毫无响应。
         if (!this.shell?.isDocked) console.log('');
         if (this.shell?.isDocked) {
+          // 提交后立刻把用户刚输入的内容写进对话历史区（transcript）：输入框
+          // 本身在提交后会被清空，若不单独回显，用户滚动查看历史时会发现自己
+          // 说过的话完全消失，只剩 AI 的回复，看起来像"没有对话记录"。
+          this.shell.focusContent();
+          this.shell.appendBlock(`${shellPrompt()}${text}`);
           // docked 模式：处理期间保持 raw mode 并吞掉按键回显，避免用户在等待
           // 期间的按键被终端默认行为直接写到 thinking 动画所在的屏幕位置，与其
           // 交织产生拼接乱码（见 suppressInputDuring 注释）。raw mode 下 Ctrl+C
