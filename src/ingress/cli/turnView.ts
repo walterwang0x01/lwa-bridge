@@ -82,8 +82,20 @@ export class CliTurnView {
 
     if (ev.kind === 'message' && ev.text) {
       this.clearThinkingLine();
+      // 工具调用可能穿插在文字回复的任意位置（不只是第一段消息之前——AI 也
+      // 可能"说一段话 → 调工具 → 接着再说"）。ToolPanel 在 compact 模式下用
+      // \r 原地刷新 running/done 状态，最后一行不带换行（等 end() 时统一
+      // finish() 提交完整摘要）。只要这行还没被收尾，任何后续消息文字到达前
+      // 都要先补一次换行，否则会跟它拼在同一行
+      // （如 "tools (2 done): tool · tool我是..."）。不用 finish()：那会
+      // 连带打印完整摘要，且 finish() 不清空条目列表，end() 时会重复打印。
+      const brokeToolLine = this.toolPanel.breakOpenLine();
       if (!this.messageStarted) {
         this.messageStarted = true;
+        this.write(`${turnRail()} `);
+      } else if (brokeToolLine) {
+        // 已经是第二段（及以后）消息：换行让出工具行之后，这一行本身没有
+        // 消息轨道前缀，补上，否则视觉上像是接在工具摘要后面的裸文本。
         this.write(`${turnRail()} `);
       }
       this.messageChars += ev.text.length;

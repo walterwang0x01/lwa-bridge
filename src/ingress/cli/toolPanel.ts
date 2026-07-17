@@ -142,6 +142,20 @@ export class ToolPanel {
     return line;
   }
 
+  /**
+   * 若当前有未提交的 running/done 状态行（compact 模式下用 \r 原地刷新，不带
+   * 换行），补一次换行让它收尾，不打印完整摘要、不清空条目列表——跟 finish()
+   * 的区别：finish() 是整个 turn 结束时的最终提交（打印摘要），这个方法只是
+   * "工具调用穿插在文字回复之前，先把当前行让出来"，后续仍可能有更多工具事件。
+   * 返回是否真的写了换行（调用方据此决定要不要重新加消息轨道前缀）。
+   */
+  breakOpenLine(): boolean {
+    if (!this.runningLineWritten) return false;
+    this.write('\n');
+    this.runningLineWritten = false;
+    return true;
+  }
+
   get count(): number {
     return this.entries.size;
   }

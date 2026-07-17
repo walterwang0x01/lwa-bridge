@@ -83,4 +83,54 @@ describe('toolPanel', () => {
     panel.finish();
     expect(chunks.join('')).toMatch(/\n$/);
   });
+
+  /**
+   * 复现：截图里 "tools (2 done): tool · tool我是 **LWA**..." ——工具调用穿插
+   * 在文字回复之前（AI 先调用工具、再开始说话）时，compact 模式下 running/
+   * done 状态行用 \r 原地刷新、不带换行（等 finish() 才统一提交换行）。若消息
+   * 事件到达时直接开始写正文，会跟这行未提交的内容拼在一起。breakOpenLine()
+   * 让当前行"定格"换行，不打印完整摘要、不清空条目，跟 finish() 的语义不同。
+   */
+  it('breakOpenLine commits the current running/done line without printing the final summary', () => {
+    const chunks: string[] = [];
+    const panel = new ToolPanel({ compact: true, write: (s) => chunks.push(s) });
+    panel.onEvent({
+      kind: 'tool',
+      sessionId: 's',
+      toolCallId: 't1',
+      name: 'Bash',
+      status: 'completed',
+      raw: {},
+    });
+    expect(panel.breakOpenLine()).toBe(true);
+    const out = chunks.join('');
+    expect(out).toMatch(/\n$/);
+    // 不是最终汇总格式（不带 ▸ 符号），只是把 running/done 行收尾。
+    expect(out).not.toContain('▸');
+  });
+
+  it('breakOpenLine is a no-op when there is no open line', () => {
+    const chunks: string[] = [];
+    const panel = new ToolPanel({ compact: true, write: (s) => chunks.push(s) });
+    expect(panel.breakOpenLine()).toBe(false);
+    expect(chunks.join('')).toBe('');
+  });
+
+  it('finish() after breakOpenLine still prints the final summary once', () => {
+    const chunks: string[] = [];
+    const panel = new ToolPanel({ compact: true, write: (s) => chunks.push(s) });
+    panel.onEvent({
+      kind: 'tool',
+      sessionId: 's',
+      toolCallId: 't1',
+      name: 'Bash',
+      status: 'completed',
+      raw: {},
+    });
+    panel.breakOpenLine();
+    panel.finish();
+    const out = chunks.join('');
+    const summaryOccurrences = out.split('▸').length - 1;
+    expect(summaryOccurrences).toBe(1);
+  });
 });
