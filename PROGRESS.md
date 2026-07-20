@@ -153,6 +153,98 @@
 
 ## 当前所处阶段
 
+任务 #1-#3（第一层稳定性修复）已完成，见上面的问题清单和已修复列表。
+任务 #4（conduit 显性化设计）**暂停** —— 讨论后确认在设计"怎么让更多人发现
+conduit"之前，应该先验证"conduit 核心链路本身现在到底能不能用"，顺序不能
+反。已完成这一步的真实验证：
+
+### conduit 核心链路真实验证结果（2026-07-20）
+
+**结论：核心链路（spec/task → Coordinator → Implementor(kiro-cli-acp) →
+Verifier(static+dynamic) → PASSED）真实可用**，用 `examples/02_civ_hello.py`
+跑通（约 25 秒，真实调用一次本机 kiro-cli，写 `calc.py` + `test_calc.py`，
+`pytest` 校验通过，退出码 0，输出：
+`Task: add-function / Passed: True / Attempts: 1 / static ✓ / dynamic ✓`）。
+
+**验证过程中发现并修复的真实环境问题（跟代码逻辑无关，是这台机器上的环境
+损坏）**：`lwa-conduit` 项目的 `.venv` 虚拟环境里，editable install 指向的是
+一个已经不存在的旧路径 `/Users/administrator/PycharmProjects/kiro-conduit`
+（项目改名前的目录，早就删掉了），导致 `lwa-conduit` 命令完全不可用
+（`command not found`），`bridge` 侵入 conduit 时用的 `conduitBin()` 默认值
+`lwa-conduit` 在这台机器上实际调用会失败。**修复**：
+`.venv/bin/python3 -m pip install -e '.[dev]'` 重新以当前目录 editable 安装，
+命令立刻恢复可用。这不是代码 bug，是本机环境的一次性问题，**不需要改任何
+项目代码**，但值得记一笔：如果之后 bridge 侵入 conduit 报"not found"，先检查
+这个虚拟环境是否又坏了（`.venv/bin/lwa-conduit --help` 能不能跑），不要
+直接怀疑 bridge 侵入逻辑。
+
+**其他观察**：`lwa-conduit run --help` 的参数列表（`--workspace`、
+`--events {none,ndjson}`、`--merge` 等）跟 `dispatcher.ts` 里
+`runConduitStreaming`/`handleConduitCmd` 的真实调用方式**完全对齐**，接口没有
+漂移。`status` 不是 conduit 自己的子命令（`run`/`plan`/`report` 才是），
+`bridge` 的 `/conduit status` 是本地直接读 `.lwa-conduit/run-state.json`
+文件，这是设计如此，不是遗漏。
+
+**下一步（真正的 #4）**：核心链路验证通过，现在可以回到"要不要做显性化、
+往哪个方向做"这个产品决策——用户还没有选 A/B/C 方向，等用户确认后再动手。
+不要在没有明确选择前先设计/实现任何一个方向。
+
+### #4 进展：用户选了 C（分步引导 + 主动检测建议），已完成分步引导部分
+
+**已完成并真实验证（2026-07-20）**：
+
+1. `/conduit`（无参数）改成三态分步引导：检测 cwd 下 `.lwa-conduit/run-state.json`
+   （跑过 run）→ `.conduit-plan/dag.yaml`（plan 过没 run）→ 都没有（从未 plan）
+   三种状态，给不同的下一步提示，不再是每次都显示同一段静态说明。三态都用真实
+   pty 测试逐一验证过。
+
+2. **意外发现并修复了一个比"显性化"更严重的真实 bug**：用真实 `lwa-conduit`
+   CLI（不是 mock）跑通 `/conduit run` 时发现，`--workspace` 参数之前直接传
+   `cwd`（项目根目录），但 `/conduit plan` 默认把 `dag.yaml` 产出到
+   `<cwd>/.conduit-plan/dag.yaml`——**任何用户完全照着官方提示的正常流程
+   （plan → run）操作，run 都会失败**，报 "no dag.yaml in workspace dir"。
+   这条核心链路本身是断的，之前没被发现是因为 README 的 demo 走的是 Python
+   直接调用内部类（`Coordinator`/`Implementor`），不是真实的 CLI 命令链。
+   修复：新增 `resolveConduitWorkspaceDir()`（`src/conduit/summary.ts`），
+   自动判断 dag.yaml 实际所在目录，同时显式传 `--base-repo cwd`（因为
+   `--base-repo` 默认值是 workspace 目录，两者不一致后必须显式指定）；
+   找不到 dag.yaml 时提前给出`/conduit plan`引导，不让请求打到子进程才报错。
+
+3. 新增 `/conduit run --resume` / `/conduit run --fresh`（`src/commands/parse.ts`
+   的 `resumeMode` 字段），对接 lwa-conduit CLI 自带的"裸重跑守卫"（发现上次
+   有已完成任务、但没传这两个参数时会拒绝执行）。之前 bridge 完全没识别这个
+   场景，用户看到的是"退出码 1，部分任务可能失败"这种跟真实情况（根本没跑）
+   不符的通用报错。新增 `isBareRerunGuardResult()` 识别这个场景，渲染专门的
+   引导卡片（"检测到上次未完成的运行" + 明确的 --resume/--fresh/status 三选）。
+
+**真实端到端验证**（用装好的 `.venv/bin/lwa-conduit` + 真实 git 仓库 + 真实
+`dag.yaml` + 真实 `run-state.json`，通过 `LWA_CONDUIT_BIN` 环境变量指向真实
+二进制）：
+- 三态引导：干净目录 → 提示 plan；已 plan → 提示 run（含真实路径）；已 run →
+  提示 status。全部用真实 pty 抓到的输出核对过文案。
+- `/conduit run`（无参数，有未完成进度）：真实触发裸重跑守卫，渲染出设计好的
+  友好卡片，不是原来那种"编排结束（有失败项）"的误导性文案。
+- `/conduit run --resume`：真实绕过守卫，进入实际执行阶段（后续因为测试数据
+  本身不完整——`run-state.json` 里声称存在的分支从未被真实创建过——报了
+  git worktree 错误，这是我测试环境搭建的问题，不是这次改动的 bug，不影响
+  已验证的"--resume 参数被正确传递、守卫被正确绕过"这个结论）。
+
+**已提交的文件**：`src/conduit/summary.ts`（新增 `findConduitDagPath` /
+`resolveConduitWorkspaceDir` / `isBareRerunGuardResult`）、
+`src/conduit/summary.test.ts`（13 个测试）、`src/commands/parse.ts`（`resumeMode`
+字段）、`src/commands/parse.test.ts`（4 个新测试）、`src/core/dispatcher.ts`
+（三态引导 + workspace 目录修复 + 裸重跑守卫识别）。
+
+**还没做的**：
+- 方向 A（主动检测"这条消息适合并行拆分"并建议用户试试 `/conduit plan`）
+  还没开始——这个涉及主观判断，容易误判/打扰用户，需要更谨慎地设计触发规则
+  （目前想法：只在消息里明显列出 3 个以上独立子任务时触发一次，不重复打断）。
+- `.lwa-conduit`/`.kiro-conduit`/`.conduit-plan` 三个约定目录名同时存在，
+  长期看应该统一（`.kiro-conduit` 是改名前的遗留兼容），但不是这次范围内的事，
+  记一笔，不要现在动。
+
+## 之前的阶段（已过时，仅供参考）
+
 **尚未开始执行**——刚建立本记录文件和任务清单，下一步是任务 #2：
 重新梳理并确认上面"未修复问题清单"里第 1 条的真实状态。
 

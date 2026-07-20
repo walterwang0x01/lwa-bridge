@@ -740,6 +740,38 @@ describe('/conduit', () => {
     expect(parseCommand('/conduit run merge')).toEqual({ kind: 'conduit', mode: 'run-merge' });
   });
 
+  it('/conduit run --resume → run with resumeMode resume', () => {
+    expect(parseCommand('/conduit run --resume')).toEqual({
+      kind: 'conduit',
+      mode: 'run',
+      resumeMode: 'resume',
+    });
+  });
+
+  it('/conduit run resume → run with resumeMode resume', () => {
+    expect(parseCommand('/conduit run resume')).toEqual({
+      kind: 'conduit',
+      mode: 'run',
+      resumeMode: 'resume',
+    });
+  });
+
+  it('/conduit run --fresh → run with resumeMode fresh', () => {
+    expect(parseCommand('/conduit run --fresh')).toEqual({
+      kind: 'conduit',
+      mode: 'run',
+      resumeMode: 'fresh',
+    });
+  });
+
+  it('/conduit run fresh → run with resumeMode fresh', () => {
+    expect(parseCommand('/conduit run fresh')).toEqual({
+      kind: 'conduit',
+      mode: 'run',
+      resumeMode: 'fresh',
+    });
+  });
+
   it('/conduit plan specs/my-feature.md → plan', () => {
     expect(parseCommand('/conduit plan specs/my-feature.md')).toEqual({
       kind: 'conduit',

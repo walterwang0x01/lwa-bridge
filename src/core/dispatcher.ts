@@ -74,7 +74,14 @@ import {
 import { ChatPipeline } from './pipeline.js';
 import { runConduit, type ConduitResult } from '../conduit/runner.js';
 import { formatProgressText } from '../conduit/progress.js';
-import { formatRunSummary, summarizeRunState } from '../conduit/summary.js';
+import {
+  findConduitDagPath,
+  formatRunSummary,
+  isBareRerunGuardResult,
+  resolveConduitDir,
+  resolveConduitWorkspaceDir,
+  summarizeRunState,
+} from '../conduit/summary.js';
 import { sharedConduitRegistry } from '../conduit/registry.js';
 import { listProcesses, findProcess } from '../daemon/registry.js';
 import {
@@ -3914,13 +3921,38 @@ export class Dispatcher {
     cwd: string,
   ): Promise<void> {
     if (cmd.mode === 'help') {
+      // 分步引导：根据 cwd 下已有的产出物，判断用户走到了哪一步，给不同的
+      // 下一步建议，而不是每次都显示同一段静态说明——新用户第一次看到时
+      // 不知道从哪开始，跑过一半的人也看不出接下来该做什么。
+      const dagPath = findConduitDagPath(cwd);
+      const hasRunState = Boolean(resolveConduitDir(cwd));
+      const intro = '**lwa-conduit** — 多 agent 并行编排器（把大 spec 拆成 DAG 并行跑）。';
+      let nextStep: string;
+      if (hasRunState) {
+        nextStep = [
+          '👉 这个目录已经跑过编排，直接看结果：',
+          '`/conduit status` — 查看上次运行摘要（通过/失败/待处理任务）',
+        ].join('\n');
+      } else if (dagPath) {
+        nextStep = [
+          `👉 已经有拆好的任务清单（\`${dagPath}\`），下一步执行它：`,
+          '`/conduit run` — 建 worktree 并行跑，默认不合并，只产出分支供 review',
+        ].join('\n');
+      } else {
+        nextStep = [
+          '👉 还没有拆分好的任务，先把需求写成一份 markdown spec，再拆分：',
+          '`/conduit plan <spec.md>` — 让 Kiro 把 spec 拆成 `dag.yaml`（几分钟）',
+        ].join('\n');
+      }
       const body = [
-        '**lwa-conduit** — 多 agent 并行编排器（把大 spec 拆成 DAG 并行跑）。',
+        intro,
         '',
-        '`/conduit run` — 在当前目录跑编排（需要目录下有 `dag.yaml`）',
-        '　默认**不合并**，只产出分支供 review；不会动你的工作区',
-        '`/conduit plan <spec.md>` — 让 Kiro 把一份 markdown spec 拆成 `dag.yaml`',
-        '`/conduit status` — 查看上次 run-state 摘要（不启动进程）',
+        nextStep,
+        '',
+        '完整命令：',
+        '`/conduit plan <spec.md>` — spec → dag.yaml',
+        '`/conduit run` — 执行 dag.yaml（不合并）',
+        '`/conduit status` — 查看运行摘要',
         '',
         `当前目录：\`${cwd}\``,
         '',
@@ -4027,6 +4059,28 @@ export class Dispatcher {
     }
 
     // mode === 'run'
+    // --workspace 必须是"直接包含 dag.yaml 的目录"，不是 cwd 本身——/conduit
+    // plan 默认把产出放在 <cwd>/.conduit-plan/dag.yaml，若直接把 cwd 传给
+    // --workspace 会报 "no dag.yaml in workspace dir"，即使用户完全照着
+    // plan 的提示操作也会失败（真实用 conduit CLI 跑通后才发现这个问题，
+    // 见 PROGRESS.md）。提前在这里解析出正确的目录，找不到就直接提示，不
+    // 让请求打到子进程才报一个不知所以的错误。
+    const workspaceDir = resolveConduitWorkspaceDir(cwd);
+    if (!workspaceDir) {
+      await this.sendInteractiveCard(
+        msg,
+        buildAckCard({
+          state: 'error',
+          title: '❌ 找不到 dag.yaml',
+          body: [
+            `没有在 \`${cwd}\` 或 \`${cwd}/.conduit-plan\` 下找到 \`dag.yaml\`。`,
+            '',
+            '先用 `/conduit plan <spec.md>` 把需求拆成任务清单，再 `/conduit run`。',
+          ].join('\n'),
+        }),
+      );
+      return;
+    }
     const conversationId = this.conversationIdOfMessage(msg);
     const pipeline = this.getPipeline(conversationId);
     sharedConduitRegistry.start(conversationId, cwd);
@@ -4045,8 +4099,11 @@ export class Dispatcher {
         }
         let r: ConduitResult;
         try {
+          const runArgs = ['run', '--workspace', workspaceDir, '--base-repo', cwd];
+          if (cmd.resumeMode === 'resume') runArgs.push('--resume');
+          else if (cmd.resumeMode === 'fresh') runArgs.push('--fresh');
           r = await this.runConduitStreaming(
-            ['run', '--workspace', cwd],
+            runArgs,
             cwd,
             signal,
             placeholderMessageId,
@@ -4115,6 +4172,25 @@ export class Dispatcher {
 
   /** 根据 conduit 运行结果渲染终态卡片。merged=true 表示带了 --merge。 */
   private conduitRunCard(r: ConduitResult, merged: boolean, cwd?: string): object {
+    // lwa-conduit CLI 自带"裸重跑守卫"：发现上次有已完成任务、但这次既没
+    // --resume 也没 --fresh 时会直接拒绝执行（退出码 1），打印一句中文说明。
+    // bridge 之前没有识别这个场景，用户看到的是"退出码 1，部分任务可能失败"
+    // 这种通用报错，跟真实情况（根本没跑）不符。这里专门识别并给出选择按钮式
+    // 的文字提示，指向新加的 /conduit run --resume / --fresh。
+    if (isBareRerunGuardResult(r)) {
+      return buildAckCard({
+        state: 'error',
+        title: '⚠️ 检测到上次未完成的运行',
+        body: [
+          '这个目录已经跑过一次 conduit，但有任务还没走完，需要你明确选一个：',
+          '',
+          '`/conduit run --resume` — 从断点续跑，复用已完成的分支',
+          '`/conduit run --fresh` — 丢弃旧进度，从头重跑（会覆盖旧分支）',
+          '',
+          '`/conduit status` — 先看看上次跑到哪、哪些失败了，再决定',
+        ].join('\n'),
+      });
+    }
     const title = r.notFound
       ? '❌ lwa-conduit 未安装'
       : r.aborted

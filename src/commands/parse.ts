@@ -85,7 +85,7 @@ export type ParsedCommand =
   | { kind: 'cron'; mode: 'next'; id: string }
   | { kind: 'cron'; mode: 'translate'; raw: string }
   | { kind: 'schedule'; mode: 'new' }
-  | { kind: 'conduit'; mode: 'run' }
+  | { kind: 'conduit'; mode: 'run'; resumeMode?: 'resume' | 'fresh' }
   | { kind: 'conduit'; mode: 'run-merge' }
   | { kind: 'conduit'; mode: 'plan'; spec: string }
   | { kind: 'conduit'; mode: 'status' }
@@ -558,6 +558,9 @@ export function parseCommand(text: string): ParsedCommand | null {
     case 'conduit': {
       // /conduit            → 帮助
       // /conduit run        → 在当前 cwd 跑 lwa-conduit run（默认不 merge）
+      // /conduit run --resume → 从断点续跑（发现上次有失败任务时会被 lwa-conduit
+      //                       CLI 的裸重跑守卫拒绝，这两个参数用来明确选择）
+      // /conduit run --fresh  → 丢弃旧进度，从头重跑（会覆盖旧分支）
       // /conduit plan <spec> → 把 markdown spec 拆成 dag.yaml 工作区
       // /conduit status     → 读 .lwa-conduit/run-state.json 摘要
       if (!tail) return { kind: 'conduit', mode: 'help' };
@@ -567,6 +570,12 @@ export function parseCommand(text: string): ParsedCommand | null {
         const rest = tokens.slice(1).join(' ').trim().toLowerCase();
         if (rest === '--merge' || rest === '-m' || rest === 'merge') {
           return { kind: 'conduit', mode: 'run-merge' };
+        }
+        if (rest === '--resume' || rest === 'resume') {
+          return { kind: 'conduit', mode: 'run', resumeMode: 'resume' };
+        }
+        if (rest === '--fresh' || rest === 'fresh') {
+          return { kind: 'conduit', mode: 'run', resumeMode: 'fresh' };
         }
         return { kind: 'conduit', mode: 'run' };
       }
