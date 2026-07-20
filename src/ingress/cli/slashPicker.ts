@@ -230,12 +230,29 @@ export async function pickFromList(opts: {
   };
 
   try {
+    // Node 内部的 readline.emitKeypressEvents（this.rl 构造时自动挂载）在 stdin
+    // 上注册了一个自己的 'data' 处理器，用来把原始字节解析成 'keypress' 事件。
+    // 这个处理器内部会检查 `stdin.listenerCount('keypress') > 0`——如果之前我们
+    // 移除了所有 keypress 监听器，它会认为"没人关心"，处理逻辑不完整/跳过，导致
+    // 多字节转义序列（方向键等 CSI 序列）被这个内部处理器消费掉但从未真正传播给
+    // 我们自己的 'data' 监听器（这是方向键在 /model 等菜单里完全无响应的真正根因，
+    // 见 PROGRESS.md 里的完整调查记录）。close()/off 也无法阻止这个内部处理器，
+    // Node 文档明确写了"closing the readline instance does not stop keypress"。
+    // 正确做法：不要清空 keypress 监听器数量到 0，而是保留一个空操作的占位监听器，
+    // 让内部处理器认为"有人在听"，从而完整地处理并传播原始字节到 'data' 事件。
+    const noopKeypress = () => {};
+    stdin.on('keypress', noopKeypress);
     stdin.setRawMode?.(true);
     stdin.resume();
     stdin.setEncoding('utf8');
-    render();
 
     return await new Promise<string | null>((resolve) => {
+      // onData 必须在 render() 之前注册：render() 之后到 stdin.on('data', onData)
+      // 真正执行之间存在一个真实的时间窗口（哪怕只是几个微任务的间隙），如果用户
+      // 按键恰好落在这个窗口里，Node 内部的按键解析器会独自处理并消费掉这些字节
+      // （因为此时它是唯一的 'data' 监听器），我们自己的 onData 完全收不到——
+      // 这正是 /model 等菜单里"按方向键完全无响应"的真正根因（详见上面 keypress
+      // 注释和 PROGRESS.md 里的完整调查记录）。
       const onData = (key: string) => {
         if (closed) return;
         if (key === '\u0003') {
@@ -281,6 +298,7 @@ export async function pickFromList(opts: {
       const cleanup = () => {
         closed = true;
         stdin.off('data', onData);
+        stdin.off('keypress', noopKeypress);
         try {
           stdin.setRawMode?.(wasRaw ?? false);
         } catch {
@@ -290,6 +308,7 @@ export async function pickFromList(opts: {
       };
 
       stdin.on('data', onData);
+      render();
     });
   } finally {
     shell?.suspendChromeRepaint(false);
