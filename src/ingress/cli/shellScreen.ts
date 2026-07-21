@@ -192,7 +192,18 @@ export class ShellScreen {
   suspendIngest(on: boolean): void {
     this.ingestSuspended = on;
     if (on) {
+      // cancelContentRedraw() 会取消掉任何排队中的 30ms 防抖重绘。如果这次
+      // 取消发生在一个尚未执行的窗口内，之前 write() 写入 transcript 的内容
+      // 会被永久卡住不画，直到下一次操作重新触发 scheduleContentRedraw()——
+      // 真实复现：命令响应内容到达后紧接着进入下一轮 readLiveLine（这里），
+      // 用户会看到"没反应"，要按键才突然吐字（见 PROGRESS.md 2026-07-21）。
+      // 取消前先同步补画一次，保证已经进了 transcript 的内容不会被静默丢弃。
+      const hadPendingRedraw = this.hasPendingContentRedraw();
       this.cancelContentRedraw();
+      if (hadPendingRedraw) {
+        this.paintContentViewport();
+        this.repaintStatus();
+      }
       this.openLine = '';
     }
   }
@@ -520,6 +531,10 @@ export class ShellScreen {
       clearTimeout(this.contentRedrawTimer);
       this.contentRedrawTimer = null;
     }
+  }
+
+  private hasPendingContentRedraw(): boolean {
+    return this.contentRedrawTimer !== null;
   }
 
   private repaintChromePreserveCursor(): void {

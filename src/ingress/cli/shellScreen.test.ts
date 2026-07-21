@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   contentBottomRow,
   inputPaneTopRow,
@@ -122,6 +122,52 @@ describe('shellScreen', () => {
     expect(out).toContain('v2 only');
     expect(out).not.toContain('v1');
     expect(out).not.toContain('line2');
+  });
+
+  /**
+   * 复现（真实用户报告，2026-07-21）：命令响应内容写入后"不会自动吐字，
+   * 要按其他键才触发吐字"。
+   *
+   * 根因：write() 写入内容后用 30ms 防抖 setTimeout 排队实际绘制
+   * （scheduleContentRedraw）。suspendIngest(true) 内部会 cancelContentRedraw()
+   * 取消任何排队中的重绘——这是为了防止"输入期间误写内容"设计的，但如果这次
+   * 取消发生在一个尚未执行的 30ms 窗口内，且取消后没有人重新调度，内容就会
+   * 被无限期地卡住不画，直到下一次操作重新触发 scheduleContentRedraw()。
+   *
+   * 真实时序：命令处理完写入结果（排队重绘）→ 主循环立刻进入下一轮
+   * readLiveLine，其内部调用 suspendIngest(true) 为接收下一次按键做准备——
+   * 这几乎是背靠背发生的，容易落在同一个 30ms 窗口内。
+   */
+  it('content written just before suspendIngest(true) must not be silently dropped', () => {
+    vi.useFakeTimers();
+    try {
+      const chunks: string[] = [];
+      const screen = new ShellScreen({
+        write: (s) => chunks.push(s),
+        rows: 20,
+        cols: 60,
+        docked: true,
+      });
+      screen.enter();
+      chunks.length = 0; // 清掉 enter() 产生的初始画面，只看接下来这次写入
+
+      // 模拟命令响应内容到达：appendBlock 内部 write() → scheduleContentRedraw()
+      // 排队一个 30ms 后执行的重绘（尚未触发）。
+      screen.appendBlock('conduit result: dag.yaml ready');
+
+      // 紧接着（同一个 30ms 窗口内），下一轮 readLiveLine 调用 suspendIngest(true)
+      // 为接收下一次按键做准备——真实代码路径：liveInput.ts readLiveLine()。
+      screen.suspendIngest(true);
+
+      // 30ms 窗口过去了，取消掉的重绘定时器不会被任何人补上。
+      vi.advanceTimersByTime(100);
+
+      // 输入期结束（模拟用户还没按键，或者恰好没有触发新的重绘）。
+      const outBeforeAnyKeypress = chunks.join('');
+      expect(outBeforeAnyKeypress).toContain('conduit result: dag.yaml ready');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('content is bottom-aligned above the input pane', () => {
