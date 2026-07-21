@@ -3968,6 +3968,7 @@ export class Dispatcher {
     if (cmd.mode === 'status') {
       const summary = summarizeRunState(cwd);
       const active = sharedConduitRegistry.get(this.conversationIdOfMessage(msg));
+      const dagPath = findConduitDagPath(cwd);
       if (this.isTextChannel(this.conversationIdOfMessage(msg))) {
         const lines: string[] = [];
         if (active) {
@@ -3983,7 +3984,9 @@ export class Dispatcher {
             `cwd: ${cwd}`,
             '',
             'No active conduit run and no `.lwa-conduit/run-state.json`.',
-            'Run `/conduit run` when `dag.yaml` is ready.',
+            dagPath
+              ? `\`dag.yaml\` is ready (\`${dagPath}\`). Run \`/conduit run\` to execute it.`
+              : 'No `dag.yaml` yet. Run `/conduit plan <spec.md>` first.',
           );
         }
         await this.respondText(msg, lines.join('\n'));
@@ -3999,7 +4002,9 @@ export class Dispatcher {
               `当前目录：\`${cwd}\``,
               '',
               '未找到 `.lwa-conduit/run-state.json`（或旧 `.kiro-conduit/`）。',
-              '先 `/conduit run` 或确认 cwd 正确。',
+              dagPath
+                ? `已有拆分好的 \`dag.yaml\`（\`${dagPath}\`），还没跑过：\`/conduit run\` 执行它。`
+                : '还没有 `dag.yaml`：先 `/conduit plan <spec.md>` 拆分任务。',
             ].join('\n'),
           }),
         );
