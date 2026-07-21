@@ -11,6 +11,20 @@ describe('slashPicker', () => {
     expect(names).toContain('/help');
     expect(cmds.find((c) => c.cmd === '/model')?.insert).toBe('/model');
   });
+
+  it('lists /conduit plan and /conduit run alongside /conduit status', () => {
+    // 回归测试：之前 listSlashCommands 只注册了 `/conduit status`，导致
+    // 用户敲 `/conduit` 时（前缀匹配）看不到 plan/run 存在，也看不到用法，
+    // 只能靠 `/conduit`（无参数，Enter 执行）触发的帮助卡片才能发现它们。
+    const cmds = listSlashCommands('code');
+    const names = cmds.map((c) => c.cmd);
+    expect(names).toContain('/conduit');
+    expect(names).toContain('/conduit plan');
+    expect(names).toContain('/conduit run');
+    expect(names).toContain('/conduit status');
+    // /conduit plan 需要 spec 路径参数，insert 时带一个尾随空格方便直接续打。
+    expect(cmds.find((c) => c.cmd === '/conduit plan')?.insert).toBe('/conduit plan ');
+  });
 });
 
 /**
