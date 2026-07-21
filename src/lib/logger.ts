@@ -9,6 +9,8 @@
  * Logger 接口，统一终端输出格式（不再混杂 [info]: [ '...' ] 这种原生噪声）。
  */
 import pino, { type Logger } from 'pino';
+import pretty from 'pino-pretty';
+import { Writable } from 'node:stream';
 import { join } from 'node:path';
 import {
   readdirSync,
@@ -112,23 +114,38 @@ export function getLogger(): Logger {
 
   if (isTty) {
     // 开发：终端友好输出（单行紧凑 + 模块名前缀）
-    cachedLogger = pino({
-      level,
-      redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'HH:MM:ss.l',
-          // module 提到 messageFormat 里展示，不再作为 context 重复打印
-          ignore: 'pid,hostname,module',
-          // 单行：消息在前，剩余字段以 key=value 形式跟在后面
-          singleLine: true,
-          // 给模块名留固定列宽，扫日志时更整齐；没 module 的退化成纯 msg
-          messageFormat: '{if module}[{module}] {end}{msg}',
-        },
+    //
+    // 注意：不能用 `transport: { target: 'pino-pretty' }`（worker 线程）或
+    // pino-pretty 默认的 destination（SonicBoom 直写 fd=1）。这两种方式都
+    // 绕开 `process.stdout.write` 这个 JS 方法，导致 docked CLI 模式下
+    // ShellScreen 的 stdout hook（把所有输出纳入内容管理系统、维持固定分区
+    // 布局）完全拦不住，日志会直接穿透打到物理终端，破坏 UI 结构。
+    // 改成同步 stream + 自定义 destination，destination.write 内部动态读取
+    // `process.stdout.write`（不能提前 bind），这样能吃到运行期的
+    // monkey-patch。已用最小复现脚本验证：改前 hook 捕获 0 条，改后完整捕获。
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        process.stdout.write(chunk);
+        callback();
       },
     });
+    cachedLogger = pino(
+      {
+        level,
+        redact: { paths: REDACT_PATHS, censor: '[REDACTED]' },
+      },
+      pretty({
+        colorize: true,
+        translateTime: 'HH:MM:ss.l',
+        // module 提到 messageFormat 里展示，不再作为 context 重复打印
+        ignore: 'pid,hostname,module',
+        // 单行：消息在前，剩余字段以 key=value 形式跟在后面
+        singleLine: true,
+        // 给模块名留固定列宽，扫日志时更整齐；没 module 的退化成纯 msg
+        messageFormat: '{if module}[{module}] {end}{msg}',
+        destination,
+      }),
+    );
   } else {
     // 生产：NDJSON 落盘
     const logFile = todayLogFile();

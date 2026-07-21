@@ -243,6 +243,91 @@ Verifier(static+dynamic) → PASSED）真实可用**，用 `examples/02_civ_hell
   长期看应该统一（`.kiro-conduit` 是改名前的遗留兼容），但不是这次范围内的事，
   记一笔，不要现在动。
 
+## 新发现的问题（2026-07-21，用户截图报告）：ACP 错误的原始堆栈日志泄漏
+
+**现象**：用户截图显示，`kiro-cli-acp` 报了一个真实的 ACP 协议错误
+（`-32603 Internal error`，`data: dispatch failure`——这是 kiro-cli 本身/协议层
+的问题，不是 bridge 的逻辑 bug，暂不深究），随后**完整的 pino 错误日志堆栈
+（`[02:30:51.349] ERROR: [agent-runner] agent turn failed` + 完整 JS stack）
+直接被打印到了 docked 全屏 UI 上，破坏了固定分区布局**（状态栏那一行后面
+直接接了裸日志文本，看不到任何"友好错误提示"）。
+
+**真实根因（已用官方文档确认，非猜测）**：`src/lib/logger.ts` 的 `getLogger()`
+在 TTY 环境下用 `pino({ transport: { target: 'pino-pretty', ... } })`。**Pino
+自 v7 起，`transport` 会在一个独立的 Worker 线程里运行**（pino 官方文档
+`docs/transports.md`：「The transport code will be executed in a separate
+worker thread. The main thread will write logs to the worker thread, which
+will write them to the stream...」）。这个 worker 线程有自己独立的上下文，
+它对 `process.stdout.write` 的引用是 worker 线程里的原始版本，**完全不受
+`ShellScreen.installStdoutHook()`（`src/ingress/cli/shellScreen.ts` 560 行
+附近，主线程 monkey-patch `process.stdout.write`，把所有输出纳入 docked
+模式的 `ingestContent`/`transcript` 内容管理系统）影响**。所以 pino-pretty
+的输出会直接穿透物理 fd，绕开整个 docked 布局系统。
+
+这跟 `LARK_KIRO_LOG_LEVEL` 默认设为 `error`（`cli.ts` 63-65 行，"默认压低
+日志避免打断输入"）这个设计本身不矛盾——**error 级别本来就该被打出来，
+问题是"打出来的方式"绕过了 UI 层，不是"该不该打出来"**。
+
+已读代码确认的相关点：
+- `dispatcher.ts` 4706 行附近 `runAgentTurn` 调用的 catch 块：对
+  `kiro-cli-acp` 这种 profile.kind，异常不会走这个 catch（只处理
+  `openai-compatible` 的 gateway 熔断，其余 `throw e`）；真实的错误处理
+  路径是 `runner.ts` 130 行 `log().error(...)` 记录日志后返回
+  `exitCode: 1`，外层 `dispatcher.ts` 走 `result.exitCode !== 0` 分支调用
+  `view.end({ error: 'exit 1' })`。`turnView.ts` 108-121 行确认
+  `view.end({error})` 会渲染 `▎ exit 1`（红色）+ 计时 footer——**这条友好
+  提示理论上也会出现，只是可能被先出现的原始堆栈日志抢了视觉注意力**，
+  还没有真实 pty 测试确认这条提示到底有没有正常显示。
+
+**下一步（还没做）**：
+1. 真实 pty 测试确认："pino worker 线程写 stdout 绕过 installStdoutHook"
+   这个假设 + "`view.end({error})` 的友好提示是否真的正常显示，只是被堆栈
+   日志遮挡视觉注意力"这两点，不要只凭文档推断就动手改代码。
+2. 修复方向候选（需要真实验证后再选，不要预设）：
+   a. docked 模式下 `getLogger()` 不用 `pino-pretty` 的 `transport`
+      （worker 线程），改用同步的 `pino.destination` 或自定义 stream，
+      写到主线程里能被 `installStdoutHook` 拦截到的位置；
+   b. 或者 docked 模式下日志完全不走 stdout，只写文件（改变现有"error
+      级别要打到屏幕方便调试"的设计意图，需要跟用户确认是否接受）；
+   c. 或者给 pino 传自定义的非 worker 同步 write 目标，直接调用
+      `ShellScreen` 当前的 `write()`。
+3. 确定方案 → 实施 → 真实 pty 测试 → 写单元测试 →
+   test/typecheck/lint/build → 提交推送 → CI 确认。
+
+**已用真实脚本验证的完整根因链（2026-07-21，非猜测）**：
+1. 建了 `pino({transport:{target:'pino-pretty'}})`（当前代码写法）+ monkey-patch
+   `process.stdout.write` 的最小复现脚本，跑出「主线程 hook 捕获到的内容条数: 0」
+   ——原始堆栈直接穿透打到物理终端，证实 worker 线程绕过 hook。
+2. 进一步 `require('pino-pretty')` 源码确认：即使不用 `transport`（避免 worker
+   线程），改成同步传 `pretty()` stream 给 `pino(opts, stream)`，**默认情况下
+   依然会绕过**——因为 pino-pretty 默认 `destination = buildSafeSonicBoom({dest:
+   opts.destination || 1, ...})`，`SonicBoom` 是直接对 fd=1 做系统调用写入，
+   完全不经过 `process.stdout.write` 这个 JS 方法。这是 pino 生态刻意的性能设计
+   （官方 commit 注释也提到过"Do not use SonicBoom if stdout has been tampered"，
+   说明 pino 自己也知道这种冲突场景）。
+3. **验证通过的修复方案**：给 `pretty()` 传自定义 `destination`——一个
+   `node:stream` 的 `Writable`，其 `write()` 内部**动态**调用
+   `process.stdout.write(chunk)`（不能提前 bind/缓存，要在每次写入时重新读取，
+   才能吃到运行期的 monkey-patch）。用这个方案重新跑复现脚本，「主线程 hook
+   捕获到的内容条数: 1」，完整堆栈内容 0 字节泄漏到物理终端，格式化效果
+   （着色、单行紧凑）不受影响。
+
+**下一步（还没做）**：
+1. 按上面验证过的方案改 `src/lib/logger.ts` 的 `getLogger()` TTY 分支：
+   把 `transport: { target: 'pino-pretty', options: {...} }` 换成
+   `pino(opts, pretty({ ...同样的options, destination: 自定义Writable }))`。
+   注意 `import pretty from 'pino-pretty'` 需要新增导入。
+2. 真实 pty 测试：在 docked 模式下真实触发一次 error 级别日志（不需要真的
+   构造 ACP 协议错误，用一个能触发 `log().error()` 的路径即可），确认
+   docked 布局不再被打断，日志内容能通过 `ingestContent` 正常纳入滚动区。
+3. 补充单元测试：验证 `getLogger()` 在 TTY 模式下，日志写入确实经过了
+   `process.stdout.write`（可以 mock `process.stdout.write` 断言被调用）。
+4. `test/typecheck/lint/build` 全过 → 提交推送 → CI 确认。
+5. 顺带确认（之前读代码时发现，还没验证）：`view.end({error: 'exit 1'})`
+   这条友好提示在真实报错时是否正常显示——如果第 2 步的 pty 测试里能同时
+   看到 `▎ exit 1` 红色提示和干净的日志滚动区，说明这条路径本来就没问题，
+   只是被原来穿透的堆栈日志抢了视觉注意力；不需要额外改 `turnView.ts`。
+
 ## 之前的阶段（已过时，仅供参考）
 
 **尚未开始执行**——刚建立本记录文件和任务清单，下一步是任务 #2：

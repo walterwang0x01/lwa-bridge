@@ -57,4 +57,42 @@ describe('logger security hardening', () => {
     ensureLogFileMode(target);
     expect(statSync(target).mode & 0o777).toBe(0o600);
   });
+
+  it('TTY 模式下的日志输出会经过 process.stdout.write（能被 docked CLI 的 stdout hook 拦截）', async () => {
+    // 回归测试：pino 默认的 transport（worker 线程）/ pino-pretty 默认
+    // destination（SonicBoom 直写 fd=1）都会绕过 process.stdout.write，
+    // 导致 docked 模式下的 ShellScreen.installStdoutHook() 拦不住这些日志，
+    // 原始堆栈会直接穿透打到物理终端，破坏固定分区布局。
+    // getLogger() 必须用同步 stream + 自定义 destination（内部动态调用
+    // process.stdout.write）才能让日志正确纳入 hook 的内容管理系统。
+    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const prevLevel = process.env['LARK_KIRO_LOG_LEVEL'];
+    process.env['LARK_KIRO_LOG_LEVEL'] = 'error';
+
+    const original = process.stdout.write.bind(process.stdout);
+    const captured: string[] = [];
+    process.stdout.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
+      captured.push(String(chunk));
+      if (typeof encoding === 'function') (encoding as () => void)();
+      else if (typeof cb === 'function') (cb as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const { getLogger } = await import('./logger.js');
+      const log = getLogger().child({ module: 'agent-runner' });
+      log.error({ err: new Error('模拟ACP错误') }, 'agent turn failed');
+      // pino 的同步 stream 仍是异步 flush 到底层 stream，等一个 tick。
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } finally {
+      process.stdout.write = original;
+      if (isTtyDescriptor) Object.defineProperty(process.stdout, 'isTTY', isTtyDescriptor);
+      if (prevLevel === undefined) delete process.env['LARK_KIRO_LOG_LEVEL'];
+      else process.env['LARK_KIRO_LOG_LEVEL'] = prevLevel;
+    }
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured.join('')).toContain('agent turn failed');
+  });
 });
