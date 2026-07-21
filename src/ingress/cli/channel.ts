@@ -7,7 +7,7 @@ import { CLI_NAME } from '../../lib/branding.js';
 import { cardToPlainText, cleanCliText, formatCliHelp } from './textPresenter.js';
 import { formatCliFooter, type CliStatusSnapshot } from './statusBar.js';
 import { setActiveShell, ShellScreen } from './shellScreen.js';
-import { formatShellStatusBlock, shellPrompt } from './theme.js';
+import { formatShellStatusBlock, shellPrompt, turnRail } from './theme.js';
 import { pickSlashCommand, setCliInteract } from './slashPicker.js';
 import { readLiveLine, suppressInputDuring } from './liveInput.js';
 import type {
@@ -376,7 +376,11 @@ export class CliIngressChannel implements IngressChannel {
     if (!text) return;
     if (this.shell?.isActive) {
       if (this.shell.isDocked) this.shell.focusContent();
-      this.shell.appendBlock(text);
+      // 跟 AI 回复统一排版节奏（同一个 turnRail 符号 + 空行分隔），不额外
+      // 加图标/区分色——bridge 自己处理的命令响应（/conduit status、/pwd
+      // 等）之前是裸文本紧贴命令回显往下写，缺少留白和标记，容易被当成
+      // "没反应"忽略掉。
+      this.shell.appendBlock(`\n${turnRail()} ${text}`);
       return;
     }
     console.log(`\n${text}\n`);
