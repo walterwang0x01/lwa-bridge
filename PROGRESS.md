@@ -405,18 +405,47 @@ scrollback（鼠标滚轮/Shift+PageUp）机制失效——因为程序在用绝
 "上：滚动内容区"，指的只是"内容区会随新内容自动往下推"，不是"支持
 用户主动滚动查看"。
 
-**下一步（还没做，需要跟用户确认优先级和方案后再动手）**：
-1. 需要实现应用层滚动：给 `ShellScreen` 加一个 `scrollOffset` 状态，
-   `layoutContentViewport` 的 slice 逻辑要能从 `transcript.length - height
-   - scrollOffset` 开始取，而不是永远锚定在最新。
-2. 需要绑定按键（常见方案：`PageUp`/`PageDown`，或 `Ctrl+U`/`Ctrl+D`
-   vim 风格）来调整 `scrollOffset`，绑定点在 `liveInput.ts` 的按键处理
-   分支（`onKey` 函数）。
-3. 滚动时应该有视觉提示（比如"查看历史中，Esc/新消息自动回到底部"），
-   避免用户滚动查看历史时，新消息到达却看不到（需要产品决策：新消息
-   到达时是否强制拉回底部，还是保持在当前滚动位置只提示"有新消息"）。
-4. 这是一个新功能，不是修复，需要先跟用户确认方案（滚动快捷键选型、
-   新消息到达时的行为）后再实现，不要自行决定设计细节。
+**已完成（2026-07-23，已提交推送 `39db038`，CI 全绿）**：
+- 方案确定过程：调研 tmux/vim/less（键盘驱动"进入滚动模式→PageUp/
+  PageDown/方向键→退出回到最新"）+ OpenAI Codex CLI 的真实 GitHub issue
+  （#2836，同样遇到 alt-screen 下鼠标滚轮失效的问题，技术分析确认
+  "应用内处理 PageUp/PageDown"是三个候选方案里排名最高、最贴合我们
+  项目现状的路线），确认最佳实践后再动手，不是自行假设的设计。
+- `layoutContentViewport()` 加 `scrollOffset` 参数，`clampScrollOffset()`
+  纯函数计算合法边界（0 ~ totalLines-height）。
+- `ShellScreen` 加 `scrollOffset`/`hasNewContentWhileScrolled` 状态 +
+  `scrollUp()`/`scrollDown()`/`scrollToBottom()`/`isScrolled`/
+  `hasUnseenContent` 公开接口。
+- 新消息到达时不打断阅读：`ingestContent()` 在滚动状态下新行到达时
+  同步递增 `scrollOffset`（视觉内容保持不动），标记
+  `hasNewContentWhileScrolled`；`transcript` 截断（>2000 行）时同步
+  调整 `scrollOffset`，避免指向错误位置。
+- 按键绑定（`liveInput.ts` `onKey`）：`PageUp`(`\u001b[5~`)/
+  `PageDown`(`\u001b[6~`) 驱动滚动；`Esc` 在输入框为空且处于滚动状态时
+  回到最新，有输入内容时保持原有清空输入的行为（不冲突）。
+- 视觉提示：`paintStatusLine()` 滚动模式下用 `secondary` 字段显示
+  "查看历史中 · [有新消息 ·] PageDown/Esc 回到最新"。
+- **顺带发现并修复一个真实 bug**：`splitKeys()` 硬编码 CSI 序列固定
+  3 字符（`ESC [ <字母>`），导致 `PageUp`（`\u001b[5~`，4 字符）被错误
+  拆分——落单的 `~` 字符被当成普通文本拼进输入框。已修复为正确解析
+  带数字参数、以 `~` 或字母结尾的完整 CSI 序列。
+- 新增 39 个测试（`shellScreen.test.ts` 28 个 + `liveInput.test.ts` 里
+  新增的按键绑定/splitKeys 回归测试），全部通过；`typecheck`/`build`
+  正常。
+- `pnpm lint`（本地检查，**不在 CI 流程里**，确认过 `ci.yml` 只跑
+  typecheck/test/build）报了 2 个跟这次改动无关的历史遗留 error
+  （`runtime/config.ts` 的 `noUselessSwitchCase`、`shellScreen.ts` 里
+  本来就存在、跟这次改动无关的 `scheduleChromeRepaint` 未使用死代码），
+  未处理——不在这次任务范围内，不顺手清理无关代码。
+
+**还没做（后续可选）**：
+- 没有做真实终端的像素级验证（这次改动全部用 mock stdin + 真实
+  `ShellScreen` 实例的单元测试驱动，之前多次证实 `expect`/pty 模拟
+  按键在这个项目里不完全可靠，用单测更能确认真实逻辑）。用户可以在
+  真实终端里敲 `PageUp`/`PageDown` 验证实际视觉效果。
+- 鼠标滚轮支持没有实现（Codex CLI 那份 issue 里排名第二的方案，需要
+  开启鼠标事件上报 + 在 `onData` 里解析鼠标事件序列，这次没做，纯键盘
+  驱动已经能满足"最佳实践"的核心要求）。
 
 ## 之前的阶段（已过时，仅供参考）
 
