@@ -452,6 +452,52 @@ scrollback（鼠标滚轮/Shift+PageUp）机制失效——因为程序在用绝
 **尚未开始执行**——刚建立本记录文件和任务清单，下一步是任务 #2：
 重新梳理并确认上面"未修复问题清单"里第 1 条的真实状态。
 
+## 新反馈（2026-07-23）：三个问题
+
+### 1. `/conduit plan` 报 `ACP error -32603 Internal error`
+
+**已确认（真实测试，非猜测）**：不是这份 spec 内容或大小的问题——同一份
+36KB/420 行的大 spec，直接用 `kiro-cli chat --no-interactive` 处理，
+12 秒正常完成，输出质量正常；用 `lwa-conduit plan` 走 ACP 协议第一次
+报 `-32603`，**原样重跑同一条命令，第二次直接成功**，完整生成了 DAG。
+结论：这是 kiro-cli ACP 协议模式偶发的稳定性问题（跟之前 bridge 侧
+遇到的 `-32603` 同一类问题），不是内容触发、不是稳定复现的逻辑 bug，
+`lwa-conduit`/`lwa-bridge` 都没做重试兜底。**遇到时直接重跑同一条命令
+即可**，不需要改代码。
+
+### 2. 历史滚动功能"没生效"
+
+用户反馈滚动功能没起作用，但没有说明具体操作（有没有真的按了
+PageUp/PageDown、当前终端是否是 docked 模式）。上一轮已经用单元测试
+验证过 `scrollUp`/`scrollDown`/按键绑定的逻辑本身是对的（`39db038`），
+需要用户提供更具体的信息（截图/描述具体按了什么键、看到什么）才能
+继续排查，不能凭空猜。**还没有进一步调查**。
+
+### 3. conduit run 期间完全没有流式反馈，等全部跑完才显示结果
+
+**已读代码确认**：`runConduitStreaming()`（`dispatcher.ts`）已经实现了
+流式进度机制——`runConduit()`（`src/conduit/runner.ts`）实时监听子进程
+`stdout`/`stderr` 合并流（`sub.all.on('data', ...)`），每次数据到达都
+调用 `onProgress` 回调；`onProgress` 里有 2 秒节流，节流之后调用
+`this.ingress.patchCard(messageId, card)`；CLI 渠道（`channel.ts`）的
+`patchCard` 确实有实现，会走 `printReply({kind:'patch_card'})` →
+`printStreamingAssistant()` → docked 模式下 `shell.replaceLastBlock()`
+——这条链路完整存在，理论上应该能在 CLI 里看到流式更新的进度卡片。
+
+**尚未确认的疑点（需要真实验证，不要臆断）**：
+- 有没有可能 `lwa-conduit`（Python 子进程）在执行某些阶段（比如调用
+  kiro-cli 生成代码的那几分钟）本身就没有任何 stdout 输出，导致
+  `onProgress` 确实按 2 秒节流触发了，但 `humanBuf`/`progress` 内容
+  没有变化，看起来像是"卡住不动"（这跟"完全没有流式机制"是两个不同
+  的问题，前者是 lwa-conduit 输出粒度太粗，后者是 lwa-bridge 没做
+  流式对接——现在已经确认是后者不成立，需要进一步确认是不是前者）。
+- 没有做真实的、跑够长时间的 `/conduit run` 全程录屏/截图验证，只是
+  读代码确认了链路存在。
+
+**下一步**：需要用户下次跑 `/conduit run` 时，在执行过程中（不要等
+跑完）截图当前界面，看是否真的完全没有任何字符更新，还是有更新但
+不够明显/不够频繁。
+
 ## Conduit Plan（2026-07-22）
 
 用 `/conduit plan` 生成了面向当前真实待做工作的并行编排 plan，产物在 `.conduit-plan/`。
