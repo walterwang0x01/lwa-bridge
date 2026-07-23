@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  clampScrollOffset,
   contentBottomRow,
   inputPaneTopRow,
   inputRow,
+  layoutContentViewport,
   positiveOr,
   ShellScreen,
   statusRow,
@@ -27,6 +29,69 @@ describe('shellScreen', () => {
     expect(inputRow(24)).toBe(23);
     expect(statusRow(24)).toBe(24);
     expect(statusRow(4)).toBe(4);
+  });
+
+  describe('layoutContentViewport scrollOffset', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line${i}`); // line0..line19
+
+    it('scrollOffset=0 shows the most recent lines (existing behavior)', () => {
+      const out = layoutContentViewport({ lines, height: 5, mode: 'conversation' });
+      expect(out).toEqual(['line15', 'line16', 'line17', 'line18', 'line19']);
+    });
+
+    it('scrollOffset>0 shows an earlier window, shifted up by offset', () => {
+      // offset=5：从底部往上翻 5 行 → 窗口结束于 line14（倒数第 6 行）
+      const out = layoutContentViewport({
+        lines,
+        height: 5,
+        mode: 'conversation',
+        scrollOffset: 5,
+      });
+      expect(out).toEqual(['line10', 'line11', 'line12', 'line13', 'line14']);
+    });
+
+    it('scrollOffset reaching the very start pads with empty lines, not out-of-range slices', () => {
+      const out = layoutContentViewport({
+        lines,
+        height: 5,
+        mode: 'conversation',
+        scrollOffset: 19,
+      });
+      // end = 20-19=1 → 只有 line0 可见，其余用空行垂直填充在顶部
+      expect(out).toEqual(['', '', '', '', 'line0']);
+    });
+
+    it('scrollOffset is ignored (clamped to 0 upstream) has no special-case in the pure fn itself', () => {
+      // 纯函数本身不做上限收敛（由 clampScrollOffset 负责），但不能因超范围
+      // offset 产生负数下标或抛异常。
+      const out = layoutContentViewport({
+        lines,
+        height: 5,
+        mode: 'conversation',
+        scrollOffset: 999,
+      });
+      expect(out.every((l) => l === '')).toBe(true);
+    });
+  });
+
+  describe('clampScrollOffset', () => {
+    it('clamps to 0 when content fits within one screen (nothing to scroll)', () => {
+      expect(clampScrollOffset(10, 10, 20)).toBe(0);
+      expect(clampScrollOffset(10, 5, 20)).toBe(0);
+    });
+
+    it('clamps to the max offset (totalLines - height) when requesting further than history goes', () => {
+      // 30 行历史，20 行高度 → 最多能翻 10 行（翻到第一屏刚好铺满开头）
+      expect(clampScrollOffset(999, 30, 20)).toBe(10);
+    });
+
+    it('never returns negative even for negative input', () => {
+      expect(clampScrollOffset(-5, 30, 20)).toBe(0);
+    });
+
+    it('passes through a value within valid range unchanged', () => {
+      expect(clampScrollOffset(4, 30, 20)).toBe(4);
+    });
   });
 
   it('shouldUse on for code TTY; plain and CI disable', () => {
@@ -168,6 +233,107 @@ describe('shellScreen', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('ShellScreen history scroll (PageUp/PageDown)', () => {
+    function makeDockedScreen(rows = 10, cols = 40) {
+      const chunks: string[] = [];
+      const screen = new ShellScreen({ write: (s) => chunks.push(s), rows, cols, docked: true });
+      screen.enter();
+      chunks.length = 0;
+      return { screen, chunks };
+    }
+
+    it('isScrolled is false by default; scrollUp makes it true when there is history to see', () => {
+      const { screen } = makeDockedScreen(10);
+      // 内容区高度 = 10-1-1 = 8；写入 20 行，超出一屏才有可翻的历史。
+      for (let i = 0; i < 20; i++) screen.appendLine(`line${i}`);
+      expect(screen.isScrolled).toBe(false);
+      screen.scrollUp();
+      expect(screen.isScrolled).toBe(true);
+    });
+
+    it('scrollUp does nothing when all content already fits on one screen', () => {
+      const { screen } = makeDockedScreen(10);
+      screen.appendLine('only one line');
+      screen.scrollUp();
+      expect(screen.isScrolled).toBe(false);
+    });
+
+    it('scrollUp reveals earlier lines; scrollDown moves back toward the latest', () => {
+      const { screen, chunks } = makeDockedScreen(10, 40);
+      for (let i = 0; i < 30; i++) screen.appendLine(`line${i}`);
+      chunks.length = 0;
+
+      screen.scrollUp();
+      const afterUp = chunks.join('');
+      // 往上翻一页后，屏幕上不应再包含最新的 line29
+      expect(afterUp).not.toContain('line29');
+      expect(screen.isScrolled).toBe(true);
+
+      chunks.length = 0;
+      screen.scrollDown();
+      screen.scrollDown();
+      screen.scrollDown();
+      screen.scrollDown();
+      screen.scrollDown();
+      // 翻回底部后应恢复自动跟随，isScrolled 变回 false
+      expect(screen.isScrolled).toBe(false);
+    });
+
+    it('scrollToBottom immediately returns to isScrolled=false and clears the unseen flag', () => {
+      const { screen } = makeDockedScreen(10);
+      for (let i = 0; i < 30; i++) screen.appendLine(`line${i}`);
+      screen.scrollUp();
+      expect(screen.isScrolled).toBe(true);
+      screen.scrollToBottom();
+      expect(screen.isScrolled).toBe(false);
+      expect(screen.hasUnseenContent).toBe(false);
+    });
+
+    it('new content while scrolled does not jump the view or interrupt reading; flags hasUnseenContent', () => {
+      const { screen, chunks } = makeDockedScreen(10, 40);
+      for (let i = 0; i < 30; i++) screen.appendLine(`line${i}`);
+      screen.scrollUp(); // 翻到较早的一页
+      chunks.length = 0;
+      const viewBeforeNewContent = screen.debugTranscriptLines().slice(0, 5);
+
+      expect(screen.hasUnseenContent).toBe(false);
+      screen.appendLine('brand-new-message'); // 模拟新命令响应到达
+
+      // 仍然处于滚动状态，没有被新内容打断拉回底部
+      expect(screen.isScrolled).toBe(true);
+      // 有新消息到达但未显示的标记应该被设置
+      expect(screen.hasUnseenContent).toBe(true);
+      // 新内容本身不应该出现在当前渲染的屏幕上（因为用户在看更早的历史）
+      const afterNewContent = chunks.join('');
+      expect(afterNewContent).not.toContain('brand-new-message');
+      // 用户之前正在看的那批历史内容，viewport 里对应的原始行不变
+      // （scrollOffset 同步递增保证了视觉内容不跳动）。
+      expect(screen.debugTranscriptLines().slice(0, 5)).toEqual(viewBeforeNewContent);
+    });
+
+    it('scrolling back to bottom after missing content shows the latest and clears hasUnseenContent', () => {
+      const { screen, chunks } = makeDockedScreen(10, 40);
+      for (let i = 0; i < 30; i++) screen.appendLine(`line${i}`);
+      screen.scrollUp();
+      screen.appendLine('brand-new-message');
+      expect(screen.hasUnseenContent).toBe(true);
+
+      chunks.length = 0;
+      screen.scrollToBottom();
+      expect(screen.isScrolled).toBe(false);
+      expect(screen.hasUnseenContent).toBe(false);
+      const out = chunks.join('');
+      expect(out).toContain('brand-new-message');
+    });
+
+    it('does not scroll while the welcome banner is showing (nothing meaningful to page through)', () => {
+      const { screen } = makeDockedScreen(10);
+      screen.renderBanner('code', '/help');
+      screen.scrollUp();
+      expect(screen.isScrolled).toBe(false);
+    });
   });
 
   it('content is bottom-aligned above the input pane', () => {

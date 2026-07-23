@@ -61,10 +61,15 @@ export function splitKeys(chunk: string): string[] {
   let i = 0;
   while (i < chunk.length) {
     if (chunk[i] === '\u001b') {
-      // CSI 序列：ESC [ <终结字节>；覆盖当前用到的 \u001b[A / \u001b[B 等方向键。
-      // 简化：这些序列固定 3 字符（ESC [ <字母>），足够覆盖当前场景。
+      // CSI 序列：ESC [ <参数字节 0-9;>* <终结字节>。终结字节可以是字母
+      // （方向键 \u001b[A / \u001b[B）或 ~（功能键，如 PageUp \u001b[5~ /
+      // PageDown \u001b[6~）。参数段长度不固定，不能硬编码"固定 3 字符"，
+      // 否则 \u001b[5~ 会被切成 \u001b[5（丢弃 CSI 语义）+ 落单的 ~
+      // 被当成普通字符拼进输入框。
       if (chunk[i + 1] === '[') {
-        const end = Math.min(i + 3, chunk.length);
+        let end = i + 2;
+        while (end < chunk.length && /[0-9;]/.test(chunk[end]!)) end += 1;
+        if (end < chunk.length) end += 1; // 吞掉终结字节（字母或 ~）
         keys.push(chunk.slice(i, end));
         i = end;
       } else {
@@ -490,6 +495,13 @@ export async function readLiveLine(opts: {
             paintInput();
             return;
           }
+          // 输入框已经是空的、且正在翻看历史时，Esc 优先用来回到最新内容
+          // （tmux copy-mode 的标准退出键）；输入框有内容时保持原有行为——
+          // 清空输入，不抢用户正在打字的操作。
+          if (!buffer && shell.isScrolled) {
+            shell.scrollToBottom();
+            return;
+          }
           buffer = '';
           paintInput();
           return;
@@ -547,6 +559,17 @@ export async function readLiveLine(opts: {
             menuIdx = (menuIdx + 1) % Math.max(items.length, 1);
             paintMenu(items);
           }
+          return;
+        }
+        // 历史滚动（PageUp/PageDown，行业标准键位——tmux/vim/less/Codex CLI
+        // 等终端应用的共识做法）。菜单打开时不生效，避免跟菜单导航语义冲突；
+        // 菜单本身没有占用这两个键，两者互不影响。
+        if (key === '\u001b[5~') {
+          if (!menuOpen) shell.scrollUp();
+          return;
+        }
+        if (key === '\u001b[6~') {
+          if (!menuOpen) shell.scrollDown();
           return;
         }
         if (key.startsWith('\u001b')) return;

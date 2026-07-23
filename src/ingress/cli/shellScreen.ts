@@ -66,15 +66,25 @@ export function statusRow(rows: number): number {
 
 export type ContentLayoutMode = 'welcome' | 'conversation';
 
-/** 将内容映射为固定高度视口；欢迎区位于上三分之一，会话内容保持贴底。 */
+/**
+ * 将内容映射为固定高度视口；欢迎区位于上三分之一，会话内容保持贴底。
+ *
+ * scrollOffset：从底部往上偏移的行数（0 = 贴底显示最新内容，正数 = 往上翻看
+ * 历史）。上限由调用方通过 clampScrollOffset() 计算，这里只负责按给定
+ * offset 截取对应窗口，不做边界收敛。
+ */
 export function layoutContentViewport(opts: {
   lines: string[];
   height: number;
   mode: ContentLayoutMode;
+  scrollOffset?: number;
 }): string[] {
   const height = Math.max(0, Math.floor(opts.height));
   if (height === 0) return [];
-  const visible = opts.lines.slice(-height);
+  const offset = Math.max(0, Math.floor(opts.scrollOffset ?? 0));
+  const end = offset > 0 ? Math.max(0, opts.lines.length - offset) : opts.lines.length;
+  const start = Math.max(0, end - height);
+  const visible = opts.lines.slice(start, end);
   const freeRows = Math.max(0, height - visible.length);
   const topPadding =
     opts.mode === 'welcome' ? Math.min(freeRows, Math.max(1, Math.floor(height * 0.22))) : freeRows;
@@ -84,6 +94,16 @@ export function layoutContentViewport(opts: {
     ...visible,
     ...Array.from({ length: bottomPadding }, () => ''),
   ];
+}
+
+/**
+ * 计算合法的 scrollOffset 上限：最多能往上翻到"第一屏刚好铺满历史开头"，
+ * 不能翻出比 totalLines 更早的不存在内容。totalLines <= height 时（内容还
+ * 没超出一屏）上限为 0——没有可翻的历史。
+ */
+export function clampScrollOffset(offset: number, totalLines: number, height: number): number {
+  const maxOffset = Math.max(0, totalLines - height);
+  return Math.max(0, Math.min(Math.floor(offset), maxOffset));
 }
 
 type StdoutWrite = typeof process.stdout.write;
@@ -117,6 +137,10 @@ export class ShellScreen {
   /** 首屏 hero 独立于会话 transcript，保留品牌 ANSI 样式。 */
   private welcomeLines: string[] = [];
   private welcomeActive = false;
+  /** 历史滚动：0 = 贴底跟随最新；正数 = 往上翻看历史（PageUp/PageDown）。 */
+  private scrollOffset = 0;
+  /** 滚动查看历史期间，新内容到达但未显示——用于状态栏"有新消息"提示。 */
+  private hasNewContentWhileScrolled = false;
 
   constructor(opts: ShellScreenOptions = {}) {
     this.docked = opts.docked ?? process.env['LWA_PLAIN_SHELL'] !== '1';
@@ -299,6 +323,8 @@ export class ShellScreen {
     this.transcript = [];
     this.openLine = '';
     this.streamBlockStart = -1;
+    this.scrollOffset = 0;
+    this.hasNewContentWhileScrolled = false;
     this.menuOverlay = [];
     this.welcomeLines = [];
     this.welcomeActive = false;
@@ -409,6 +435,59 @@ export class ShellScreen {
     this.repaintStatus();
   }
 
+  /** 当前是否正在翻看历史（非贴底跟随最新）。 */
+  get isScrolled(): boolean {
+    return this.scrollOffset > 0;
+  }
+
+  /** 翻看历史期间是否有新内容到达但未显示（供状态栏提示）。 */
+  get hasUnseenContent(): boolean {
+    return this.hasNewContentWhileScrolled;
+  }
+
+  /** 每页滚动的行数：内容区可视高度（减 1 留一行重叠，避免跳页丢行）。 */
+  private pageSize(): number {
+    const bottom = contentBottomRow(this.rows, this.inputPaneHeight);
+    return Math.max(1, bottom - 1);
+  }
+
+  private totalContentLines(): number {
+    const conversationLines = this.openLine
+      ? [...this.transcript, this.openLine]
+      : [...this.transcript];
+    return (this.welcomeActive ? this.welcomeLines : conversationLines).length;
+  }
+
+  private setScrollOffset(next: number): void {
+    const bottom = contentBottomRow(this.rows, this.inputPaneHeight);
+    const clamped = clampScrollOffset(next, this.totalContentLines(), bottom);
+    if (clamped === this.scrollOffset) return;
+    this.scrollOffset = clamped;
+    if (this.scrollOffset === 0) this.hasNewContentWhileScrolled = false;
+    if (this.isDocked) {
+      this.paintContentViewport();
+      this.repaintStatus();
+    }
+  }
+
+  /** PageUp：往上翻一页历史。已经在最早一屏时无操作。 */
+  scrollUp(): void {
+    if (!this.isDocked || this.welcomeActive) return;
+    this.setScrollOffset(this.scrollOffset + this.pageSize());
+  }
+
+  /** PageDown：往下翻一页；到底部时恢复自动跟随最新。 */
+  scrollDown(): void {
+    if (!this.isDocked || this.welcomeActive) return;
+    this.setScrollOffset(this.scrollOffset - this.pageSize());
+  }
+
+  /** 回到最新内容，恢复自动跟随；清掉"有新消息"提示。 */
+  scrollToBottom(): void {
+    if (!this.isDocked) return;
+    this.setScrollOffset(0);
+  }
+
   renderFooter(footer: ShellFooter): void {
     this.lastFooter = footer;
     if (!this.docked) return;
@@ -441,9 +520,14 @@ export class ShellScreen {
 
   private paintStatusLine(): void {
     const row = statusRow(this.rows);
+    const scrollHint = this.isScrolled
+      ? this.hasNewContentWhileScrolled
+        ? '查看历史中 · 有新消息 · PageDown/Esc 回到最新'
+        : '查看历史中 · PageDown/Esc 回到最新'
+      : undefined;
     const line = formatDockedStatusLine({
       primary: this.lastFooter.primary || 'Auto',
-      secondary: this.lastFooter.secondary,
+      secondary: scrollHint ?? this.lastFooter.secondary,
       approval: this.lastFooter.approval,
       cols: this.cols,
     });
@@ -476,13 +560,27 @@ export class ShellScreen {
         this.transcript.push(this.openLine);
         this.openLine = '';
         i += 1;
+        // 正在翻看历史时，新行到达不能打断阅读：把 scrollOffset 同步加 1，
+        // 让用户正在看的内容保持在原来的屏幕位置（视觉上不动），只在状态栏
+        // 标记"有新消息"，不强制拉回底部（tmux copy-mode / 主流聊天软件的
+        // 通用做法）。
+        if (this.scrollOffset > 0) {
+          this.scrollOffset += 1;
+          this.hasNewContentWhileScrolled = true;
+        }
         continue;
       }
       this.openLine += ch;
       i += 1;
     }
     if (this.transcript.length > 2000) {
+      const dropped = this.transcript.length - 1500;
       this.transcript = this.transcript.slice(-1500);
+      // 截断丢弃了最早的 dropped 行；scrollOffset 是相对底部的偏移量，
+      // 数组整体前移后要同步减去，否则会指向不存在的位置或视觉跳动。
+      if (this.scrollOffset > 0) {
+        this.scrollOffset = Math.max(0, this.scrollOffset - dropped);
+      }
     }
   }
 
@@ -499,6 +597,7 @@ export class ShellScreen {
       lines: this.welcomeActive ? this.welcomeLines : conversationLines,
       height: bodyHeight,
       mode: this.welcomeActive ? 'welcome' : 'conversation',
+      scrollOffset: this.welcomeActive ? 0 : this.scrollOffset,
     });
     this.beginChrome();
     try {

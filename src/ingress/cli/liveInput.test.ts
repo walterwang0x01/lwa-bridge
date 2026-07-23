@@ -22,6 +22,19 @@ describe('splitKeys', () => {
     expect(splitKeys('\u001b[B')).toEqual(['\u001b[B']);
   });
 
+  it('handles CSI sequences with numeric parameters terminated by ~ (PageUp/PageDown)', () => {
+    // 回归测试：旧实现硬编码 CSI 序列固定 3 字符（ESC [ <字母>），导致
+    // \u001b[5~（4 字符：ESC [ 5 ~）被切成 \u001b[5（丢弃 CSI 语义）+
+    // 落单的 ~ 被当成普通字符拼进输入框（真实发现于 PageUp/PageDown 按键
+    // 绑定测试）。
+    expect(splitKeys('\u001b[5~')).toEqual(['\u001b[5~']); // PageUp
+    expect(splitKeys('\u001b[6~')).toEqual(['\u001b[6~']); // PageDown
+  });
+
+  it('handles a PageUp sequence immediately followed by plain text in the same chunk', () => {
+    expect(splitKeys('\u001b[5~xy')).toEqual(['\u001b[5~', 'x', 'y']);
+  });
+
   it('handles an arrow key immediately followed by plain text in the same chunk', () => {
     expect(splitKeys('\u001b[Axy')).toEqual(['\u001b[A', 'x', 'y']);
   });
@@ -235,6 +248,170 @@ describe('readLiveLine fallback prompt (non-raw terminals)', () => {
       fallbackAsk: async () => '   /model\n\n',
     });
     expect(result).toBe('/model');
+  });
+});
+
+/**
+ * PageUp/PageDown 历史滚动按键绑定（docked raw mode 分支）。
+ * 用真实 ShellScreen 实例 + mock stdin 驱动 readLiveLine 的按键处理逻辑，
+ * 验证 \u001b[5~ / \u001b[6~ 正确调用 shell.scrollUp() / scrollDown()，
+ * 且不影响原有的方向键（菜单导航）、Ctrl+C、Enter 提交等行为。
+ */
+describe('readLiveLine PageUp/PageDown history scroll binding (docked raw mode)', () => {
+  function mockStdin() {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const stdin = {
+      isTTY: true,
+      isRaw: false,
+      setRawMode: vi.fn((v: boolean) => {
+        stdin.isRaw = v;
+        return stdin;
+      }),
+      setEncoding: vi.fn(),
+      resume: vi.fn(),
+      on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        arr.push(fn);
+        listeners.set(event, arr);
+        return stdin;
+      }),
+      off: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          arr.filter((f) => f !== fn),
+        );
+        return stdin;
+      }),
+      removeListener: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+        const arr = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          arr.filter((f) => f !== fn),
+        );
+        return stdin;
+      }),
+      unshift: vi.fn(),
+      listeners: vi.fn((event: string) => [...(listeners.get(event) ?? [])]),
+      listenerCount: vi.fn((event: string) => (listeners.get(event) ?? []).length),
+      emit(event: string, ...args: unknown[]) {
+        for (const fn of [...(listeners.get(event) ?? [])]) fn(...args);
+      },
+    };
+    return stdin;
+  }
+
+  async function withMockedStdinStdout<T>(
+    stdin: ReturnType<typeof mockStdin>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const originalStdin = process.stdin;
+    const originalWrite = process.stdout.write;
+    const originalIsTTY = process.stdout.isTTY;
+    const originalOn = process.stdout.on;
+    const originalOff = process.stdout.off;
+    Object.defineProperty(process, 'stdin', { value: stdin, configurable: true });
+    process.stdout.write = (() => true) as never;
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    process.stdout.on = (() => process.stdout) as never;
+    process.stdout.off = (() => process.stdout) as never;
+    try {
+      return await fn();
+    } finally {
+      Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true });
+      process.stdout.write = originalWrite;
+      Object.defineProperty(process.stdout, 'isTTY', { value: originalIsTTY, configurable: true });
+      process.stdout.on = originalOn;
+      process.stdout.off = originalOff;
+    }
+  }
+
+  it('PageUp calls shell.scrollUp() and PageDown calls shell.scrollDown()', async () => {
+    const stdin = mockStdin();
+    const chunks: string[] = [];
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({
+      write: (s) => chunks.push(s),
+      rows: 10,
+      cols: 40,
+      docked: true,
+    });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({
+        shell,
+        mode: 'code',
+        fallbackAsk: async () => '',
+      });
+      stdin.emit('data', '\u001b[5~'); // PageUp
+      expect(shell.isScrolled).toBe(true);
+      stdin.emit('data', '\u001b[6~'); // PageDown（翻回底部）
+      stdin.emit('data', '\u001b[6~');
+      stdin.emit('data', '\u001b[6~');
+      stdin.emit('data', '\u001b[6~');
+      stdin.emit('data', '\u001b[6~');
+      expect(shell.isScrolled).toBe(false);
+      stdin.emit('data', '\r'); // 提交空行结束这次 readLiveLine 调用
+      await promise;
+    });
+  });
+
+  it('does not treat PageUp/PageDown as printable text typed into the input buffer', async () => {
+    const stdin = mockStdin();
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({ write: () => {}, rows: 10, cols: 40, docked: true });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({ shell, mode: 'code', fallbackAsk: async () => '' });
+      stdin.emit('data', 'h');
+      stdin.emit('data', 'i');
+      stdin.emit('data', '\u001b[5~'); // 不应该拼进 buffer
+      stdin.emit('data', '\r');
+      const result = await promise;
+      expect(result).toBe('hi');
+    });
+  });
+
+  it('Esc scrolls back to bottom when the input buffer is empty and history is scrolled', async () => {
+    const stdin = mockStdin();
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({ write: () => {}, rows: 10, cols: 40, docked: true });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+    shell.scrollUp();
+    expect(shell.isScrolled).toBe(true);
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({ shell, mode: 'code', fallbackAsk: async () => '' });
+      stdin.emit('data', '\u001b'); // 纯 Esc，输入框为空
+      expect(shell.isScrolled).toBe(false);
+      stdin.emit('data', '\r');
+      await promise;
+    });
+  });
+
+  it('Esc still clears the input buffer when there is text (does not get hijacked by scroll state)', async () => {
+    const stdin = mockStdin();
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({ write: () => {}, rows: 10, cols: 40, docked: true });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+    shell.scrollUp();
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({ shell, mode: 'code', fallbackAsk: async () => '' });
+      stdin.emit('data', 'h');
+      stdin.emit('data', 'i');
+      stdin.emit('data', '\u001b'); // buffer 非空：清空输入，不触碰滚动状态
+      expect(shell.isScrolled).toBe(true);
+      stdin.emit('data', '\r');
+      const result = await promise;
+      expect(result).toBe('');
+    });
   });
 });
 
