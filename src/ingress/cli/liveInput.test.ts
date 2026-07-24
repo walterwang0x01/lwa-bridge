@@ -35,6 +35,20 @@ describe('splitKeys', () => {
     expect(splitKeys('\u001b[5~xy')).toEqual(['\u001b[5~', 'x', 'y']);
   });
 
+  it('handles SGR mouse wheel events without being cut off at the "<" character', () => {
+    // 回归测试：`<` 出现在 CSI 参数段最前面（SGR 鼠标事件专属前缀），
+    // 旧实现的参数字节匹配只认 [0-9;]，遇到 `<` 会把它当成终结字节，
+    // 导致序列在 `<` 处被错误截断——剩下的 "64;12;30M" 被当成散落的
+    // 普通字符逐个拼进输入框（这正是 Claude Code 曾经报过的同一类真实
+    // bug：GitHub anthropics/claude-code#58653，鼠标滚动序列泄漏进输入框）。
+    expect(splitKeys('\u001b[<64;12;30M')).toEqual(['\u001b[<64;12;30M']); // 滚轮向上
+    expect(splitKeys('\u001b[<65;12;30M')).toEqual(['\u001b[<65;12;30M']); // 滚轮向下
+  });
+
+  it('handles a mouse wheel event immediately followed by plain text in the same chunk', () => {
+    expect(splitKeys('\u001b[<64;12;30Mxy')).toEqual(['\u001b[<64;12;30M', 'x', 'y']);
+  });
+
   it('handles an arrow key immediately followed by plain text in the same chunk', () => {
     expect(splitKeys('\u001b[Axy')).toEqual(['\u001b[A', 'x', 'y']);
   });
@@ -355,6 +369,48 @@ describe('readLiveLine PageUp/PageDown history scroll binding (docked raw mode)'
       expect(shell.isScrolled).toBe(false);
       stdin.emit('data', '\r'); // 提交空行结束这次 readLiveLine 调用
       await promise;
+    });
+  });
+
+  it('mouse wheel (SGR) scroll up/down calls shell.scrollUp()/scrollDown()', async () => {
+    const stdin = mockStdin();
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({ write: () => {}, rows: 10, cols: 40, docked: true });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({ shell, mode: 'code', fallbackAsk: async () => '' });
+      stdin.emit('data', '\u001b[<64;12;30M'); // 滚轮向上
+      expect(shell.isScrolled).toBe(true);
+      stdin.emit('data', '\u001b[<65;12;30M'); // 滚轮向下 x5，翻回底部
+      stdin.emit('data', '\u001b[<65;12;30M');
+      stdin.emit('data', '\u001b[<65;12;30M');
+      stdin.emit('data', '\u001b[<65;12;30M');
+      stdin.emit('data', '\u001b[<65;12;30M');
+      expect(shell.isScrolled).toBe(false);
+      stdin.emit('data', '\r');
+      await promise;
+    });
+  });
+
+  it('does not leak raw SGR mouse escape sequences into the input buffer', async () => {
+    // 真实行业级坑（anthropics/claude-code#58653）：鼠标滚动序列没被正确
+    // 消费时，会作为字面字符出现在提示输入框里。确认这次实现不会重犯。
+    const stdin = mockStdin();
+    const { ShellScreen } = await import('./shellScreen.js');
+    const shell = new ShellScreen({ write: () => {}, rows: 10, cols: 40, docked: true });
+    shell.enter();
+    for (let i = 0; i < 30; i++) shell.appendLine(`line${i}`);
+
+    await withMockedStdinStdout(stdin, async () => {
+      const promise = readLiveLine({ shell, mode: 'code', fallbackAsk: async () => '' });
+      stdin.emit('data', 'h');
+      stdin.emit('data', 'i');
+      stdin.emit('data', '\u001b[<64;12;30M'); // 不应该拼进 buffer
+      stdin.emit('data', '\r');
+      const result = await promise;
+      expect(result).toBe('hi');
     });
   });
 

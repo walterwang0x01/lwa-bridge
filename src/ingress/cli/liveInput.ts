@@ -61,15 +61,21 @@ export function splitKeys(chunk: string): string[] {
   let i = 0;
   while (i < chunk.length) {
     if (chunk[i] === '\u001b') {
-      // CSI 序列：ESC [ <参数字节 0-9;>* <终结字节>。终结字节可以是字母
-      // （方向键 \u001b[A / \u001b[B）或 ~（功能键，如 PageUp \u001b[5~ /
-      // PageDown \u001b[6~）。参数段长度不固定，不能硬编码"固定 3 字符"，
-      // 否则 \u001b[5~ 会被切成 \u001b[5（丢弃 CSI 语义）+ 落单的 ~
-      // 被当成普通字符拼进输入框。
+      // CSI 序列：ESC [ [<]? <参数字节 0-9;>* <终结字节>。
+      // 终结字节可以是：
+      //   - 字母（方向键 \u001b[A / \u001b[B）
+      //   - ~（功能键，如 PageUp \u001b[5~ / PageDown \u001b[6~）
+      //   - M/m（SGR 鼠标事件，如滚轮 \u001b[<64;12;30M，见下）
+      // SGR 鼠标事件格式：ESC [ < 按钮码 ; 列 ; 行 <M（按下/滚动）或
+      // m（释放)>。`<` 紧跟在 `[` 后面，参数段本身仍是纯数字 + `;`。
+      // 不能把 `<` 也当普通字符处理，否则整条序列在 `<` 处被错误截断，
+      // 剩下的数字/`;`/`M` 会被当成散落的普通字符拼进输入框
+      // （真实的行业级坑：Claude Code 也报过同一类问题，见调查记录）。
       if (chunk[i + 1] === '[') {
         let end = i + 2;
+        if (chunk[end] === '<') end += 1; // SGR 鼠标事件前缀
         while (end < chunk.length && /[0-9;]/.test(chunk[end]!)) end += 1;
-        if (end < chunk.length) end += 1; // 吞掉终结字节（字母或 ~）
+        if (end < chunk.length) end += 1; // 吞掉终结字节（字母 / ~ / M / m）
         keys.push(chunk.slice(i, end));
         i = end;
       } else {
@@ -461,7 +467,7 @@ export async function readLiveLine(opts: {
 
   const finish = (value: string): string => {
     clearMenu();
-    writeRaw(shell, '\x1b[?25h');
+    writeRaw(shell, '\x1b[?25h\x1b[?1000l\x1b[?1006l');
     shell.setPaneHeight(DEFAULT_INPUT_PANE_HEIGHT);
     shell.suspendIngest(false);
     shell.suspendChromeRepaint(false);
@@ -475,6 +481,12 @@ export async function readLiveLine(opts: {
     stdin.resume();
     shell.focusInput();
     paintInput();
+    // 鼠标滚轮驱动历史滚动（用户明确要求：鼠标滚轮才是命令行里的本能操作，
+    // 键盘 PageUp/PageDown 只是补充）。SGR 扩展模式（1006）避免坐标超过
+    // 223 时用传统模式编码溢出；两个模式都要开，前者启用鼠标事件上报，
+    // 后者选择上报格式。退出时必须成对关闭，否则会污染后续终端的正常
+    // 鼠标行为（比如原生文本选择变成发送控制序列）。
+    writeRaw(shell, '\x1b[?1000h\x1b[?1006h');
 
     return await new Promise<string>((resolve) => {
       let settled = false;
@@ -572,6 +584,22 @@ export async function readLiveLine(opts: {
           if (!menuOpen) shell.scrollDown();
           return;
         }
+        // 鼠标滚轮（SGR 扩展模式，见本函数开头 \x1b[?1000h\x1b[?1006h）：
+        // 命令行里鼠标滚轮才是用户的本能操作，键盘 PageUp/PageDown 只是
+        // 补充选项，不能只做键盘那一半。格式 \x1b[<按钮码;列;行M，
+        // 64=滚轮向上，65=滚轮向下（xterm 标准，vim/tmux 等同样遵循）。
+        if (key.startsWith('\u001b[<')) {
+          const button = parseInt(key.slice(3), 10);
+          if (button === 64) {
+            if (!menuOpen) shell.scrollUp();
+            return;
+          }
+          if (button === 65) {
+            if (!menuOpen) shell.scrollDown();
+            return;
+          }
+          return; // 其它鼠标事件（点击/拖动/左右滚）暂不处理，忽略即可
+        }
         if (key.startsWith('\u001b')) return;
 
         if (isPrintableInput(key)) {
@@ -622,7 +650,7 @@ export async function readLiveLine(opts: {
       stdin.on('data', onData);
     });
   } catch (e) {
-    writeRaw(shell, '\x1b[?25h');
+    writeRaw(shell, '\x1b[?25h\x1b[?1000l\x1b[?1006l');
     shell.suspendIngest(false);
     shell.suspendChromeRepaint(false);
     throw e;
